@@ -1,0 +1,85 @@
+.area {
+  max-width: 512px;
+}
+
+.dead {
+  color: #bbbec4;
+}
+
+.failed {
+  color: #ed3f14;
+}
+
+.running {
+  color: #19be6b;
+}
+
+.bold {
+  font-weight: bold;
+}
+
+.row {
+  padding-bottom: 16px;
+}
+
+.interval {
+  margin-top: 8px;
+  margin-bottom: 16px;
+}
+
+.top-interval {
+  margin-top: 16px;
+}
+
+.bottom-interval {
+  margin-bottom: 16px;
+}
+
+.h400 {
+  height: 400px;
+}
+
+.mh200 {
+  max-height: 200px;
+}
+
+.mw512 {
+   max-width: 512px;
+}
+
+.output {
+  cursor: zoom-in;
+}
+
+.output-area {
+  border: 1px solid #dddee1;
+  border-radius: 4px;
+  padding: 4px 7px;
+  overflow-y: scroll;
+}
+
+.right {
+  text-align: right;
+}
+
+.title {
+  font-size: 15px;
+}
+
+#bear {
+  height: 96.8px; 
+}
+
+#header {
+  text-align: right;
+}
+
+#footer {
+  margin-top: 512px;
+  max-width: 512px;
+}
+
+#shadow {
+  width: 100%;
+  display: block;
+}
