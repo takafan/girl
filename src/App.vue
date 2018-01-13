@@ -384,11 +384,14 @@ export default {
         this.loading[act] = false
         this.modals[modal] = false
 
-        this.data[service + '_active'] = this.colour_in(res.data.active)
+        
 
         if (res.data.success) {
           this.$Message.info(service + '已' + this.translates[command])
         } else {
+          if (res.data.active) {
+            this.data[service + '_active'] = this.colour_in(res.data.active)
+          }
           this.set_exception(service + this.translates[command] + '失败', res.data.msg)
         }
       }).catch(err => {
