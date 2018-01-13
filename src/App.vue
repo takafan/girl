@@ -15,7 +15,7 @@
       <Col span="22">
         <div class="title bold">redir</div>
         <div class="interval">
-          <span class="output" v-html="data.redir_active" v-on:click="modals.redir_service = true"></span>
+          <span class="output" v-html="data.redir_active" v-on:click="show_redir_service"></span>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -23,7 +23,13 @@
 
     <Modal v-model="modals.redir_service" title="redir服务">
       <p slot="footer"></p>
+      <div class="bottom-interval">
+        妹子绕道服务，通常出国走妹子绕道比电信/移动出去快，所以也可以看成加速服务。
+      </div>
       <div class="row" v-html="data.redir_active"></div>
+      <div v-if="expire_info">
+        {{ expire_info }}
+      </div>
       <div class="right">
         <Button @click="systemctl('stop', 'redir', 'redir_service')" :loading="loading.stop_redir">停止</Button>
         <Button @click="systemctl('start', 'redir', 'redir_service')" :loading="loading.start_redir">启动</Button>
@@ -348,13 +354,26 @@ export default {
 
         if (res.data.success) {
           this.connections_info = res.data.info.replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;').replace(/\n/g, '<br />')
-          
         }
       }).catch(err => {
         this.$Modal.error({ content: err.message })
       })
+    },
 
-     
+    show_redir_service: async function() {
+      this.modals.redir_service = true
+
+      let server_port = this.data.remote_text.split(':')
+
+      await axios.get('http://' + server_port[0] + '/girld/expire_info?port=' + server_port[1]) .then(res => {
+
+        if (res.data.success) {
+          let expire_time = new Date(res.data.expire_time * 1000)
+          this.expire_info = '到期日期：' + expire_time.getFullYear() + '-' + expire_time.getMonth() + '-' + expire_time.getDate()
+        }
+      }).catch(err => {
+        console.log(err)
+      })
     },
 
     systemctl: async function(command, service, modal) {
@@ -395,6 +414,7 @@ export default {
         message: '',
         title: ''
       },
+      expire_info: '',
       loading: {
         restart_dnsmasq: false,
         restart_hostapd: false,
