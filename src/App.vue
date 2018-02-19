@@ -106,8 +106,8 @@
       <Col span="22">
         <div class="title bold">远程地址</div>
         <div class="interval">
-          <div class="output output-area mh200 mw512" 
-            v-html="data.remote_text ? data.remote_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''" 
+          <div class="output output-area mh200 mw512"
+            v-html="data.remote_text ? data.remote_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
             v-on:click="modals.remote_text = true">
           </div>
         </div>
@@ -129,8 +129,8 @@
       <Col span="22">
         <div class="title bold">自定义</div>
         <div class="interval">
-          <div class="output output-area mh200 mw512" 
-            v-html="data.custom_text ? data.custom_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''" 
+          <div class="output output-area mh200 mw512"
+            v-html="data.custom_text ? data.custom_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
             v-on:click="modals.custom_text = true"
             :loading="loading.save_custom_text">
           </div>
@@ -159,8 +159,8 @@
       <Col span="22">
         <div class="title bold">热点配置</div>
         <div class="interval">
-          <div class="output output-area mh200 mw512" 
-            v-html="data.hostapd_text ? data.hostapd_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''" 
+          <div class="output output-area mh200 mw512"
+            v-html="data.hostapd_text ? data.hostapd_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
             v-on:click="modals.hostapd_text = true"></div>
         </div>
       </Col>
@@ -187,8 +187,8 @@
       <Col span="22">
         <div class="title bold">网络</div>
         <div class="interval">
-          <div class="output output-area mh200 mw512" 
-            v-html="data.br0_text ? data.br0_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''" 
+          <div class="output output-area mh200 mw512"
+            v-html="data.br0_text ? data.br0_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
             v-on:click="modals.br0_text = true"></div>
         </div>
       </Col>
@@ -213,8 +213,8 @@
       <Col span="22">
         <div class="title bold">默认dns</div>
         <div class="interval">
-          <div class="output output-area mh200 mw512" 
-            v-html="data.resolv_text ? data.resolv_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''" 
+          <div class="output output-area mh200 mw512"
+            v-html="data.resolv_text ? data.resolv_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
             v-on:click="modals.resolv_text = true"></div>
         </div>
       </Col>
@@ -243,18 +243,18 @@
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-    
+
     <Modal v-model="modals.exception" :title="exception.title" width="60" :styles="{ top: '20px', marginBottom: '20px' }">
       <p slot="footer">
         <Button @click="modals.exception = false">关闭</Button>
       </p>
-      
+
       <div v-html="exception.message.replace(new RegExp(/\n/, 'g'), '<br />')"></div>
     </Modal>
 
     <Modal v-model="modals.need_restart_dnsmasq" :title="modal_titles.need_restart_dnsmasq">
       <p slot="footer"></p>
-      
+
       <div> 配置生效需要重启dnsmasq，确认重启dnsmasq吗？ </div>
       <div class="right top-interval">
         <Button @click="systemctl('restart', 'dnsmasq', 'need_restart_dnsmasq')" :loading="loading.restart_dnsmasq">重启dnsmasq</Button>
@@ -263,7 +263,7 @@
 
     <Modal v-model="modals.need_restart_hostapd" title="编辑hostapd.conf成功">
       <p slot="footer"></p>
-      
+
       <div> 配置生效需要重启hostapd，确认重启hostapd吗？ </div>
       <div class="right top-interval">
         <Button @click="systemctl('restart', 'hostapd', 'need_restart_hostapd')" :loading="loading.restart_hostapd">重启hostapd</Button>
@@ -272,7 +272,7 @@
 
     <Modal v-model="modals.need_restart_networking" title="编辑br0.cfg成功">
       <p slot="footer"></p>
-      
+
       <div> 配置生效需要重启networking，确认重启networking吗？ </div>
       <div class="right top-interval">
         <Button @click="systemctl('restart', 'networking', 'need_restart_networking')" :loading="loading.restart_networking">重启networking</Button>
@@ -289,16 +289,15 @@ export default {
   name: 'app',
   methods: {
     colour_in: function(text) {
-      return text.replace('active (running)', 
-        '<span class="running">active (running)</span>').replace('active (exited)', 
-        '<span class="running">active (exited)</span>').replace('inactive (dead)', 
-        '<span class="dead">inactive (dead)</span>').replace('failed', 
+      return text.replace('active (running)',
+        '<span class="running">active (running)</span>').replace('active (exited)',
+        '<span class="running">active (exited)</span>').replace('inactive (dead)',
+        '<span class="dead">inactive (dead)</span>').replace('failed',
         '<span class="failed">failed</span>')
     },
 
-    load: async function () {
-      await axios.post(settings.host + '/api/load').then(res => {
-
+    load: function () {
+      axios.post(settings.host + '/api/load').then(res => {
         this.data = res.data
         this.data.dnsmasq_active = this.colour_in(res.data.dnsmasq_active)
         this.data.girla_active = this.colour_in(res.data.girla_active)
@@ -310,11 +309,10 @@ export default {
       })
     },
 
-    save_text: async function(title) {
+    save_text: function(title) {
       let act = 'save_' + title
       this.loading[act] = true
-      await axios.post(settings.host + '/api/save_text', { title: title, text: this.data[title] }).then(res => {
-
+      axios.post(settings.host + '/api/save_text', { title: title, text: this.data[title] }).then(res => {
         this.loading[act] = false
 
         if (res.data.success) {
@@ -347,10 +345,10 @@ export default {
       this.modals.exception = true
     },
 
-    show_hostapd_service: async function() {
+    show_hostapd_service: function() {
       this.modals.hostapd_service = true
 
-      await axios.post(settings.host + '/api/dump_wlan0_station') .then(res => {
+      axios.post(settings.host + '/api/dump_wlan0_station') .then(res => {
 
         if (res.data.success) {
           this.connections_info = res.data.info.replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;').replace(/\n/g, '<br />')
@@ -360,12 +358,12 @@ export default {
       })
     },
 
-    show_redir_service: async function() {
+    show_redir_service: function() {
       this.modals.redir_service = true
 
       let server_port = this.data.remote_text.split(':')
 
-      await axios.get('http://' + server_port[0] + '/girld/expire_info?port=' + server_port[1]) .then(res => {
+      axios.get('http://' + server_port[0] + '/girld/expire_info?port=' + server_port[1]) .then(res => {
 
         if (res.data.success) {
           let expire_time = new Date(res.data.expire_time * 1000)
@@ -376,29 +374,28 @@ export default {
       })
     },
 
-    systemctl: async function(command, service, modal) {
+    systemctl: function(command, service, modal) {
       let act = command + '_' + service
       this.loading[act] = true
 
-      await axios.post(settings.host + '/api/systemctl', { command: command, service: service }) .then(res => {
+      axios.post(settings.host + '/api/systemctl', { command: command, service: service }) .then(res => {
         this.loading[act] = false
         this.modals[modal] = false
 
-        
+        if (res.data.active) {
+          this.data[service + '_active'] = this.colour_in(res.data.active)
+        }
 
         if (res.data.success) {
           this.$Message.info(service + '已' + this.translates[command])
         } else {
-          if (res.data.active) {
-            this.data[service + '_active'] = this.colour_in(res.data.active)
-          }
           this.set_exception(service + this.translates[command] + '失败', res.data.msg)
         }
       }).catch(err => {
         this.$Modal.error({ content: err.message })
       })
     },
-    
+
   },
   mounted: function () {
     this.load()
