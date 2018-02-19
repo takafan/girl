@@ -142,10 +142,12 @@
     <Modal v-model="modals.custom_text" title="编辑自定义" :styles="{ top: '20px' }">
       <p slot="footer"></p>
       <div class="bottom-interval">
-        填写域名，该域名走妹子。一行一个。例如：google.com<br />
-        填写ip，该ip走妹子。例如：1.255.22.241<br />
-        前缀'x'加ip，该ip直连。例如：x1.255.22.241<br />
-        通常情况不需要填写ip，妹子会自动识别国外ip绕道。
+        填写域名，该域名dns查询走妹子。例如：google.com<br />
+        一行一个。<br />
+        填写ip，该ip走妹子。例如：69.63.32.36<br />
+        通常情况不需要填写ip，妹子会自动识别国外ip绕道。<br />
+        前缀'!'加ip，该ip直连。例如：!69.63.32.36<br />
+        后面还可以'#'接注释，例如：!69.63.32.36 # 忽略tasvideos.org
       </div>
       <Input type="textarea" :rows="20" v-model="data.custom_text" autofocus></Input>
       <div class="right top-interval">
