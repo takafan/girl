@@ -146,8 +146,9 @@
         一行一个。<br />
         填写ip，该ip走妹子。例如：69.63.32.36<br />
         通常情况不需要填写ip，妹子会自动识别国外ip绕道。<br />
-        前缀'!'加ip，该ip直连。例如：!69.63.32.36<br />
-        后面还可以'#'接注释，例如：!69.63.32.36 # 忽略tasvideos.org
+        前缀“!”接ip，该ip直连。例如：!69.63.32.36<br />
+        ip接“:端口号”，仅该端口号直连。例如：!69.63.32.36:6969<br />
+        后面还可以“# 打注释”，例如：!69.63.32.36:6969 # 忽略tasvideos tracker
       </div>
       <Input type="textarea" :rows="20" v-model="data.custom_text" autofocus></Input>
       <div class="right top-interval">
