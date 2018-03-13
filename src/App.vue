@@ -31,9 +31,9 @@
         {{ expire_info }}
       </div>
       <div class="right">
-        <Button @click="systemctl('stop', 'redir', 'redir_service')" :loading="loading.stop_redir">停止</Button>
-        <Button @click="systemctl('start', 'redir', 'redir_service')" :loading="loading.start_redir">启动</Button>
-        <Button @click="systemctl('restart', 'redir', 'redir_service')" :loading="loading.restart_redir">重启</Button>
+        <Button @click="systemctl('stop', 'redir', 'redir_service')" :loading="loading.stop_redir" v-if="data.redir_running">停止</Button>
+        <Button @click="systemctl('start', 'redir', 'redir_service')" :loading="loading.start_redir" v-if="!data.redir_running">启动</Button>
+        <Button @click="systemctl('restart', 'redir', 'redir_service')" :loading="loading.restart_redir" v-if="data.redir_running">重启</Button>
       </div>
     </Modal>
 
@@ -52,33 +52,10 @@
       <p slot="footer"></p>
       <div class="row" v-html="data.dnsmasq_active"></div>
       <div class="right">
-        <Button @click="systemctl('stop', 'dnsmasq', 'dnsmasq_service')" :loading="loading.stop_dnsmasq">停止</Button>
-        <Button @click="systemctl('start', 'dnsmasq', 'dnsmasq_service')" :loading="loading.start_dnsmasq">启动</Button>
-        <Button @click="systemctl('restart', 'dnsmasq', 'dnsmasq_service')" :loading="loading.restart_dnsmasq">重启</Button>
-      </div>
-    </Modal>
 
-    <Row class="row">
-      <Col span="1">&nbsp;</Col>
-      <Col span="22">
-        <div class="title bold">hostapd</div>
-        <div class="interval">
-          <span class="output" v-html="data.hostapd_active" v-on:click="show_hostapd_service"></span>
-        </div>
-      </Col>
-      <Col span="1">&nbsp;</Col>
-    </Row>
-
-    <Modal v-model="modals.hostapd_service" title="hostapd服务" :styles="{ top: '20px' }">
-      <p slot="footer"></p>
-      <div class="row" v-html="data.hostapd_active"></div>
-      <div class="output-area mh400 bottom-interval"
-           v-html="connections_info" v-if="connections_info">
-      </div>
-      <div class="right">
-        <Button @click="systemctl('stop', 'hostapd', 'hostapd_service')" :loading="loading.stop_hostapd">停止</Button>
-        <Button @click="systemctl('start', 'hostapd', 'hostapd_service')" :loading="loading.start_hostapd">启动</Button>
-        <Button @click="systemctl('restart', 'hostapd', 'hostapd_service')" :loading="loading.restart_hostapd">重启</Button>
+        <Button @click="systemctl('stop', 'dnsmasq', 'dnsmasq_service')" :loading="loading.stop_dnsmasq" v-if="data.dnsmasq_running">停止</Button>
+        <Button @click="systemctl('start', 'dnsmasq', 'dnsmasq_service')" :loading="loading.start_dnsmasq" v-if="!data.dnsmasq_running">启动</Button>
+        <Button @click="systemctl('restart', 'dnsmasq', 'dnsmasq_service')" :loading="loading.restart_dnsmasq" v-if="data.dnsmasq_running">重启</Button>
       </div>
     </Modal>
 
@@ -93,11 +70,36 @@
       <Col span="1">&nbsp;</Col>
     </Row>
 
+    <Row class="row">
+      <Col span="1">&nbsp;</Col>
+      <Col span="22">
+        <div class="title bold">hostapd</div>
+        <div class="interval">
+          <span class="output" v-html="data.hostapd_active" v-on:click="show_hostapd_service"></span>
+        </div>
+      </Col>
+      <Col span="1">&nbsp;</Col>
+    </Row>
+
     <Modal v-model="modals.networking_service" title="networking服务">
       <p slot="footer"></p>
       <div class="row" v-html="data.networking_active"></div>
       <div class="right">
         <Button @click="systemctl('restart', 'networking', 'networking_service')" :loading="loading.restart_networking">重启</Button>
+      </div>
+    </Modal>
+
+    <Modal v-model="modals.hostapd_service" title="hostapd服务" :styles="{ top: '20px' }">
+      <p slot="footer"></p>
+      <div class="row" v-html="data.hostapd_active"></div>
+      <div class="output-area mh400 bottom-interval"
+           v-html="connections_info" v-if="connections_info">
+      </div>
+      <div class="right">
+        <Checkbox v-model="data.hostapd_enabled" @on-change="check_hostapd">开机自动启动</Checkbox>
+        <Button @click="systemctl('stop', 'hostapd', 'hostapd_service')" :loading="loading.stop_hostapd" v-if="data.hostapd_running">停止</Button>
+        <Button @click="systemctl('start', 'hostapd', 'hostapd_service')" :loading="loading.start_hostapd" v-if="!data.hostapd_running">启动</Button>
+        <Button @click="systemctl('restart', 'hostapd', 'hostapd_service')" :loading="loading.restart_hostapd" v-if="data.hostapd_running">重启</Button>
       </div>
     </Modal>
 
@@ -146,9 +148,8 @@
         一行一个。<br />
         填写ip，该ip走妹子。例如：69.63.32.36<br />
         通常情况不需要填写ip，妹子会自动识别国外ip绕道。<br />
-        前缀“!”接ip，该ip直连。例如：!69.63.32.36<br />
-        ip接“:端口号”，仅该端口号直连。例如：!69.63.32.36:6969<br />
-        后面还可以“# 打注释”，例如：!69.63.32.36:6969 # 忽略tasvideos tracker
+        前缀 “!” 表示忽略，不走妹子。例如：!69.63.32.36<br />
+        “#” 接注释。例如：!69.63.32.36 # 忽略tasvideos
       </div>
       <Input type="textarea" :rows="20" v-model="data.custom_text" autofocus></Input>
       <div class="right top-interval">
@@ -160,28 +161,26 @@
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">热点配置</div>
+        <div class="title bold">默认dns</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.hostapd_text ? data.hostapd_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.hostapd_text = true"></div>
+            v-html="data.resolv_text ? data.resolv_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="modals.resolv_text = true"></div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
 
-    <Modal v-model="modals.hostapd_text" title="编辑热点配置" :styles="{ top: '20px' }">
+    <Modal v-model="modals.resolv_text" title="编辑默认dns">
       <p slot="footer"></p>
       <div class="bottom-interval">
-        设置wifi名称，更改ssid行。例如： ssid=girl<br />
-        设置信道，更改channel行。取值范围：1-11。例如：channel=11<br />
-        设置wifi密码，更改wpa_passphrase行。例如：wpa_passphrase=lastcomm<br />
-        设置是否隐藏，更改ignore_broadcast_ssid行。取值：0显示，1隐藏。例如：ignore_broadcast_ssid=1
+        设置默认dns。一行一个。例如： nameserver 114.114.114.114<br />
+        填写最近最快的dns即可
       </div>
-      <Input type="textarea" :rows="20" v-model="data.hostapd_text" autofocus></Input>
+      <Input type="textarea" :rows="10" v-model="data.resolv_text" autofocus></Input>
       <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.hostapd_text" class="interval">{{ error_on_save.hostapd_text }}</Alert>
-        <Button @click="save_text('hostapd_text')" :loading="loading.save_hostapd_text">保存</Button>
+        <Alert type="error" v-if="error_on_save.resolv_text" class="interval">{{ error_on_save.resolv_text }}</Alert>
+        <Button @click="save_text('resolv_text')" :loading="loading.save_resolv_text">保存</Button>
       </div>
     </Modal>
 
@@ -214,26 +213,28 @@
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">默认dns</div>
+        <div class="title bold">热点配置</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.resolv_text ? data.resolv_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.resolv_text = true"></div>
+            v-html="data.hostapd_text ? data.hostapd_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="modals.hostapd_text = true"></div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
 
-    <Modal v-model="modals.resolv_text" title="编辑默认dns">
+    <Modal v-model="modals.hostapd_text" title="编辑热点配置" :styles="{ top: '20px' }">
       <p slot="footer"></p>
       <div class="bottom-interval">
-        设置默认dns。一行一个。例如： nameserver 114.114.114.114<br />
-        填写最近最快的dns即可
+        设置wifi名称，更改ssid行。例如： ssid=girl<br />
+        设置信道，更改channel行。取值范围：1-11。例如：channel=11<br />
+        设置wifi密码，更改wpa_passphrase行。例如：wpa_passphrase=lastcomm<br />
+        设置是否隐藏，更改ignore_broadcast_ssid行。取值：0显示，1隐藏。例如：ignore_broadcast_ssid=1
       </div>
-      <Input type="textarea" :rows="10" v-model="data.resolv_text" autofocus></Input>
+      <Input type="textarea" :rows="20" v-model="data.hostapd_text" autofocus></Input>
       <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.resolv_text" class="interval">{{ error_on_save.resolv_text }}</Alert>
-        <Button @click="save_text('resolv_text')" :loading="loading.save_resolv_text">保存</Button>
+        <Alert type="error" v-if="error_on_save.hostapd_text" class="interval">{{ error_on_save.hostapd_text }}</Alert>
+        <Button @click="save_text('hostapd_text')" :loading="loading.save_hostapd_text">保存</Button>
       </div>
     </Modal>
 
@@ -284,184 +285,4 @@
   </div>
 </template>
 
-<script>
-import axios from 'axios'
-import settings from '../settings'
-
-export default {
-  name: 'app',
-  methods: {
-    colour_in: function(text) {
-      return text.replace('active (running)',
-        '<span class="running">active (running)</span>').replace('active (exited)',
-        '<span class="running">active (exited)</span>').replace('inactive (dead)',
-        '<span class="dead">inactive (dead)</span>').replace('failed',
-        '<span class="failed">failed</span>')
-    },
-
-    load: function () {
-      axios.post(settings.host + '/api/load').then(res => {
-        this.data = res.data
-        this.data.dnsmasq_active = this.colour_in(res.data.dnsmasq_active)
-        this.data.girla_active = this.colour_in(res.data.girla_active)
-        this.data.hostapd_active = this.colour_in(res.data.hostapd_active)
-        this.data.networking_active = this.colour_in(res.data.networking_active)
-        this.data.redir_active = this.colour_in(res.data.redir_active)
-      }).catch(err => {
-        this.$Modal.error({ content: err.message })
-      })
-    },
-
-    save_text: function(title) {
-      let act = 'save_' + title
-      this.loading[act] = true
-      axios.post(settings.host + '/api/save_text', { title: title, text: this.data[title] }).then(res => {
-        this.loading[act] = false
-
-        if (res.data.success) {
-          this.data[title] = res.data.text
-          this.modals[title] = false
-          this.error_on_save[title] = ''
-
-          if (title == 'br0_text') {
-            this.modals.need_restart_networking = true
-          } else if (title == 'custom_text' || title == 'remote_text' || title == 'resolv_text') {
-            this.modals.need_restart_dnsmasq = true
-            this.modal_titles.need_restart_dnsmasq = '保存' + this.translates[title] + '成功'
-            if (title == 'remote_text') {
-              this.data.redir_active = this.colour_in(res.data.active)
-            }
-          } else if (title == 'hostapd_text') {
-            this.modals.need_restart_hostapd = true
-          }
-        } else {
-          this.error_on_save[title] = res.data.msg
-        }
-      }).catch(err => {
-        this.$Modal.error({ content: err.message })
-      })
-    },
-
-    set_exception: function(title, message) {
-      this.exception.title = title
-      this.exception.message = message
-      this.modals.exception = true
-    },
-
-    show_hostapd_service: function() {
-      this.modals.hostapd_service = true
-
-      axios.post(settings.host + '/api/dump_wlan0_station') .then(res => {
-
-        if (res.data.success) {
-          this.connections_info = res.data.info.replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;').replace(/\n/g, '<br />')
-        }
-      }).catch(err => {
-        this.$Modal.error({ content: err.message })
-      })
-    },
-
-    show_redir_service: function() {
-      this.modals.redir_service = true
-
-      let server_port = this.data.remote_text.split(':')
-
-      axios.get('http://' + server_port[0] + '/girld/expire_info?port=' + server_port[1]) .then(res => {
-
-        if (res.data.success) {
-          let expire_time = new Date(res.data.expire_time * 1000)
-          this.expire_info = '到期日期：' + expire_time.getFullYear() + '-' + expire_time.getMonth() + '-' + expire_time.getDate()
-        }
-      }).catch(err => {
-        console.log(err)
-      })
-    },
-
-    systemctl: function(command, service, modal) {
-      let act = command + '_' + service
-      this.loading[act] = true
-
-      axios.post(settings.host + '/api/systemctl', { command: command, service: service }) .then(res => {
-        this.loading[act] = false
-        this.modals[modal] = false
-
-        if (res.data.active) {
-          this.data[service + '_active'] = this.colour_in(res.data.active)
-        }
-
-        if (res.data.success) {
-          this.$Message.info(service + '已' + this.translates[command])
-        } else {
-          this.set_exception(service + this.translates[command] + '失败', res.data.msg)
-        }
-      }).catch(err => {
-        this.$Modal.error({ content: err.message })
-      })
-    },
-
-  },
-  mounted: function () {
-    this.load()
-  },
-  data () {
-    return {
-      connections_info: '',
-      data: {},
-      error_on_save: {
-        custom_text: '',
-        hostapd_text: '',
-        remote_text: '',
-        resolv_text: ''
-      },
-      exception: {
-        message: '',
-        title: ''
-      },
-      expire_info: '',
-      loading: {
-        restart_dnsmasq: false,
-        restart_hostapd: false,
-        restart_networking: false,
-        restart_redir: false,
-        save_custom_text: false,
-        save_hostapd_text: false,
-        save_remote_text: false,
-        save_resolv_text: false,
-        start_dnsmasq: false,
-        start_hostapd: false,
-        start_redir: false,
-        stop_dnsmasq: false,
-        stop_hostapd: false,
-        stop_redir: false
-      },
-      modals: {
-        br0_text: false,
-        custom_text: false,
-        dnsmasq_service: false,
-        exception: false,
-        hostapd_text: false,
-        hostapd_service: false,
-        need_restart_dnsmasq: false,
-        need_restart_hostapd: false,
-        need_restart_networking: false,
-        networking_service: false,
-        redir_service: false,
-        remote_text: false,
-        resolv_text: false
-      },
-      modal_titles: {
-        need_restart_dnsmasq: ''
-      },
-      translates: {
-        custom_text: 'girl.custom.txt',
-        remote_text: 'girl.remote',
-        resolv_text: 'resolv.conf',
-        restart: '重启',
-        start: '启动',
-        stop: '停止'
-      }
-    }
-  }
-}
-</script>
-
+<script src="./app.js"></script>
