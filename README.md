@@ -1,1 +1,1 @@
-彼女 - girl face 4 pi
+彼女 - face 4 pi
