@@ -88,10 +88,10 @@ export default {
       let server_and_port = this.data.remote_text.split("\n")[0].split(':')
 
       axios.get('http://' + server_and_port[0] + ':3000/girld/expire_info?port=' + server_and_port[1]) .then(res => {
-
         if (res.data.success) {
           let expire_time = new Date(res.data.expire_time * 1000)
-          this.expire_info = '到期日期：' + expire_time.getFullYear() + '-' + expire_time.getMonth() + '-' + expire_time.getDate()
+          this.expire_info = '本月已用流量 in: ' + res.data.input + ' out: ' + res.data.output
+            + '<br />' + '到期日期：' + expire_time.getFullYear() + '-' + ( expire_time.getMonth() + 1 ) + '-' + expire_time.getDate()
         }
       }).catch(err => {
         console.log(err)

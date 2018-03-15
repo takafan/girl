@@ -27,9 +27,7 @@
         妹子绕道服务，通常出国走妹子绕道比电信/移动出去快，所以也可以看成加速服务。
       </div>
       <div class="row" v-html="data.redir_active"></div>
-      <div v-if="expire_info">
-        {{ expire_info }}
-      </div>
+      <div v-html="expire_info" v-if="expire_info"></div>
       <div class="right">
         <Button @click="systemctl('stop', 'redir', 'redir_service')" :loading="loading.stop_redir" v-if="data.redir_running">停止</Button>
         <Button @click="systemctl('start', 'redir', 'redir_service')" :loading="loading.start_redir" v-if="!data.redir_running">启动</Button>
