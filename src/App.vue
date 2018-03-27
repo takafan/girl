@@ -107,20 +107,20 @@
         <div class="title bold">远程地址</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.remote_text ? data.remote_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.remote_text = true">
+            v-html="data.relay_text ? data.relay_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="modals.relay_text = true">
           </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
 
-    <Modal v-model="modals.remote_text" title="编辑远程地址">
+    <Modal v-model="modals.relay_text" title="编辑远程地址">
       <p slot="footer"></p>
-      <Input type="textarea" :rows="10" v-model="data.remote_text" autofocus></Input>
+      <Input type="textarea" :rows="10" v-model="data.relay_text" autofocus></Input>
       <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.remote_text" class="interval">{{ error_on_save.remote_text }}</Alert>
-        <Button @click="save_text('remote_text')" :loading="loading.save_remote_text">保存</Button>
+        <Alert type="error" v-if="error_on_save.relay_text" class="interval">{{ error_on_save.relay_text }}</Alert>
+        <Button @click="save_text('relay_text')" :loading="loading.save_relay_text">保存</Button>
       </div>
     </Modal>
 

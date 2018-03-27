@@ -46,10 +46,10 @@ export default {
 
           if (title == 'br0_text') {
             this.modals.need_restart_networking = true
-          } else if (title == 'custom_text' || title == 'remote_text' || title == 'resolv_text') {
+          } else if (title == 'custom_text' || title == 'relay_text' || title == 'resolv_text') {
             this.modals.need_restart_dnsmasq = true
             this.modal_titles.need_restart_dnsmasq = '保存' + this.translates[title] + '成功'
-            if (title == 'remote_text') {
+            if (title == 'relay_text') {
               this.data.redir_active = this.colour_in(res.data.active)
             }
           } else if (title == 'hostapd_text') {
@@ -85,7 +85,7 @@ export default {
     show_redir_service: function() {
       this.modals.redir_service = true
 
-      let server_and_port = this.data.remote_text.split("\n")[0].split(':')
+      let server_and_port = this.data.relay_text.split("\n")[0].split(':')
 
       axios.get('http://' + server_and_port[0] + ':3000/girld/expire_info?port=' + server_and_port[1]) .then(res => {
         if (res.data.success) {
@@ -141,7 +141,7 @@ export default {
       error_on_save: {
         custom_text: '',
         hostapd_text: '',
-        remote_text: '',
+        relay_text: '',
         resolv_text: ''
       },
       exception: {
@@ -156,7 +156,7 @@ export default {
         restart_redir: false,
         save_custom_text: false,
         save_hostapd_text: false,
-        save_remote_text: false,
+        save_relay_text: false,
         save_resolv_text: false,
         start_dnsmasq: false,
         start_hostapd: false,
@@ -177,7 +177,7 @@ export default {
         need_restart_networking: false,
         networking_service: false,
         redir_service: false,
-        remote_text: false,
+        relay_text: false,
         resolv_text: false
       },
       modal_titles: {
@@ -187,7 +187,7 @@ export default {
         custom_text: 'girl.custom.txt',
         disable: '关闭开机自动启动',
         enable: '打开开机自动启动',
-        remote_text: 'girl.remote',
+        relay_text: 'girl.relay',
         resolv_text: 'resolv.conf',
         restart: '重启',
         start: '启动',
