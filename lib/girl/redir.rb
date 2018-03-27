@@ -5,7 +5,6 @@ require 'socket'
 module Girl
   class Redir
     MASK = 'MDAVEDUUOFNIUNA-UPERGX0KLBCMMWVEDWUZDICY'
-    SEEDS = ('A'..'z').to_a
 
     def initialize(host, port, relay_host, relay_port, hex_block)
       @relay_sockaddr = Socket.sockaddr_in(relay_port, relay_host)
@@ -80,10 +79,8 @@ module Girl
         end
 
         dst_family, dst_port, dst_host = dst_addr.unpack("nnN")
-        puts "> #{@hex.peek_domain(data, dst_port)} #{IPAddr.new(dst_host, Socket::AF_INET).to_s}:#{dst_port}"
-
-        r1, r2 = SEEDS.sample(32 - dst_host.to_s.size).join, SEEDS.sample(16 - dst_port.to_s.size).join
-        data.prepend("#{@hex.hex(r1)}#{dst_host}#{r1}#{dst_port}#{r2}")
+        data, domain = @hex.peek_domain(data, dst_host, dst_port)
+        puts "> #{domain} #{IPAddr.new(dst_host, Socket::AF_INET).to_s}:#{dst_port}"
 
         relay = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
 
