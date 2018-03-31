@@ -14,9 +14,10 @@ module Girl
 
       redir = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
+      redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       redir.bind(Socket.pack_sockaddr_in(port, host))
       redir.listen(64)
-      puts "Listening on #{host}:#{port}"
+      puts "#{Process.pid} Listening on #{host}:#{port}"
 
       @reads = { redir => [ :redir, nil ] }
       @buffs = {}
@@ -52,7 +53,7 @@ module Girl
       @reads[source] = [ :source, nil ]
       @buffs[source] = ''
 
-      print "#{info.ip_unpack.join(':')} r#{@reads.size} w#{@writes.size} #{Time.new} "
+      print "#{Process.pid} #{info.ip_unpack.join(':')} r#{@reads.size} w#{@writes.size} #{Time.new} "
     end
 
     def read_source(source)
