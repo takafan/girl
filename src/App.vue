@@ -6,6 +6,7 @@
       <Col span="22" id="header">
         <span class="title">最终路由器彼女 ~</span>
         <img id="bear" src="./assets/bear.jpg" />
+        <div v-if="data.is_locked"><Icon type="locked"></Icon></div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
@@ -29,9 +30,9 @@
       <div class="row" v-html="data.redir_active"></div>
       <div v-html="expire_info" v-if="expire_info"></div>
       <div class="right">
-        <Button @click="systemctl('stop', 'redir', 'redir_service')" :loading="loading.stop_redir" v-if="data.redir_running">停止</Button>
-        <Button @click="systemctl('start', 'redir', 'redir_service')" :loading="loading.start_redir" v-if="!data.redir_running">启动</Button>
-        <Button @click="systemctl('restart', 'redir', 'redir_service')" :loading="loading.restart_redir" v-if="data.redir_running">重启</Button>
+        <Button @click="systemctl('stop', 'redir', 'redir_service')" :loading="loading.stop_redir" v-if="data.redir_running" :disabled="data.is_locked">停止</Button>
+        <Button @click="systemctl('start', 'redir', 'redir_service')" :loading="loading.start_redir" v-if="!data.redir_running" :disabled="data.is_locked">启动</Button>
+        <Button @click="systemctl('restart', 'redir', 'redir_service')" :loading="loading.restart_redir" v-if="data.redir_running" :disabled="data.is_locked">重启</Button>
       </div>
     </Modal>
 
@@ -50,10 +51,9 @@
       <p slot="footer"></p>
       <div class="row" v-html="data.dnsmasq_active"></div>
       <div class="right">
-
-        <Button @click="systemctl('stop', 'dnsmasq', 'dnsmasq_service')" :loading="loading.stop_dnsmasq" v-if="data.dnsmasq_running">停止</Button>
-        <Button @click="systemctl('start', 'dnsmasq', 'dnsmasq_service')" :loading="loading.start_dnsmasq" v-if="!data.dnsmasq_running">启动</Button>
-        <Button @click="systemctl('restart', 'dnsmasq', 'dnsmasq_service')" :loading="loading.restart_dnsmasq" v-if="data.dnsmasq_running">重启</Button>
+        <Button @click="systemctl('stop', 'dnsmasq', 'dnsmasq_service')" :loading="loading.stop_dnsmasq" v-if="data.dnsmasq_running" :disabled="data.is_locked">停止</Button>
+        <Button @click="systemctl('start', 'dnsmasq', 'dnsmasq_service')" :loading="loading.start_dnsmasq" v-if="!data.dnsmasq_running" :disabled="data.is_locked">启动</Button>
+        <Button @click="systemctl('restart', 'dnsmasq', 'dnsmasq_service')" :loading="loading.restart_dnsmasq" v-if="data.dnsmasq_running" :disabled="data.is_locked">重启</Button>
       </div>
     </Modal>
 
@@ -83,7 +83,7 @@
       <p slot="footer"></p>
       <div class="row" v-html="data.networking_active"></div>
       <div class="right">
-        <Button @click="systemctl('restart', 'networking', 'networking_service')" :loading="loading.restart_networking">重启</Button>
+        <Button @click="systemctl('restart', 'networking', 'networking_service')" :loading="loading.restart_networking" :disabled="data.is_locked">重启</Button>
       </div>
     </Modal>
 
@@ -94,10 +94,10 @@
            v-html="connections_info" v-if="connections_info">
       </div>
       <div class="right">
-        <Checkbox v-model="data.hostapd_enabled" @on-change="check_hostapd">开机自动启动</Checkbox>
-        <Button @click="systemctl('stop', 'hostapd', 'hostapd_service')" :loading="loading.stop_hostapd" v-if="data.hostapd_running">停止</Button>
-        <Button @click="systemctl('start', 'hostapd', 'hostapd_service')" :loading="loading.start_hostapd" v-if="!data.hostapd_running">启动</Button>
-        <Button @click="systemctl('restart', 'hostapd', 'hostapd_service')" :loading="loading.restart_hostapd" v-if="data.hostapd_running">重启</Button>
+        <Checkbox v-model="data.hostapd_enabled" @on-change="check_hostapd" :disabled="data.is_locked">开机自动启动</Checkbox>
+        <Button @click="systemctl('stop', 'hostapd', 'hostapd_service')" :loading="loading.stop_hostapd" v-if="data.hostapd_running" :disabled="data.is_locked">停止</Button>
+        <Button @click="systemctl('start', 'hostapd', 'hostapd_service')" :loading="loading.start_hostapd" v-if="!data.hostapd_running" :disabled="data.is_locked">启动</Button>
+        <Button @click="systemctl('restart', 'hostapd', 'hostapd_service')" :loading="loading.restart_hostapd" v-if="data.hostapd_running" :disabled="data.is_locked">重启</Button>
       </div>
     </Modal>
 
@@ -120,7 +120,7 @@
       <Input type="textarea" :rows="10" v-model="data.relay_text" autofocus></Input>
       <div class="right top-interval">
         <Alert type="error" v-if="error_on_save.relay_text" class="interval">{{ error_on_save.relay_text }}</Alert>
-        <Button @click="save_text('relay_text')" :loading="loading.save_relay_text">保存</Button>
+        <Button @click="save_text('relay_text')" :loading="loading.save_relay_text" :disabled="data.is_locked">保存</Button>
       </div>
     </Modal>
 
@@ -152,7 +152,7 @@
       <Input type="textarea" :rows="20" v-model="data.custom_text" autofocus></Input>
       <div class="right top-interval">
         <Alert type="error" v-if="error_on_save.custom_text" class="interval">{{ error_on_save.custom_text }}</Alert>
-        <Button @click="save_text('custom_text')" :loading="loading.save_custom_text">保存</Button>
+        <Button @click="save_text('custom_text')" :loading="loading.save_custom_text" :disabled="data.is_locked">保存</Button>
       </div>
     </Modal>
 
@@ -178,7 +178,7 @@
       <Input type="textarea" :rows="10" v-model="data.resolv_text" autofocus></Input>
       <div class="right top-interval">
         <Alert type="error" v-if="error_on_save.resolv_text" class="interval">{{ error_on_save.resolv_text }}</Alert>
-        <Button @click="save_text('resolv_text')" :loading="loading.save_resolv_text">保存</Button>
+        <Button @click="save_text('resolv_text')" :loading="loading.save_resolv_text" :disabled="data.is_locked">保存</Button>
       </div>
     </Modal>
 
@@ -204,7 +204,7 @@
       <Input type="textarea" :rows="10" v-model="data.br0_text" autofocus></Input>
       <div class="right top-interval">
         <Alert type="error" v-if="error_on_save.br0_text" class="interval">{{ error_on_save.br0_text }}</Alert>
-        <Button @click="save_text('br0_text')" :loading="loading.save_br0_text">保存</Button>
+        <Button @click="save_text('br0_text')" :loading="loading.save_br0_text" :disabled="data.is_locked">保存</Button>
       </div>
     </Modal>
 
@@ -232,7 +232,7 @@
       <Input type="textarea" :rows="20" v-model="data.hostapd_text" autofocus></Input>
       <div class="right top-interval">
         <Alert type="error" v-if="error_on_save.hostapd_text" class="interval">{{ error_on_save.hostapd_text }}</Alert>
-        <Button @click="save_text('hostapd_text')" :loading="loading.save_hostapd_text">保存</Button>
+        <Button @click="save_text('hostapd_text')" :loading="loading.save_hostapd_text" :disabled="data.is_locked">保存</Button>
       </div>
     </Modal>
 
@@ -259,7 +259,7 @@
 
       <div> 配置生效需要重启dnsmasq，确认重启dnsmasq吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'dnsmasq', 'need_restart_dnsmasq')" :loading="loading.restart_dnsmasq">重启dnsmasq</Button>
+        <Button @click="systemctl('restart', 'dnsmasq', 'need_restart_dnsmasq')" :loading="loading.restart_dnsmasq" :disabled="data.is_locked">重启dnsmasq</Button>
       </div>
     </Modal>
 
@@ -268,7 +268,7 @@
 
       <div> 配置生效需要重启hostapd，确认重启hostapd吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'hostapd', 'need_restart_hostapd')" :loading="loading.restart_hostapd">重启hostapd</Button>
+        <Button @click="systemctl('restart', 'hostapd', 'need_restart_hostapd')" :loading="loading.restart_hostapd" :disabled="data.is_locked">重启hostapd</Button>
       </div>
     </Modal>
 
@@ -277,7 +277,7 @@
 
       <div> 配置生效需要重启networking，确认重启networking吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'networking', 'need_restart_networking')" :loading="loading.restart_networking">重启networking</Button>
+        <Button @click="systemctl('restart', 'networking', 'need_restart_networking')" :loading="loading.restart_networking" :disabled="data.is_locked">重启networking</Button>
       </div>
     </Modal>
   </div>

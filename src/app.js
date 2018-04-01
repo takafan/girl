@@ -139,6 +139,7 @@ export default {
       connections_info: '',
       data: {},
       error_on_save: {
+        br0_text: '',
         custom_text: '',
         hostapd_text: '',
         relay_text: '',
