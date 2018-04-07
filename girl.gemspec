@@ -19,6 +19,7 @@ girl.gemspec
 lib/girl.rb
 lib/girl/hex.rb
 lib/girl/redir.rb
+lib/girl/thr_redir.rb
 lib/girl/version.rb
   ]
 
