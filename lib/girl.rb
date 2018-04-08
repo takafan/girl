@@ -1,2 +1,2 @@
-require 'girl/thr_redir'
+require 'girl/redir'
 require 'girl/version'
