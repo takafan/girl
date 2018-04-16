@@ -4,19 +4,22 @@ require 'socket'
 
 module Girl
   class Redir
-    MASK = 'MDAVEDUUOFNIUNA-UPERGX0KLBCMMWVEDWUZDICY'
 
-    def initialize(host, port, relay_host, relay_port, hex_block)
+    def initialize(host, port, relay_host, relay_port, hex_block = nil)
       @relay_sockaddr = Socket.sockaddr_in(relay_port, relay_host)
 
-      Girl::Hex.class_eval(hex_block)
-      @hex = Girl::Hex.new(MASK)
+      if hex_block
+        Girl::Hex.class_eval(hex_block)
+      end
+      
+      @hex = Girl::Hex.new
 
       redir = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+      redir.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       redir.bind(Socket.pack_sockaddr_in(port, host))
-      redir.listen(128) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
+      redir.listen(5) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
       puts "#{Process.pid} Listening on #{host}:#{port}"
 
       @thrs = []
@@ -105,6 +108,7 @@ module Girl
                 puts "> #{domain} #{IPAddr.new(dst_host, Socket::AF_INET).to_s}:#{dst_port}"
 
                 relay = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+                relay.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
 
                 begin
                   relay.connect_nonblock(@relay_sockaddr)
