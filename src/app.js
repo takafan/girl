@@ -46,12 +46,11 @@ export default {
 
           if (title == 'br0_text') {
             this.modals.need_restart_networking = true
-          } else if (title == 'custom_text' || title == 'relay_text' || title == 'resolv_text') {
+          } else if (title == 'relay_text') {
+            this.modals.need_restart_redir = true
+          } else if (title == 'custom_text' || title == 'resolv_text' || title == 'dns_text') {
             this.modals.need_restart_dnsmasq = true
             this.modal_titles.need_restart_dnsmasq = '保存' + this.translates[title] + '成功'
-            if (title == 'relay_text') {
-              this.data.redir_active = this.colour_in(res.data.active)
-            }
           } else if (title == 'hostapd_text') {
             this.modals.need_restart_hostapd = true
           }
@@ -141,6 +140,7 @@ export default {
       error_on_save: {
         br0_text: '',
         custom_text: '',
+        dns_text: '',
         hostapd_text: '',
         relay_text: '',
         resolv_text: ''
@@ -169,6 +169,7 @@ export default {
       modals: {
         br0_text: false,
         custom_text: false,
+        dns_text: false,
         dnsmasq_service: false,
         exception: false,
         hostapd_text: false,
@@ -187,9 +188,10 @@ export default {
       translates: {
         custom_text: 'girl.custom.txt',
         disable: '关闭开机自动启动',
+        dns_text: 'resolv.conf',
         enable: '打开开机自动启动',
         relay_text: 'girl.relay',
-        resolv_text: 'resolv.conf',
+        resolv_text: 'girl.resolv',
         restart: '重启',
         start: '启动',
         stop: '停止'

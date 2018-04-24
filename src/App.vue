@@ -127,6 +127,29 @@
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
+        <div class="title bold">远程resolv</div>
+        <div class="interval">
+          <div class="output output-area mh200 mw512"
+            v-html="data.resolv_text ? data.resolv_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="modals.resolv_text = true">
+          </div>
+        </div>
+      </Col>
+      <Col span="1">&nbsp;</Col>
+    </Row>
+
+    <Modal v-model="modals.resolv_text" title="编辑远程地址">
+      <p slot="footer"></p>
+      <Input type="textarea" :rows="10" v-model="data.resolv_text" autofocus></Input>
+      <div class="right top-interval">
+        <Alert type="error" v-if="error_on_save.resolv_text" class="interval">{{ error_on_save.resolv_text }}</Alert>
+        <Button @click="save_text('resolv_text')" :loading="loading.save_resolv_text" :disabled="data.is_locked">保存</Button>
+      </div>
+    </Modal>
+
+    <Row class="row">
+      <Col span="1">&nbsp;</Col>
+      <Col span="22">
         <div class="title bold">自定义</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
@@ -162,23 +185,23 @@
         <div class="title bold">默认dns</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.resolv_text ? data.resolv_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.resolv_text = true"></div>
+            v-html="data.dns_text ? data.dns_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="modals.dns_text = true"></div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
 
-    <Modal v-model="modals.resolv_text" title="编辑默认dns">
+    <Modal v-model="modals.dns_text" title="编辑默认dns">
       <p slot="footer"></p>
       <div class="bottom-interval">
         设置默认dns。一行一个。例如： nameserver 114.114.114.114<br />
         填写最近最快的dns即可
       </div>
-      <Input type="textarea" :rows="10" v-model="data.resolv_text" autofocus></Input>
+      <Input type="textarea" :rows="10" v-model="data.dns_text" autofocus></Input>
       <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.resolv_text" class="interval">{{ error_on_save.resolv_text }}</Alert>
-        <Button @click="save_text('resolv_text')" :loading="loading.save_resolv_text" :disabled="data.is_locked">保存</Button>
+        <Alert type="error" v-if="error_on_save.dns_text" class="interval">{{ error_on_save.dns_text }}</Alert>
+        <Button @click="save_text('dns_text')" :loading="loading.save_dns_text" :disabled="data.is_locked">保存</Button>
       </div>
     </Modal>
 
@@ -254,9 +277,16 @@
       <div v-html="exception.message.replace(new RegExp(/\n/, 'g'), '<br />')"></div>
     </Modal>
 
+    <Modal v-model="modals.need_restart_redir" title="编辑girl.relay成功">
+      <p slot="footer"></p>
+      <div> 配置生效需要重启redir，确认重启redir吗？ </div>
+      <div class="right top-interval">
+        <Button @click="systemctl('restart', 'redir', 'need_restart_redir')" :loading="loading.restart_redir" :disabled="data.is_locked">重启redir</Button>
+      </div>
+    </Modal>
+
     <Modal v-model="modals.need_restart_dnsmasq" :title="modal_titles.need_restart_dnsmasq">
       <p slot="footer"></p>
-
       <div> 配置生效需要重启dnsmasq，确认重启dnsmasq吗？ </div>
       <div class="right top-interval">
         <Button @click="systemctl('restart', 'dnsmasq', 'need_restart_dnsmasq')" :loading="loading.restart_dnsmasq" :disabled="data.is_locked">重启dnsmasq</Button>
@@ -265,7 +295,6 @@
 
     <Modal v-model="modals.need_restart_hostapd" title="编辑hostapd.conf成功">
       <p slot="footer"></p>
-
       <div> 配置生效需要重启hostapd，确认重启hostapd吗？ </div>
       <div class="right top-interval">
         <Button @click="systemctl('restart', 'hostapd', 'need_restart_hostapd')" :loading="loading.restart_hostapd" :disabled="data.is_locked">重启hostapd</Button>
@@ -274,7 +303,6 @@
 
     <Modal v-model="modals.need_restart_networking" title="编辑br0.cfg成功">
       <p slot="footer"></p>
-
       <div> 配置生效需要重启networking，确认重启networking吗？ </div>
       <div class="right top-interval">
         <Button @click="systemctl('restart', 'networking', 'need_restart_networking')" :loading="loading.restart_networking" :disabled="data.is_locked">重启networking</Button>
