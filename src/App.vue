@@ -25,7 +25,7 @@
     <Modal v-model="modals.redir_service" title="redir服务">
       <p slot="footer"></p>
       <div class="bottom-interval">
-        妹子绕道服务，通常出国走妹子绕道比电信/移动出去快，所以也可以看成加速服务。
+        妹子绕道服务
       </div>
       <div class="row" v-html="data.redir_active"></div>
       <div v-html="expire_info" v-if="expire_info"></div>

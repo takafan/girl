@@ -7,6 +7,7 @@ export default {
     check_hostapd: function(checked) {
       this.systemctl(checked ? 'enable' : 'disable', 'hostapd', 'hostapd_service')
     },
+
     colour_in: function(text) {
       return text.replace('active (running)',
         '<span class="running">active (running)</span>').replace('active (exited)',
@@ -88,9 +89,26 @@ export default {
 
       axios.get('http://' + server_and_port[0] + ':3000/girld/expire_info?port=' + server_and_port[1]) .then(res => {
         if (res.data.success) {
-          let expire_time = new Date(res.data.expire_time * 1000)
-          this.expire_info = '本月已用流量 in: ' + res.data.input + ' out: ' + res.data.output
-            + '<br />' + '到期日期：' + expire_time.getFullYear() + '-' + ( expire_time.getMonth() + 1 ) + '-' + expire_time.getDate()
+          let expire_info = '本月已用流量 in: ' + res.data.input + ' out: ' + res.data.output
+          if (res.data.expire_time) {
+            let expire_time = new Date(res.data.expire_time * 1000)
+            expire_info += '<br />' + '到期日期：' + expire_time.getFullYear() + '-' + ( expire_time.getMonth() + 1 ) + '-' + expire_time.getDate()
+          }
+          this.expire_info = expire_info
+
+          if (res.data.migrate_info) {
+            let info = res.data.migrate_info.split('\n')
+            axios.post(settings.host + '/api/update_girl_addr', { relay_text: info[0], resolv_text: info[2] }) .then(res2 => {
+              if (res2.data.success) {
+                this.data.relay_text = res2.data.relay_text
+                this.data.resolv_text = res2.data.resolv_text
+                this.data.dnsmasq_active = this.colour_in(res2.data.dnsmasq_active)
+                this.data.redir_active = this.colour_in(res2.data.redir_active)
+                this.data.dnsmasq_running = res2.data.dnsmasq_active.includes('running')
+                this.data.redir_running = res2.data.redir_active.includes('running')
+              }
+            })
+          }
         }
       }).catch(err => {
         console.log(err)
