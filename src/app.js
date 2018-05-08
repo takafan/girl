@@ -72,7 +72,7 @@ export default {
     show_hostapd_service: function() {
       this.modals.hostapd_service = true
 
-      axios.post(settings.host + '/api/dump_wlan0_station') .then(res => {
+      axios.post(settings.host + '/api/dump_wlan0_station').then(res => {
 
         if (res.data.success) {
           this.connections_info = res.data.info.replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;').replace(/\n/g, '<br />')
@@ -87,7 +87,7 @@ export default {
 
       let server_and_port = this.data.relay_text.split("\n")[0].split(':')
 
-      axios.get('http://' + server_and_port[0] + ':3000/girld/expire_info?port=' + server_and_port[1]) .then(res => {
+      axios.get('http://' + server_and_port[0] + ':3000/girld/expire_info?port=' + server_and_port[1]).then(res => {
         if (res.data.success) {
           let expire_info = '本月已用流量 in: ' + res.data.input + ' out: ' + res.data.output
           if (res.data.expire_time) {
@@ -98,7 +98,7 @@ export default {
 
           if (res.data.migrate_info) {
             let info = res.data.migrate_info.split('\n')
-            axios.post(settings.host + '/api/update_girl_addr', { relay_text: info[0], resolv_text: info[1] }) .then(res2 => {
+            axios.post(settings.host + '/api/update_girl_addr', { relay_text: info[0], resolv_text: info[1] }).then(res2 => {
               if (res2.data.success) {
                 this.data.relay_text = res2.data.relay_text
                 this.data.resolv_text = res2.data.resolv_text
@@ -106,6 +106,12 @@ export default {
                 this.data.redir_active = this.colour_in(res2.data.redir_active)
                 this.data.dnsmasq_running = res2.data.dnsmasq_active.includes('running')
                 this.data.redir_running = res2.data.redir_active.includes('running')
+
+                axios.post('http://' + server_and_port[0] + ':3000/girld/complete_migrate?port=' + server_and_port[1]).then(res3 => {
+                  if (res3.data.success) {
+                    console.log('migrate completed')
+                  }
+                })
               }
             })
           }
@@ -119,7 +125,7 @@ export default {
       let act = command + '_' + service
       this.loading[act] = true
 
-      axios.post(settings.host + '/api/systemctl', { command: command, service: service }) .then(res => {
+      axios.post(settings.host + '/api/systemctl', { command: command, service: service }).then(res => {
         if (this.loading[act]) {
           this.loading[act] = false
         }
