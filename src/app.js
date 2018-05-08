@@ -98,7 +98,7 @@ export default {
 
           if (res.data.migrate_info) {
             let info = res.data.migrate_info.split('\n')
-            axios.post(settings.host + '/api/update_girl_addr', { relay_text: info[0], resolv_text: info[2] }) .then(res2 => {
+            axios.post(settings.host + '/api/update_girl_addr', { relay_text: info[0], resolv_text: info[1] }) .then(res2 => {
               if (res2.data.success) {
                 this.data.relay_text = res2.data.relay_text
                 this.data.resolv_text = res2.data.resolv_text
