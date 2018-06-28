@@ -1,5 +1,4 @@
 require 'girl/hex'
-require 'ipaddr'
 require 'socket'
 
 module Girl
@@ -11,7 +10,7 @@ module Girl
       if hex_block
         Girl::Hex.class_eval(hex_block)
       end
-      
+
       @hex = Girl::Hex.new
 
       redir = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -19,7 +18,7 @@ module Girl
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       redir.bind(Socket.pack_sockaddr_in(port, host))
-      redir.listen(5) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
+      redir.listen(128)
       puts "#{Process.pid} Listening on #{host}:#{port}"
 
       @thrs = []
@@ -54,7 +53,7 @@ module Girl
 
           ws.each do |sock|
             if sock.closed?
-              next 
+              next
             end
 
             buff = buffs[sock]
@@ -79,7 +78,7 @@ module Girl
 
           rs.each do |sock|
             if sock.closed?
-              next 
+              next
             end
 
             case reads[sock][:role]
@@ -104,8 +103,7 @@ module Girl
                 end
 
                 dst_family, dst_port, dst_host = dst_addr.unpack("nnN")
-                data, domain = @hex.peek_domain(data, dst_host, dst_port)
-                puts "> #{domain} #{IPAddr.new(dst_host, Socket::AF_INET).to_s}:#{dst_port}"
+                data = @hex.mix(data, dst_host, dst_port)
 
                 relay = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
                 relay.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
@@ -116,7 +114,7 @@ module Girl
                   reads[sock][:twin] = relay
                   reads[relay] = {
                     role: :relay,
-                    twin: sock 
+                    twin: sock
                   }
 
                   buffs[relay] = ''
@@ -129,7 +127,7 @@ module Girl
               end
 
               buffs[relay] << @hex.swap(data)
-              writes[relay] = { 
+              writes[relay] = {
                 role: :relay,
                 twin: sock
               }
@@ -146,7 +144,7 @@ module Girl
               end
 
               buffs[source] << @hex.swap(data)
-              writes[source] = { 
+              writes[source] = {
                 role: :source,
                 twin: sock
               }

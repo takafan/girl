@@ -25,7 +25,7 @@
     <Modal v-model="modals.redir_service" title="redir服务">
       <p slot="footer"></p>
       <div class="bottom-interval">
-        妹子绕道服务
+        妹子加速服务
       </div>
       <div class="row" v-html="data.redir_active"></div>
       <div v-html="expire_info" v-if="expire_info"></div>
@@ -248,9 +248,10 @@
       <p slot="footer"></p>
       <div class="bottom-interval">
         设置wifi名称，更改ssid行。例如： ssid=girl<br />
-        设置信道，更改channel行。取值范围：1-11。例如：channel=11<br />
+        设置信道，更改channel行。例如：channel=11<br />
         设置wifi密码，更改wpa_passphrase行。例如：wpa_passphrase=lastcomm<br />
-        设置是否隐藏，更改ignore_broadcast_ssid行。取值：0显示，1隐藏。例如：ignore_broadcast_ssid=1
+        设置是否隐藏，更改ignore_broadcast_ssid行。取值：0显示，1隐藏。例如：ignore_broadcast_ssid=1<br />
+        设置5GHz wifi，更改hw_mode行：hw_mode=a，更改channel行：channel=36
       </div>
       <Input type="textarea" :rows="20" v-model="data.hostapd_text" autofocus></Input>
       <div class="right top-interval">

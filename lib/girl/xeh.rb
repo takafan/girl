@@ -1,23 +1,20 @@
 module Girl
   class Xeh
-    def initialize(port)
-    end
-    
     def swap(data)
       data
     end
-    
-    def decode(data)
+
+    def decode(data, info)
       unless data
-        return { 
-          success: false, 
-          error: 'missing data' 
+        return {
+          success: false,
+          error: 'missing data'
         }
       end
-      
+
       head = data[/.+/]
       dst_host, dst_port_str = head.split(':')
-      
+
       {
         success: true,
         data: [

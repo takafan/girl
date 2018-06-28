@@ -8,15 +8,15 @@ module Girl
       if xeh_block
         Girl::Xeh.class_eval(xeh_block)
       end
-      
-      @xeh = Girl::Xeh.new(port)
+
+      @xeh = Girl::Xeh.new
 
       relay = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
       relay.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
       relay.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       relay.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       relay.bind(Socket.pack_sockaddr_in(port, host))
-      relay.listen(5) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
+      relay.listen(128) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
       puts "#{Process.pid} Listening on #{host}:#{port}"
 
       @thrs = []
@@ -53,11 +53,11 @@ module Girl
           ws.each do |sock|
             if sock.closed?
               # already closed by twin's error
-              next 
+              next
             end
 
             buff = buffs[sock]
-            
+
             begin
               written = sock.write_nonblock(buff)
             rescue IO::WaitWritable
@@ -80,7 +80,7 @@ module Girl
           rs.each do |sock|
             if sock.closed?
               # already closed by write error, or twin's error
-              next 
+              next
             end
 
             case reads[sock][:role]
@@ -97,7 +97,7 @@ module Girl
               end
 
               unless dest
-                ret = @xeh.decode(data)
+                ret = @xeh.decode(data, info)
                 unless ret[:success]
                   puts ret[:error]
                   close(sock, false)
@@ -106,7 +106,7 @@ module Girl
                 data, dst_host, dst_port = ret[:data]
                 dest = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
                 dest.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
-        
+
                 begin
                   dest.connect_nonblock(Socket.sockaddr_in(dst_port, dst_host))
                 rescue IO::WaitWritable
@@ -126,7 +126,7 @@ module Girl
               end
 
               buffs[dest] << data
-              writes[dest] = { 
+              writes[dest] = {
                 role: :dest,
                 twin: sock
               }
@@ -143,7 +143,7 @@ module Girl
               end
 
               buffs[redir] << @xeh.swap(data)
-              writes[redir] = { 
+              writes[redir] = {
                 role: :redir,
                 twin: sock
               }

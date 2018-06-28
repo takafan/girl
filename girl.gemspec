@@ -6,10 +6,10 @@ require 'girl/version'
 Gem::Specification.new do |spec|
   spec.name          = 'girl'
   spec.version       = Girl::VERSION
-  spec.authors       = ['unknown']
-  spec.email         = ['unknown']
+  spec.authors       = ['takafan']
+  spec.email         = ['takafan@163.com']
 
-  spec.summary       = %q{最终路由器彼女}
+  spec.summary       = %q{妹子}
   spec.description   = %q{the last 江南style traffic relay}
   spec.homepage      = 'http://lastcomm.com/'
   spec.license       = 'MIT'
