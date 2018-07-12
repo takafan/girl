@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.email         = ['takafan@163.com']
 
   spec.summary       = %q{妹子}
-  spec.description   = %q{the last 江南style traffic relay}
+  spec.description   = %q{a 江南style traffic relay}
   spec.homepage      = 'http://lastcomm.com/'
   spec.license       = 'MIT'
 
@@ -20,6 +20,8 @@ lib/girl.rb
 lib/girl/hex.rb
 lib/girl/redir.rb
 lib/girl/relay.rb
+lib/girl/resolv.rb
+lib/girl/resolvd.rb
 lib/girl/version.rb
 lib/girl/xeh.rb
   ]
