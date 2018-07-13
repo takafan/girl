@@ -91,6 +91,11 @@ module Girl
           # move to Answer/Authority = Header (12) + QNAME + 0x00 + QTYPE (2) + QCLASS (2)
           ix = 17 + qname_len
 
+          unless data[ix]
+            puts "nil answer? ancount #{ancount} nscount #{nscount} #{data.inspect}"
+            next
+          end
+
           loop do
             if data[ix].unpack('B8').first[0, 2] == '11' # pointer
               # move to TTL
