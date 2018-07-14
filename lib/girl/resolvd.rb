@@ -30,6 +30,11 @@ module Girl
         qr = data[2, 2].unpack('B16').first[0]
         qname_len = data[12..-1].index([0].pack('C'))
 
+        unless qname_len
+          puts 'missing qname?'
+          next
+        end
+
         if qr == '0'
           qname = swap(data[12, qname_len])
           data[12, qname_len] = qname
