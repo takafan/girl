@@ -4,7 +4,7 @@ require 'socket'
 module Girl
   class Relay
 
-    def initialize(host, port, xeh_block = nil)
+    def initialize(port, xeh_block = nil)
       if xeh_block
         Girl::Xeh.class_eval(xeh_block)
       end
@@ -15,9 +15,9 @@ module Girl
       relay.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
       relay.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       relay.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
-      relay.bind(Socket.pack_sockaddr_in(port, host))
+      relay.bind(Socket.pack_sockaddr_in(port, '0.0.0.0'))
       relay.listen(128) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
-      puts "#{Process.pid} Listening on #{host}:#{port}"
+      puts "#{Process.pid} Listening on #{port}"
 
       @thrs = []
 

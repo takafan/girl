@@ -3,10 +3,10 @@ require 'socket'
 module Girl
   class Resolvd
 
-    def initialize(host, port, nameservers = [])
+    def initialize(port, nameservers = [])
       sock = Socket.new(Socket::AF_INET, Socket::SOCK_DGRAM, 0)
-      sock.bind(Socket.sockaddr_in(port, host))
-      puts "#{Process.pid} Binding on #{host}:#{port}"
+      sock.bind(Socket.sockaddr_in(port, '0.0.0.0'))
+      puts "#{Process.pid} Binding on #{port}"
 
       if nameservers.empty?
         nameservers = %w[ 8.8.8.8 ]

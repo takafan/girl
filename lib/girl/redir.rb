@@ -4,7 +4,7 @@ require 'socket'
 module Girl
   class Redir
 
-    def initialize(host, port, relay_host, relay_port, hex_block = nil)
+    def initialize(port, relay_host, relay_port, hex_block = nil)
       @relay_sockaddr = Socket.sockaddr_in(relay_port, relay_host)
 
       if hex_block
@@ -17,9 +17,9 @@ module Girl
       redir.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
-      redir.bind(Socket.pack_sockaddr_in(port, host))
+      redir.bind(Socket.pack_sockaddr_in(port, '0.0.0.0'))
       redir.listen(128)
-      puts "#{Process.pid} Listening on #{host}:#{port}"
+      puts "#{Process.pid} Listening on #{port}"
 
       @thrs = []
 
