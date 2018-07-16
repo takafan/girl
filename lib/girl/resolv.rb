@@ -45,7 +45,7 @@ module Girl
           id = data[0, 2]
           qr = data[2, 2].unpack('B16').first[0]
           qname_len = data[12..-1].index([0].pack('C'))
-          
+
           unless qname_len
             puts 'missing qname?'
             next
@@ -53,7 +53,8 @@ module Girl
 
           if qr == '0'
             qname = data[12, qname_len]
-            cache, ttl_ix, expire = caches[qname]
+            question = data[12, qname_len + 5]
+            cache, ttl_ix, expire = caches[question]
 
             if cache
               now = Time.new
@@ -63,7 +64,7 @@ module Girl
                 sock.sendmsg(cache, 0, sender)
                 next
               else
-                caches.delete(qname)
+                caches.delete(question)
               end
             end
 
@@ -72,11 +73,11 @@ module Girl
             if is_custom
               rvd_sockaddrs.each do |sockaddr|
                 data[12, qname_len] = swap(qname)
-                sock4.sendmsg(data, 0, sockaddr)
+                (Addrinfo.udp(*Socket.unpack_sockaddr_in(sockaddr).reverse).ipv6? ? sock6 : sock4).sendmsg(data, 0, sockaddr)
               end
             else
               pub_sockaddrs.each do |sockaddr|
-                sock4.sendmsg(data, 0, sockaddr)
+                (Addrinfo.udp(*Socket.unpack_sockaddr_in(sockaddr).reverse).ipv6? ? sock6 : sock4).sendmsg(data, 0, sockaddr)
               end
             end
 
@@ -124,7 +125,8 @@ module Girl
             end
 
             # cache data and set expire by TTL of first resource record, ignore followings
-            caches[qname] = [ data, ix, Time.new + data[ix, 4].unpack('N').first ]
+            question = qname + data[12 + qname_len, 5]
+            caches[question] = [ data, ix, Time.new + data[ix, 4].unpack('N').first ]
           end
         end
       end
