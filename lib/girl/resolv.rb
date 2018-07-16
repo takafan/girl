@@ -85,8 +85,8 @@ module Girl
           elsif qr == '1' && ids.include?(id)
             # relay the fastest response, ignore followings
             src, is_custom = ids.delete(id)
-            ancount = data[6, 2].unpack('n')
-            nscount = data[8, 2].unpack('n')
+            ancount = data[6, 2].unpack('n').first
+            nscount = data[8, 2].unpack('n').first
 
             if is_custom
               qname = swap(data[12, qname_len])
@@ -99,34 +99,46 @@ module Girl
 
             next if ancount == 0 && nscount == 0
 
-            # move to Answer/Authority = Header (12) + QNAME + 0x00 + QTYPE (2) + QCLASS (2)
+            # move to first RR = Header (12) + QNAME + 0x00 + QTYPE (2) + QCLASS (2)
             ix = 17 + qname_len
 
-            unless data[ix]
-              puts "nil answer? ancount #{ancount} nscount #{nscount} #{data.inspect}"
-              next
-            end
+            ttls = []
+            now = Time.new
 
-            loop do
-              if data[ix].unpack('B8').first[0, 2] == '11' # pointer
-                # move to TTL
-                ix += 6
+            (ancount + nscount).times do |i|
+              unless data[ix]
+                puts "nil answer? #{i} of #{ancount + nscount} RR #{data.inspect}"
                 break
-              else
-                len = data[ix].unpack('C').first
-                if len == 0
-                  # move to TTL
-                  ix += 5
-                  break
-                end
-                # move to next label
-                ix += (len + 1)
               end
+
+              loop do
+                if data[ix].unpack('B8').first[0, 2] == '11' # pointer
+                  # move to TTL
+                  ix += 6
+                  break
+                else
+                  len = data[ix].unpack('C').first
+                  if len == 0
+                    # move to TTL
+                    ix += 5
+                    break
+                  end
+                  # move to next label
+                  ix += (len + 1)
+                end
+              end
+
+              ttls << [ ix, now + data[ix, 4].unpack('N').first ]
+
+              # move to next RR = TTL(4) + RDLENGTH(2) + RDATA
+              ix += (6 + data[ix + 4, 2].unpack('n').first)
             end
 
-            # cache data and set expire by TTL of first resource record, ignore followings
+            next if ttls.empty?
+
+            # cache data and set expire by shortest TTL
             question = qname + data[12 + qname_len, 5]
-            caches[question] = [ data, ix, Time.new + data[ix, 4].unpack('N').first ]
+            caches[question] = [ data, *ttls.sort_by{|_ix, _expire| _expire}.first ]
           end
         end
       end
