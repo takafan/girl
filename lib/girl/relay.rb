@@ -68,6 +68,7 @@ module Girl
                 sock.close
                 reads.delete(sock)
                 buffs.delete(sock)
+                next
               end
 
               data, dst_host, dst_port = ret[:data]
@@ -137,7 +138,6 @@ module Girl
 
           buffs[sock] = buff[written..-1]
           unless buffs[sock].empty?
-            print ' .'
             next
           end
 
