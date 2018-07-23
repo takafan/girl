@@ -82,7 +82,6 @@ module Girl
                   role: :dest,
                   twin: sock
                 }
-
                 buffs[twin] = ''
               rescue Errno::EISCONN => e
                 puts "time cross?"
@@ -110,7 +109,6 @@ module Girl
             end
 
             twin = reads[sock][:twin]
-
             buffs[twin] << xeh.swap(data)
             writes[twin] = {
               role: :redir
