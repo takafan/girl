@@ -18,6 +18,8 @@ Gem::Specification.new do |spec|
 girl.gemspec
 lib/girl.rb
 lib/girl/hex.rb
+lib/girl/mirror.rb
+lib/girl/mirrord.rb
 lib/girl/redir.rb
 lib/girl/relay.rb
 lib/girl/resolv.rb
