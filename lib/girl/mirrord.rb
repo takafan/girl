@@ -7,7 +7,7 @@ module Girl
       mirrord = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
       mirrord.bind(Socket.pack_sockaddr_in(mirrord_port, '0.0.0.0'))
       mirrord.listen(5)
-      
+
       puts "mirrord listening on #{mirrord_port}"
 
       appd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -76,7 +76,9 @@ module Girl
           when :mirror
             begin
               data = sock.read_nonblock(4096)
-            rescue EOFError, IOError, Errno::ECONNRESET, Errno::EFAULT, Errno::ETIMEDOUT, Errno::EINVAL, Errno::EPIPE, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENOENT => e
+            rescue IO::WaitWritable
+              next
+            rescue Exception => e
               deal_reading_exception(sock, reads, buffs, writes, twins, readable_socks, writable_socks, close_after_writes, e)
               next
             end
@@ -87,7 +89,9 @@ module Girl
           when :app
             begin
               data = sock.read_nonblock(4096)
-            rescue EOFError, IOError, Errno::ECONNRESET, Errno::EFAULT, Errno::ETIMEDOUT, Errno::EINVAL, Errno::EPIPE, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENOENT => e
+            rescue IO::WaitWritable
+              next
+            rescue Exception => e
               deal_reading_exception(sock, reads, buffs, writes, twins, readable_socks, writable_socks, close_after_writes, e)
               next
             end
@@ -105,7 +109,7 @@ module Girl
             written = sock.write_nonblock(buff)
           rescue IO::WaitWritable
             next
-          rescue IOError, Errno::ECONNRESET, Errno::EFAULT, Errno::ETIMEDOUT, Errno::EINVAL, Errno::EPIPE, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENOENT => e
+          rescue Exception => e
             close_socket(sock, reads, buffs, writes, twins)
             next
           end

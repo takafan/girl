@@ -31,8 +31,8 @@ module Girl
       caches = {}
 
       loop do
-        rs, ws = IO.select([ sock4, sock6 ])
-        rs.each do |sock|
+        readable_socks, _ = IO.select([ sock4, sock6 ])
+        readable_socks.each do |sock|
           # https://tools.ietf.org/html/rfc1035#page-26
           data, addrinfo, rflags, *controls = sock.recvmsg
           sender = addrinfo.to_sockaddr
@@ -145,6 +145,7 @@ module Girl
     end
 
     def swap(data)
+      # overwrite me, you'll be free
       data
     end
 

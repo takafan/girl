@@ -21,7 +21,7 @@ lib/girl/hex.rb
 lib/girl/mirror.rb
 lib/girl/mirrord.rb
 lib/girl/redir.rb
-lib/girl/relay.rb
+lib/girl/relayd.rb
 lib/girl/resolv.rb
 lib/girl/resolvd.rb
 lib/girl/version.rb

@@ -29,9 +29,19 @@ module Girl
         readable_socks.each do |sock|
           case reads[sock]
           when :mirror
+            app = twins[sock]
+
             begin
               data = sock.read_nonblock(4096)
-            rescue EOFError, IOError, Errno::ECONNRESET, Errno::EFAULT, Errno::ETIMEDOUT, Errno::EINVAL, Errno::EPIPE, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENOENT => e
+            rescue IO::WaitReadable
+              next
+            rescue Exception => e
+
+              unless app
+                # mirror-mirrord connect error, raise it.
+                raise e
+              end
+
               # relaying eof to appd
               deal_reading_exception(sock, reads, buffs, writes, twins, readable_socks, writable_socks, close_after_writes, e)
 
@@ -39,8 +49,6 @@ module Girl
               connect_mirrord(mirrord_sockaddr, reads, buffs)
               next
             end
-
-            app = twins[sock]
 
             unless app
               app = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -56,7 +64,9 @@ module Girl
           when :app
             begin
               data = sock.read_nonblock(4096)
-            rescue EOFError, IOError, Errno::ECONNRESET, Errno::EFAULT, Errno::ETIMEDOUT, Errno::EINVAL, Errno::EPIPE, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENOENT => e
+            rescue IO::WaitReadable
+              next
+            rescue Exception => e
               # relaying eof to mirrord
               deal_reading_exception(sock, reads, buffs, writes, twins, readable_socks, writable_socks, close_after_writes, e)
 
@@ -78,7 +88,7 @@ module Girl
             written = sock.write_nonblock(buff)
           rescue IO::WaitWritable
             next
-          rescue IOError, Errno::ECONNRESET, Errno::EFAULT, Errno::ETIMEDOUT, Errno::EINVAL, Errno::EPIPE, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENOENT => e
+          rescue Exception => e
             close_socket(sock, reads, buffs, writes, twins)
             next
           end
@@ -106,7 +116,7 @@ module Girl
 
     def connect_mirrord(mirrord_sockaddr, reads, buffs)
       sock = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      sock.connect(mirrord_sockaddr)
+      sock.connect(mirrord_sockaddr) # ECONNRESET should be raised at sock.read_nonblock, not here.
       reads[sock] = :mirror
       buffs[sock] = ''
       sock

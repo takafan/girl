@@ -1,6 +1,7 @@
 module Girl
   class Hex
     def swap(data)
+      # overwrite me, you'll be free
       data
     end
 
