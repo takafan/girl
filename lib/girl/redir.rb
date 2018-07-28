@@ -47,7 +47,7 @@ module Girl
             rescue IO::WaitReadable
               next
             rescue Exception => e
-              deal_reading_exception(sock, reads, buffs, writes, twins, readable_socks, writable_socks, close_after_writes, e)
+              deal_reading_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
               next
             end
 
@@ -91,7 +91,7 @@ module Girl
             rescue IO::WaitReadable
               next
             rescue Exception => e
-              deal_reading_exception(sock, reads, buffs, writes, twins, readable_socks, writable_socks, close_after_writes, e)
+              deal_reading_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
               next
             end
 
@@ -134,20 +134,21 @@ module Girl
 
     private
 
-    def deal_reading_exception(sock, reads, buffs, writes, twins, readable_socks, writable_socks, close_after_writes, e)
-      writable_socks.delete(sock)
+    def deal_reading_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
       twin = close_socket(sock, reads, buffs, writes, twins)
 
       if twin
-        readable_socks.delete(twin)
-
-        if writable_socks.include?(twin)
+        if writes.include?(twin)
           close_after_writes[twin] = e
         else
           twin.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii")) unless e.is_a?(EOFError)
           close_socket(twin, reads, buffs, writes, twins)
         end
+
+        readable_socks.delete(twin)
       end
+
+      writable_socks.delete(sock)
     end
 
     def close_socket(sock, reads, buffs, writes, twins)
