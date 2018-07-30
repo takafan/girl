@@ -75,8 +75,7 @@ module Girl
                 twins[dest] = sock
                 twins[sock] = dest
               rescue Exception => e
-                close_socket(dest, reads, buffs, writes, twins)
-                close_socket(sock, reads, buffs, writes, twins)
+                deal_io_exception(dest, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
                 next
               end
             end
