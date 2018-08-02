@@ -5,6 +5,7 @@ module Girl
 
     def initialize(roomd_port = 6060, appd_host = '127.0.0.1', appd_port_begin = 6061, mirrd_port_begin = 9091, appd_port_limit = 100, mirrd_port_limit = 10000)
       roomd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+      roomd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1) # avoid EADDRINUSE after a restart
       roomd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
       roomd.bind(Socket.pack_sockaddr_in(roomd_port, '0.0.0.0'))
       roomd.listen(5)
@@ -17,10 +18,13 @@ module Girl
       writes = {} # sock => :room / :app / :mirrd
       twins = {} # app11 <=> mirrd11 / appd1 <=> room1
       close_after_writes = {} # sock => exception
-      appd_apps = {} # appd1 => apps
-      appd_mirrds = {} # appd1 => mirrds
+
+      mirrd_appds = {} # mirrd11 => appd1
+      app_appds = {} # app11 => appd1
+
       appd_ports = {} # appd1 => port1
       mirrd_ports = {} # mirrd1 => port1
+
       appd_ports_can = (appd_port_begin..(appd_port_begin + appd_port_limit)).to_a
       mirrd_ports_can = (mirrd_port_begin..(mirrd_port_begin + mirrd_port_limit)).to_a
 
@@ -33,7 +37,7 @@ module Girl
             begin
               room, addr = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR => e
-              puts e.class
+              puts "accept room #{e.class} ?"
               next
             end
 
@@ -41,6 +45,7 @@ module Girl
             buffs[room] = ''
 
             appd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+            appd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
             appd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
 
             begin
@@ -64,14 +69,12 @@ module Girl
             buffs[appd] = ''
             twins[appd] = room
             twins[room] = appd
-            appd_apps[appd] = []
-            appd_mirrds[appd] = []
             appd_ports[appd] = appd_port
           when :appd
             begin
               app, addr = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR => e
-              puts e.class
+              puts "accept app #{e.class} ?"
               next
             end
 
@@ -80,6 +83,7 @@ module Girl
             room = twins[sock]
 
             mirrd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+            mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
             mirrd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
 
             begin
@@ -100,25 +104,30 @@ module Girl
             begin
               mirrd.connect_nonblock(room.remote_address) # p2p
             rescue IO::WaitWritable
+              print ' c'
               reads[mirrd] = :mirrd
               buffs[mirrd] = ''
             rescue Exception => e
+              puts "connect mirr #{e.message} ?"
               deal_io_exception(mirrd, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
               next
             end
 
             twins[mirrd] = app
             twins[app] = mirrd
+
+            mirrd_appds[mirrd] = sock
+            app_appds[app] = sock
+
+            mirrd_ports[mirrd] = mirrd_port
+
             buffs[room] = "#{mirrd_port};"
             writes[room] = :room
-            appd_apps[sock] << app
-            appd_mirrds[sock] << mirrd
-            mirrd_ports[mirrd] = mirrd_port
           when :room
             begin
               data = sock.read_nonblock(4096)
-            rescue IO::WaitReadable
-              print ' r'
+            rescue IO::WaitReadable => e
+              puts "read #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
               appd = twins[sock]
@@ -127,14 +136,14 @@ module Girl
               if appd
                 appd_ports_can << appd_ports.delete(appd)
 
-                appd_apps.delete(appd).each do |app|
-                  app.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-                  close_socket(app, reads, buffs, writes, twins)
+                app_appds.select{|_app, _appd| _appd == appd }.each do |_app, _appd|
+                  _app.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
+                  close_socket(_app, reads, buffs, writes, twins)
                 end
 
-                appd_mirrds.delete(appd).each do |mirrd|
-                  mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-                  close_socket(mirrd, reads, buffs, writes, twins)
+                mirrd_appds.select{|_mirrd, _appd| _appd == appd }.each do |_mirrd, _appd|
+                  _mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
+                  close_socket(_mirrd, reads, buffs, writes, twins)
                 end
               end
 
@@ -143,14 +152,16 @@ module Girl
           when :app
             begin
               data = sock.read_nonblock(4096)
-            rescue IO::WaitReadable
-              print ' r'
+            rescue IO::WaitReadable => e
+              puts "read #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
               mirrd = twins[sock]
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+              app_appds.delete(sock)
 
               if mirrd
+                mirrd_appds.delete(mirrd)
                 mirrd_ports_can << mirrd_ports.delete(mirrd)
               end
 
@@ -163,12 +174,19 @@ module Girl
           when :mirrd
             begin
               data = sock.read_nonblock(4096)
-            rescue IO::WaitReadable
-              print ' r'
+            rescue IO::WaitReadable => e
+              puts "read #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
+              app = twins[sock]
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+              mirrd_appds.delete(sock)
               mirrd_ports_can << mirrd_ports.delete(sock)
+
+              if app
+                app_appds.delete(app)
+              end
+
               next
             end
 
@@ -184,7 +202,6 @@ module Girl
           begin
             written = sock.write_nonblock(buff)
           rescue IO::WaitWritable
-            print ' c' # connecting
             next
           rescue Exception => e
             deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
@@ -194,6 +211,7 @@ module Girl
           buffs[sock] = buff[written..-1]
 
           unless buffs[sock].empty?
+            print ' .'
             next
           end
 

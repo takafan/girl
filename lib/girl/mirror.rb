@@ -9,7 +9,6 @@
 require 'socket'
 
 module Girl
-
   class Mirror
 
     def initialize(roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22)
@@ -18,19 +17,10 @@ module Girl
       writes = {} # sock => :mirr / :app
       twins = {} # mirr <=> app
       close_after_writes = {} # sock => exception
+      roomd_sockaddr = Socket.sockaddr_in(roomd_port, roomd_host)
+      connect_roomd(roomd_sockaddr, reads)
       appd_sockaddr = Socket.sockaddr_in(appd_port, appd_host)
-
-      room = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      room.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
-      room.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
-      room.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-
-      begin
-        puts "connect roomd #{roomd_host}:#{roomd_port}"
-        room.connect_nonblock(Socket.sockaddr_in(roomd_port, roomd_host))
-      rescue IO::WaitWritable
-        reads[room] = :room
-      end
+      reconn = 0
 
       loop do
         readable_socks, writable_socks = IO.select(reads.keys, writes.keys)
@@ -40,9 +30,12 @@ module Girl
           when :room
             begin
               data = sock.read_nonblock(4096)
-            rescue IO::WaitReadable
-              print ' r'
+            rescue IO::WaitReadable => e
+              puts "read #{reads[sock]} #{e.class} ?"
               next
+            rescue EOFError, Errno::ECONNREFUSED => e
+              reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks)
+              break
             end
 
             data.split(';').map{|s| s.to_i}.each do |mirrd_port|
@@ -50,9 +43,10 @@ module Girl
               mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
               mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
               mirr.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-              mirr.bind(room.local_address)
+              mirr.bind(sock.local_address)
 
               begin
+                print "connect mirrd #{roomd_host}:#{mirrd_port}"
                 mirr.connect_nonblock(Socket.sockaddr_in(mirrd_port, roomd_host)) # p2p
               rescue IO::WaitWritable
                 reads[mirr] = :mirr
@@ -60,11 +54,10 @@ module Girl
               end
 
               app = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-              app.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
-              app.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
               app.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
 
               begin
+                print "connect appd #{appd_host}:#{appd_port}"
                 app.connect_nonblock(appd_sockaddr)
               rescue IO::WaitWritable
                 reads[app] = :app
@@ -77,8 +70,8 @@ module Girl
           when :mirr
             begin
               data = sock.read_nonblock(4096)
-            rescue IO::WaitReadable
-              print ' r'
+            rescue IO::WaitReadable => e
+              puts "read #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
@@ -91,8 +84,8 @@ module Girl
           when :app
             begin
               data = sock.read_nonblock(4096)
-            rescue IO::WaitReadable
-              print ' r'
+            rescue IO::WaitReadable => e
+              puts "read #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
@@ -111,7 +104,6 @@ module Girl
           begin
             written = sock.write_nonblock(buff)
           rescue IO::WaitWritable
-            print ' c' # connecting
             next
           rescue Exception => e
             deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
@@ -121,6 +113,7 @@ module Girl
           buffs[sock] = buff[written..-1]
 
           unless buffs[sock].empty?
+            print ' .'
             next
           end
 
@@ -138,6 +131,43 @@ module Girl
     end
 
     private
+
+    def connect_roomd(roomd_sockaddr, reads)
+      sock = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
+      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
+      sock.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+
+      begin
+        sock.connect_nonblock(roomd_sockaddr)
+      rescue IO::WaitWritable
+        reads[sock] = :room
+      end
+    end
+
+    def reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks)
+      if e.is_a?(EOFError)
+        reconn = 0
+      elsif reconn > 100
+        raise e
+      else
+        reconn += 1
+      end
+
+      reads.keys.each{|_sock| _sock.close}
+      reads.clear
+      buffs.clear
+      writes.clear
+      twins.clear
+      close_after_writes.clear
+      readable_socks.clear
+      writable_socks.clear
+      sleep 1
+      print "retry #{reconn} "
+      connect_roomd(roomd_sockaddr, reads)
+
+      reconn
+    end
 
     def deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
       twin = close_socket(sock, reads, buffs, writes, twins)
