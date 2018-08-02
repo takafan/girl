@@ -1,82 +1,107 @@
+##
+# usage
+# =====
+#
+# Girl::Mirrord.new(6060, '127.0.0.1', 6061) # server
+# Girl::Mirror.new('your.server.ip', 6060, '127.0.0.1', 22) # home
+# ssh -p6061 root@127.0.0.1 # server
+#
 require 'socket'
 
 module Girl
-  ##
-  # usage:
-  #
-  # server: Girl::Mirrord.new(6000, 2222)
-  #
-  # home: Girl::Mirror.new('you.r.server.ip', 6000, '127.0.0.1', 22)
-  #
-  # server: ssh -p2222 root@127.0.0.1
-  #
+
   class Mirror
 
-    def initialize(mirrord_host, mirrord_port, appd_host = '127.0.0.1', appd_port = 22)
-      reads = {}  # sock => :mirror / :app
+    def initialize(roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22)
+      reads = {}  # sock => :room / :mirr / :app
       buffs = {} # sock => ''
-      writes = {} # sock => :mirror / :app
-      twins = {} # sock => relay_to_sock
+      writes = {} # sock => :mirr / :app
+      twins = {} # mirr <=> app
       close_after_writes = {} # sock => exception
-      mirrord_sockaddr = Socket.sockaddr_in(mirrord_port, mirrord_host)
+      appd_sockaddr = Socket.sockaddr_in(appd_port, appd_host)
 
-      puts "connect mirrord for #{appd_host}:#{appd_port}"
-      connect_mirrord(mirrord_sockaddr, reads, buffs)
+      room = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+      room.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
+      room.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
+      room.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+
+      begin
+        puts "connect roomd #{roomd_host}:#{roomd_port}"
+        room.connect_nonblock(Socket.sockaddr_in(roomd_port, roomd_host))
+      rescue IO::WaitWritable
+        reads[room] = :room
+      end
 
       loop do
         readable_socks, writable_socks = IO.select(reads.keys, writes.keys)
 
         readable_socks.each do |sock|
           case reads[sock]
-          when :mirror
-            app = twins[sock]
-
+          when :room
             begin
               data = sock.read_nonblock(4096)
             rescue IO::WaitReadable
+              print ' r'
               next
-            rescue Exception => e
-              unless app
-                # mirror-mirrord connect error, raise it.
-                raise e
+            end
+
+            data.split(';').map{|s| s.to_i}.each do |mirrd_port|
+              mirr = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+              mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
+              mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
+              mirr.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+              mirr.bind(room.local_address)
+
+              begin
+                mirr.connect_nonblock(Socket.sockaddr_in(mirrd_port, roomd_host)) # p2p
+              rescue IO::WaitWritable
+                reads[mirr] = :mirr
+                buffs[mirr] = ''
               end
 
-              # relaying eof to appd
-              deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+              app = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+              app.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
+              app.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
+              app.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
 
-              # rebridge. if eof was not caused by app but caused by mirrord itself, we'll get Connection refused and exit.
-              connect_mirrord(mirrord_sockaddr, reads, buffs)
+              begin
+                app.connect_nonblock(appd_sockaddr)
+              rescue IO::WaitWritable
+                reads[app] = :app
+                buffs[app] = ''
+              end
+
+              twins[app] = mirr
+              twins[mirr] = app
+            end
+          when :mirr
+            begin
+              data = sock.read_nonblock(4096)
+            rescue IO::WaitReadable
+              print ' r'
+              next
+            rescue Exception => e
+              deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
               next
             end
 
-            unless app
-              app = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-              app.connect(Socket.sockaddr_in(appd_port, appd_host))
-              reads[app] = :app
-              buffs[app] = ''
-              twins[app] = sock
-              twins[sock] = app
-            end
-
+            app = twins[sock]
             buffs[app] << data
             writes[app] = :app
           when :app
             begin
               data = sock.read_nonblock(4096)
             rescue IO::WaitReadable
+              print ' r'
               next
             rescue Exception => e
-              # relaying eof to mirrord
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
-
-              # rebridge
-              connect_mirrord(mirrord_sockaddr, reads, buffs)
               next
             end
 
-            mirror = twins[sock]
-            buffs[mirror] << data
-            writes[mirror] = :mirror
+            mirr = twins[sock]
+            buffs[mirr] << data
+            writes[mirr] = :mirr
           end
         end
 
@@ -86,6 +111,7 @@ module Girl
           begin
             written = sock.write_nonblock(buff)
           rescue IO::WaitWritable
+            print ' c' # connecting
             next
           rescue Exception => e
             deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
@@ -112,14 +138,6 @@ module Girl
     end
 
     private
-
-    def connect_mirrord(mirrord_sockaddr, reads, buffs)
-      sock = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      sock.connect(mirrord_sockaddr) # ECONNRESET should be raised at sock.read_nonblock, not here.
-      reads[sock] = :mirror
-      buffs[sock] = ''
-      sock
-    end
 
     def deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
       twin = close_socket(sock, reads, buffs, writes, twins)

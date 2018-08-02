@@ -3,102 +3,178 @@ require 'socket'
 module Girl
   class Mirrord
 
-    def initialize(mirrord_port, appd_port, is_local = true)
-      mirrord = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      mirrord.bind(Socket.pack_sockaddr_in(mirrord_port, '0.0.0.0'))
-      mirrord.listen(5)
-
-      puts "mirrord listening on #{mirrord_port}"
-
-      appd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      appd.bind(Socket.pack_sockaddr_in(appd_port, is_local ? '127.0.0.1' : '0.0.0.0'))
-      appd.listen(5)
-
-      puts "appd listening on #{appd_port}"
+    def initialize(roomd_port = 6060, appd_host = '127.0.0.1', appd_port_begin = 6061, mirrd_port_begin = 9091, appd_port_limit = 100, mirrd_port_limit = 10000)
+      roomd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+      roomd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+      roomd.bind(Socket.pack_sockaddr_in(roomd_port, '0.0.0.0'))
+      roomd.listen(5)
+      puts "roomd listening on #{roomd_port}"
 
       reads = {
-        mirrord => :mirrord, # :appd / :mirrord / :app / :mirror
-        appd => :appd
+        roomd => :roomd # :roomd / :appd / :room / :app / :mirrd
       }
-      buffs = {
-        mirrord => '',
-        appd => ''
-      }
-      writes = {} # sock => role
-      twins = {} # sock => relay_to_sock
+      buffs = {} # sock => ''
+      writes = {} # sock => :room / :app / :mirrd
+      twins = {} # app11 <=> mirrd11 / appd1 <=> room1
       close_after_writes = {} # sock => exception
+      appd_apps = {} # appd1 => apps
+      appd_mirrds = {} # appd1 => mirrds
+      appd_ports = {} # appd1 => port1
+      mirrd_ports = {} # mirrd1 => port1
+      appd_ports_can = (appd_port_begin..(appd_port_begin + appd_port_limit)).to_a
+      mirrd_ports_can = (mirrd_port_begin..(mirrd_port_begin + mirrd_port_limit)).to_a
 
       loop do
         readable_socks, writable_socks = IO.select(reads.keys, writes.keys)
 
         readable_socks.each do |sock|
           case reads[sock]
-          when :mirrord
+          when :roomd
             begin
-              mirror, addr = sock.accept_nonblock
+              room, addr = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR => e
+              puts e.class
               next
             end
 
-            if reads.any?{|_sock, _role| _role == :mirror }
-              mirror.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-              mirror.close
-              next
+            reads[room] = :room
+            buffs[room] = ''
+
+            appd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+            appd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+
+            begin
+              appd_port = appd_ports_can.shift
+              unless appd_port
+                puts 'too many appds'
+                room.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
+                room.close
+                next
+              end
+              appd.bind(Socket.pack_sockaddr_in(appd_port, appd_host))
+            rescue Errno::EADDRINUSE => e
+              puts "appd port #{appd_port} #{e.class}, try next"
+              retry
             end
 
-            reads[mirror] = :mirror
-            buffs[mirror] = ''
+            appd.listen(5)
+            puts "appd listening on #{appd_host}:#{appd_port} of room #{addr.ip_unpack.join(':')}"
+
+            reads[appd] = :appd
+            buffs[appd] = ''
+            twins[appd] = room
+            twins[room] = appd
+            appd_apps[appd] = []
+            appd_mirrds[appd] = []
+            appd_ports[appd] = appd_port
           when :appd
             begin
               app, addr = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR => e
-              next
-            end
-
-            if reads.any?{|_sock, _role| _role == :app }
-              app.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-              app.close
-              next
-            end
-
-            mirror, _ = reads.find{|_sock, _role| _role == :mirror }
-
-            unless mirror
-              app.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-              app.close
+              puts e.class
               next
             end
 
             reads[app] = :app
             buffs[app] = ''
-            twins[app] = mirror
-            twins[mirror] = app
-          when :mirror
+            room = twins[sock]
+
+            mirrd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+            mirrd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+
+            begin
+              mirrd_port = mirrd_ports_can.shift
+              unless mirrd_port
+                puts 'too many mirrds'
+                app.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
+                app.close
+                next
+              end
+
+              mirrd.bind(Socket.pack_sockaddr_in(mirrd_port, '0.0.0.0'))
+            rescue Errno::EADDRINUSE => e
+              puts "mirrd port #{mirrd_port} #{e.class}, try next"
+              retry
+            end
+
+            begin
+              mirrd.connect_nonblock(room.remote_address) # p2p
+            rescue IO::WaitWritable
+              reads[mirrd] = :mirrd
+              buffs[mirrd] = ''
+            rescue Exception => e
+              deal_io_exception(mirrd, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+              next
+            end
+
+            twins[mirrd] = app
+            twins[app] = mirrd
+            buffs[room] = "#{mirrd_port};"
+            writes[room] = :room
+            appd_apps[sock] << app
+            appd_mirrds[sock] << mirrd
+            mirrd_ports[mirrd] = mirrd_port
+          when :room
             begin
               data = sock.read_nonblock(4096)
-            rescue IO::WaitWritable
+            rescue IO::WaitReadable
+              print ' r'
+              next
+            rescue Exception => e
+              appd = twins[sock]
+              deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+
+              if appd
+                appd_ports_can << appd_ports.delete(appd)
+
+                appd_apps.delete(appd).each do |app|
+                  app.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
+                  close_socket(app, reads, buffs, writes, twins)
+                end
+
+                appd_mirrds.delete(appd).each do |mirrd|
+                  mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
+                  close_socket(mirrd, reads, buffs, writes, twins)
+                end
+              end
+
+              next
+            end
+          when :app
+            begin
+              data = sock.read_nonblock(4096)
+            rescue IO::WaitReadable
+              print ' r'
+              next
+            rescue Exception => e
+              mirrd = twins[sock]
+              deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+
+              if mirrd
+                mirrd_ports_can << mirrd_ports.delete(mirrd)
+              end
+
+              next
+            end
+
+            mirrd = twins[sock]
+            buffs[mirrd] << data
+            writes[mirrd] = :mirrd
+          when :mirrd
+            begin
+              data = sock.read_nonblock(4096)
+            rescue IO::WaitReadable
+              print ' r'
               next
             rescue Exception => e
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+              mirrd_ports_can << mirrd_ports.delete(sock)
               next
             end
 
             app = twins[sock]
             buffs[app] << data
             writes[app] = :app
-          when :app
-            begin
-              data = sock.read_nonblock(4096)
-            rescue IO::WaitWritable
-              next
-            rescue Exception => e
-              deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
-              next
-            end
-
-            mirror = twins[sock]
-            buffs[mirror] << data
-            writes[mirror] = :mirror
           end
         end
 
@@ -108,6 +184,7 @@ module Girl
           begin
             written = sock.write_nonblock(buff)
           rescue IO::WaitWritable
+            print ' c' # connecting
             next
           rescue Exception => e
             deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)

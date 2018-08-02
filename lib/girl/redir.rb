@@ -8,7 +8,7 @@ module Girl
       Girl::Hex.class_eval(hex_block) if hex_block
       hex = Girl::Hex.new
       redir = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      redir.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
+      redir.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       redir.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       redir.bind(Socket.pack_sockaddr_in(redir_port, '0.0.0.0'))
@@ -67,7 +67,7 @@ module Girl
               dst_family, dst_port, dst_host = dst_addr.unpack("nnN")
               data = hex.mix(data, dst_host, dst_port)
               relay = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-              relay.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
+              relay.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
 
               begin
                 relay.connect_nonblock(relayd_sockaddr)

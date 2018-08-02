@@ -8,7 +8,7 @@ module Girl
       Girl::Xeh.class_eval(xeh_block) if xeh_block
       xeh = Girl::Xeh.new
       relayd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      relayd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
+      relayd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
       relayd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       relayd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       relayd.bind(Socket.pack_sockaddr_in(port, '0.0.0.0'))
@@ -65,7 +65,7 @@ module Girl
 
               data, dst_host, dst_port = ret[:data]
               dest = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-              dest.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1)
+              dest.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
 
               begin
                 dest.connect_nonblock(Socket.sockaddr_in(dst_port, dst_host))
