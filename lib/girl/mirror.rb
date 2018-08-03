@@ -137,6 +137,7 @@ module Girl
       sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       sock.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
 
       begin
         sock.connect_nonblock(roomd_sockaddr)
