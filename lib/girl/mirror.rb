@@ -43,6 +43,7 @@ module Girl
               mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
               mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
               mirr.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+              mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
               mirr.bind(sock.local_address)
 
               begin

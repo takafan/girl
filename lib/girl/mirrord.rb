@@ -85,6 +85,7 @@ module Girl
             mirrd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
             mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
             mirrd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+            mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
 
             begin
               mirrd_port = mirrd_ports_can.shift
