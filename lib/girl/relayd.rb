@@ -66,14 +66,14 @@ module Girl
               data, dst_host, dst_port = ret[:data]
               dest = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
               dest.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+              reads[dest] = :dest
+              buffs[dest] = ''
+              twins[dest] = sock
+              twins[sock] = dest
 
               begin
                 dest.connect_nonblock(Socket.sockaddr_in(dst_port, dst_host))
               rescue IO::WaitWritable
-                reads[dest] = :dest
-                buffs[dest] = ''
-                twins[dest] = sock
-                twins[sock] = dest
               rescue Exception => e
                 deal_io_exception(dest, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
                 next

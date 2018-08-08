@@ -68,14 +68,14 @@ module Girl
               data = hex.mix(data, dst_host, dst_port)
               relay = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
               relay.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+              reads[relay] = :relay
+              buffs[relay] = ''
+              twins[relay] = sock
+              twins[sock] = relay
 
               begin
                 relay.connect_nonblock(relayd_sockaddr)
               rescue IO::WaitWritable
-                reads[relay] = :relay
-                buffs[relay] = ''
-                twins[relay] = sock
-                twins[sock] = relay
               rescue Exception => e
                 deal_io_exception(relay, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
                 next

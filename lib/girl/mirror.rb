@@ -31,9 +31,9 @@ module Girl
             begin
               data = sock.read_nonblock(4096)
             rescue IO::WaitReadable => e
-              puts "read #{reads[sock]} #{e.class} ?"
+              puts "r #{reads[sock]} #{e.class} ?"
               next
-            rescue EOFError, Errno::ECONNREFUSED => e
+            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET => e
               reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks)
               break
             end
@@ -45,34 +45,30 @@ module Girl
               mirr.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
               mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
               mirr.bind(sock.local_address)
-
-              begin
-                print "connect mirrd #{roomd_host}:#{mirrd_port}"
-                mirr.connect_nonblock(Socket.sockaddr_in(mirrd_port, roomd_host)) # p2p
-              rescue IO::WaitWritable
-                reads[mirr] = :mirr
-                buffs[mirr] = ''
-              end
-
               app = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
               app.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-
-              begin
-                print "connect appd #{appd_host}:#{appd_port}"
-                app.connect_nonblock(appd_sockaddr)
-              rescue IO::WaitWritable
-                reads[app] = :app
-                buffs[app] = ''
-              end
-
+              reads[mirr] = :mirr
+              buffs[mirr] = ''
+              reads[app] = :app
+              buffs[app] = ''
               twins[app] = mirr
               twins[mirr] = app
+
+              begin
+                mirr.connect_nonblock(Socket.sockaddr_in(mirrd_port, roomd_host))
+              rescue IO::WaitWritable
+              end
+
+              begin
+                app.connect_nonblock(appd_sockaddr)
+              rescue IO::WaitWritable
+              end
             end
           when :mirr
             begin
               data = sock.read_nonblock(4096)
             rescue IO::WaitReadable => e
-              puts "read #{reads[sock]} #{e.class} ?"
+              puts "r #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
@@ -86,7 +82,7 @@ module Girl
             begin
               data = sock.read_nonblock(4096)
             rescue IO::WaitReadable => e
-              puts "read #{reads[sock]} #{e.class} ?"
+              puts "r #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
               deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
@@ -133,20 +129,6 @@ module Girl
 
     private
 
-    def connect_roomd(roomd_sockaddr, reads)
-      sock = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
-      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
-      sock.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
-
-      begin
-        sock.connect_nonblock(roomd_sockaddr)
-      rescue IO::WaitWritable
-        reads[sock] = :room
-      end
-    end
-
     def reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks)
       if e.is_a?(EOFError)
         reconn = 0
@@ -169,6 +151,21 @@ module Girl
       connect_roomd(roomd_sockaddr, reads)
 
       reconn
+    end
+
+    def connect_roomd(roomd_sockaddr, reads)
+      sock = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
+      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
+      sock.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
+      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
+      reads[sock] = :room
+
+      begin
+        puts 'connect roomd'
+        sock.connect_nonblock(roomd_sockaddr)
+      rescue IO::WaitWritable
+      end
     end
 
     def deal_io_exception(sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
