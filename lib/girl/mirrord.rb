@@ -3,7 +3,7 @@ require 'socket'
 module Girl
   class Mirrord
 
-    def initialize(roomd_port = 6060, appd_host = '127.0.0.1', room_limit = 100)
+    def initialize(roomd_port = 6060, appd_host = '127.0.0.1')
       roomd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
       roomd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1) # avoid EADDRINUSE after a restart
       roomd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
@@ -20,10 +20,6 @@ module Girl
       close_after_writes = {} # sock => exception
       pending_apps = {} # app11 => appd1
       appd_infos = {} # appd1 => { room: room1, mirrd: mirrd1, pending_apps: { app11: '' }, linked_apps: { app12: mirr12 } }
-      appd_port_begin = roomd_port + 1
-      appd_ports_can = (appd_port_begin...(appd_port_begin + room_limit)).to_a
-      mirrd_port_begin = appd_port_begin + room_limit
-      mirrd_ports_can = (mirrd_port_begin...(mirrd_port_begin + room_limit)).to_a
 
       loop do
         readable_socks, writable_socks = IO.select(reads.keys, writes.keys)
@@ -44,48 +40,18 @@ module Girl
             appd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
             appd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
             appd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-
-            begin
-              appd_port = appd_ports_can.shift
-              unless appd_port
-                puts 'no more appd port'
-                room.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-                room.close
-                next
-              end
-              appd.bind(Socket.pack_sockaddr_in(appd_port, appd_host))
-            rescue Errno::EADDRINUSE => e
-              puts "appd port #{appd_port} #{e.class}, try next"
-              retry
-            end
-
+            appd.bind(Socket.pack_sockaddr_in(0, appd_host))
             appd.listen(5)
-            puts "appd listening on #{appd_host}:#{appd_port} of room #{room.local_address.ip_unpack.join(':')}"
+            puts "appd listening on #{appd.local_address.ip_unpack.join(':')} of room #{room.local_address.ip_unpack.join(':')}"
 
             reads[appd] = :appd
 
             mirrd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
             mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
             mirrd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-
-            begin
-              mirrd_port = mirrd_ports_can.shift
-              unless mirrd_port
-                puts 'no more mirrd port'
-                appd.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-                appd.close
-                room.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
-                room.close
-                next
-              end
-              mirrd.bind(Socket.pack_sockaddr_in(mirrd_port, '0.0.0.0'))
-            rescue Errno::EADDRINUSE => e
-              puts "mirrd port #{mirrd_port} #{e.class}, try next"
-              retry
-            end
-
+            mirrd.bind(Socket.pack_sockaddr_in(0, '0.0.0.0'))
             mirrd.listen(5)
-            puts "mirrd listening on #{mirrd_port} of room #{room.local_address.ip_unpack.join(':')}"
+            puts "mirrd listening on #{mirrd.local_address.ip_unpack.join(':')} of room #{room.local_address.ip_unpack.join(':')}"
 
             reads[mirrd] = :mirrd
 
@@ -140,7 +106,7 @@ module Girl
               puts "r #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
-              deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos, appd_ports_can, mirrd_ports_can)
+              deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos)
               next
             end
 
@@ -152,7 +118,7 @@ module Girl
               puts "r #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
-              deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos, appd_ports_can, mirrd_ports_can)
+              deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos)
               next
             end
 
@@ -173,7 +139,7 @@ module Girl
               puts "r #{reads[sock]} #{e.class} ?"
               next
             rescue Exception => e
-              deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos, appd_ports_can, mirrd_ports_can)
+              deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos)
               next
             end
 
@@ -191,7 +157,7 @@ module Girl
           rescue IO::WaitWritable
             next
           rescue Exception => e
-            deal_io_exception(sock, reads, buffs, writes, twins, writes[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos, appd_ports_can, mirrd_ports_can)
+            deal_io_exception(sock, reads, buffs, writes, twins, writes[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos)
             next
           end
 
@@ -216,7 +182,7 @@ module Girl
 
     private
 
-    def deal_io_exception(sock, reads, buffs, writes, twins, role, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos, appd_ports_can, mirrd_ports_can)
+    def deal_io_exception(sock, reads, buffs, writes, twins, role, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos)
       twin = close_socket(sock, reads, buffs, writes, twins)
 
       if twin
@@ -242,13 +208,11 @@ module Girl
           appd_port = appd.local_address.ip_unpack.last
           appd.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
           close_socket(appd, reads, buffs, writes, twins)
-          appd_ports_can << appd_port
 
           mirrd = appd_info[:mirrd]
           mirrd_port = mirrd.local_address.ip_unpack.last
           mirrd.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
           close_socket(mirrd, reads, buffs, writes, twins)
-          mirrd_ports_can << mirrd_port
 
           appd_info[:pending_apps].each do |app, buff|
             app.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
