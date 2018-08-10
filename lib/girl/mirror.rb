@@ -12,14 +12,14 @@ require 'socket'
 module Girl
   class Mirror
 
-    def initialize(roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22)
+    def initialize(roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22, room_title = nil)
       reads = {}  # sock => :room / :mirr / :app
       buffs = {} # sock => ''
       writes = {} # sock => :mirr / :app
       twins = {} # mirr <=> app
       close_after_writes = {} # sock => exception
       roomd_sockaddr = Socket.sockaddr_in(roomd_port, roomd_host)
-      connect_roomd(roomd_sockaddr, reads)
+      connect_roomd(roomd_sockaddr, reads, buffs, writes, room_title)
       appd_sockaddr = Socket.sockaddr_in(appd_port, appd_host)
       reconn = 0
 
@@ -35,7 +35,7 @@ module Girl
               puts "r #{reads[sock]} #{e.class} ?"
               next
             rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET => e
-              reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks)
+              reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title)
               break
             end
 
@@ -130,7 +130,7 @@ module Girl
 
     private
 
-    def reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks)
+    def reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title)
       if e.is_a?(EOFError)
         reconn = 0
       elsif reconn > 100
@@ -149,12 +149,12 @@ module Girl
       writable_socks.clear
       sleep 1
       print "retry #{reconn} "
-      connect_roomd(roomd_sockaddr, reads)
+      connect_roomd(roomd_sockaddr, reads, buffs, writes, room_title)
 
       reconn
     end
 
-    def connect_roomd(roomd_sockaddr, reads)
+    def connect_roomd(roomd_sockaddr, reads, buffs, writes, room_title)
       sock = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
       sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
@@ -166,6 +166,10 @@ module Girl
         puts 'connect roomd'
         sock.connect_nonblock(roomd_sockaddr)
       rescue IO::WaitWritable
+        if room_title
+          buffs[sock] = room_title.unpack("C*").map{|c| c.chr }.join
+          writes[sock] = :room
+        end
       end
     end
 

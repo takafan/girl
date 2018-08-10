@@ -3,13 +3,14 @@ require 'socket'
 module Girl
   class Mirrord
 
-    def initialize(roomd_port = 6060, appd_host = '127.0.0.1')
+    def initialize(roomd_port = 6060, appd_host = '127.0.0.1', tmp_dir = '/tmp/mirrord')
       roomd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
       roomd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1) # avoid EADDRINUSE after a restart
       roomd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
       roomd.bind(Socket.pack_sockaddr_in(roomd_port, '0.0.0.0'))
       roomd.listen(5)
       puts "roomd listening on #{roomd_port}"
+      Dir.mkdir(tmp_dir) unless Dir.exist?(tmp_dir)
 
       reads = {
         roomd => :roomd # :roomd / :appd / :mirrd / :room / :app / :mirr
@@ -55,12 +56,17 @@ module Girl
 
             reads[mirrd] = :mirrd
 
+            tmp_path = File.join(tmp_dir, "#{appd.local_address.ip_unpack.last}-#{addr.ip_unpack.first}")
             appd_infos[appd] = {
               room: room,
               mirrd: mirrd,
               pending_apps: {},
-              linked_apps: {}
+              linked_apps: {},
+              tmp_path: tmp_path
             }
+
+            Dir.mkdir(tmp_dir) unless Dir.exist?(tmp_dir)
+            File.open(tmp_path, 'w')
           when :appd
             begin
               app, addr = sock.accept_nonblock
@@ -110,7 +116,18 @@ module Girl
               next
             end
 
-            puts "r unexpected room data? #{data.inspect}"
+            _, appd_info = appd_infos.find{|_appd, _info| _info[:room] == sock }
+            if appd_info
+              begin
+                File.delete(appd_info[:tmp_path])
+              rescue Errno::ENOENT
+              end
+
+              tmp_path = "#{appd_info[:tmp_path].split('-').first}-#{data}"
+              Dir.mkdir(tmp_dir) unless Dir.exist?(tmp_dir)
+              File.open(tmp_path, 'w')
+              appd_info[:tmp_path] = tmp_path
+            end
           when :app
             begin
               data = sock.read_nonblock(4096)
@@ -208,6 +225,10 @@ module Girl
           appd_port = appd.local_address.ip_unpack.last
           appd.setsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack("ii"))
           close_socket(appd, reads, buffs, writes, twins)
+          begin
+            File.delete(appd_info[:tmp_path])
+          rescue Errno::ENOENT
+          end
 
           mirrd = appd_info[:mirrd]
           mirrd_port = mirrd.local_address.ip_unpack.last
