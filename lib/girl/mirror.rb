@@ -2,10 +2,11 @@
 # usage
 # =====
 #
+# Girl::Mirror.new('your.server.ip', 6060, '127.0.0.1', 22, '周立波') # home
+#
 # Girl::Mirrord.new(6060, '127.0.0.1') # server
-# Girl::Mirror.new('your.server.ip', 6060, '127.0.0.1', 22) # home
-# netstat -ntpl |grep 127.0.0.1 # server
-# ssh -p45678 root@127.0.0.1 # server
+# ls /tmp/mirrord # 45678-周立波
+# ssh -p45678 root@localhost
 #
 require 'socket'
 
