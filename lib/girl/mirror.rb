@@ -13,7 +13,7 @@ require 'socket'
 module Girl
   class Mirror
 
-    def initialize(roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22, room_title = nil)
+    def initialize(roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22, room_title = nil, timeout = 3600)
       reads = {}  # sock => :room / :mirr / :app
       buffs = {} # sock => ''
       writes = {} # sock => :mirr / :app
@@ -25,7 +25,19 @@ module Girl
       reconn = 0
 
       loop do
-        readable_socks, writable_socks = IO.select(reads.keys, writes.keys)
+        readable_socks, writable_socks = IO.select(reads.keys, writes.keys, [], timeout)
+
+        unless readable_socks
+          puts "reconnect #{Time.new}"
+          reads.keys.each{|_sock| _sock.close}
+          reads.clear
+          buffs.clear
+          writes.clear
+          twins.clear
+          close_after_writes.clear
+          connect_roomd(roomd_sockaddr, reads, buffs, writes, room_title)
+          next
+        end
 
         readable_socks.each do |sock|
           case reads[sock]
@@ -45,7 +57,6 @@ module Girl
               mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
               mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
               mirr.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-              mirr.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
               mirr.bind(sock.local_address)
               app = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
               app.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
@@ -160,7 +171,6 @@ module Girl
       sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
       sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1)
       sock.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
-      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
       reads[sock] = :room
 
       begin
