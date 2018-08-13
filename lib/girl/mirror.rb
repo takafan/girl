@@ -47,7 +47,7 @@ module Girl
             rescue IO::WaitReadable => e
               puts "r #{reads[sock]} #{e.class} ?"
               next
-            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET => e
+            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH => e
               reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title)
               break
             end
