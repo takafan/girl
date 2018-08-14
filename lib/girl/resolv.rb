@@ -14,16 +14,23 @@ module Girl
 
       puts "#{Process.pid} Binding on #{port}"
 
+      reads = {
+        sock4 => false, # not ipv6
+        sock6 => true # is ipv6
+      }
+      pub_socks = {} # nameserver => sock
+      rvd_socks = {} # resolvd => sock
+
       if nameservers.empty?
         nameservers = %w[ 114.114.114.114 114.114.115.115 ]
       end
 
-      pub_sockaddrs = nameservers.map{|ip| Socket.sockaddr_in( 53, ip ) }
+      nameservers.each do |ip|
+        pub_socks[Socket.sockaddr_in( 53, ip )] = Addrinfo.udp(ip, 53).ipv6? ? sock6 : sock4
+      end
 
       if resolvd_host && resolvd_port
-        rvd_sockaddrs = [ Socket.sockaddr_in( resolvd_port, resolvd_host ) ]
-      else
-        rvd_sockaddrs = []
+        rvd_socks[Socket.sockaddr_in( resolvd_port, resolvd_host )] = Addrinfo.udp(resolvd_host, resolvd_port).ipv6? ? sock6 : sock4
       end
 
       custom_qnames = custom_domains.map{|dom| dom.split('.').map{|sub| [ sub.size ].pack('C') + sub }.join }
@@ -31,7 +38,7 @@ module Girl
       caches = {}
 
       loop do
-        readable_socks, _ = IO.select([ sock4, sock6 ])
+        readable_socks, _ = IO.select(reads.keys)
         readable_socks.each do |sock|
           # https://tools.ietf.org/html/rfc1035#page-26
           data, addrinfo, rflags, *controls = sock.recvmsg
@@ -71,20 +78,20 @@ module Girl
             is_custom = custom_qnames.any?{|_qname| qname.include?(_qname)}
 
             if is_custom
-              rvd_sockaddrs.each do |sockaddr|
+              rvd_socks.each do |sockaddr, sock|
                 data[12, qname_len] = swap(qname)
-                (Addrinfo.udp(*Socket.unpack_sockaddr_in(sockaddr).reverse).ipv6? ? sock6 : sock4).sendmsg(data, 0, sockaddr)
+                sock.sendmsg(data, 0, sockaddr)
               end
             else
-              pub_sockaddrs.each do |sockaddr|
-                (Addrinfo.udp(*Socket.unpack_sockaddr_in(sockaddr).reverse).ipv6? ? sock6 : sock4).sendmsg(data, 0, sockaddr)
+              pub_socks.each do |sockaddr, sock|
+                sock.sendmsg(data, 0, sockaddr)
               end
             end
 
-            ids[id] = [ sender, is_custom ]
+            ids[id] = [ sender, is_custom, reads[sock] ]
           elsif qr == '1' && ids.include?(id)
             # relay the fastest response, ignore followings
-            src, is_custom = ids.delete(id)
+            src, is_custom, is_ipv6 = ids.delete(id)
             ancount = data[6, 2].unpack('n').first
             nscount = data[8, 2].unpack('n').first
 
@@ -95,7 +102,7 @@ module Girl
               qname = data[12, qname_len]
             end
 
-            (Addrinfo.udp(*Socket.unpack_sockaddr_in(src).reverse).ipv6? ? sock6 : sock4).sendmsg(data, 0, src)
+            (is_ipv6 ? sock6 : sock4).sendmsg(data, 0, src)
 
             next if ancount == 0 && nscount == 0
 

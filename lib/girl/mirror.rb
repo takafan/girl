@@ -16,7 +16,7 @@ module Girl
     def initialize(roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22, room_title = nil, timeout = 3600)
       reads = {}  # sock => :room / :mirr / :app
       buffs = {} # sock => ''
-      writes = {} # sock => :mirr / :app
+      writes = {} # sock => :room / :mirr / :app
       twins = {} # mirr <=> app
       close_after_writes = {} # sock => exception
       roomd_sockaddr = Socket.sockaddr_in(roomd_port, roomd_host)
@@ -71,11 +71,19 @@ module Girl
               begin
                 mirr.connect_nonblock(Socket.sockaddr_in(mirrd_port, roomd_host))
               rescue IO::WaitWritable
+              rescue Errno::EADDRNOTAVAIL => e
+                puts "connect mirrd #{roomd_host}:#{mirrd_port} #{e.class}"
+                deal_io_exception(mirr, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+                next
               end
 
               begin
                 app.connect_nonblock(appd_sockaddr)
               rescue IO::WaitWritable
+              rescue Errno::EADDRNOTAVAIL => e
+                puts "connect appd #{appd_host}:#{appd_port} #{e.class}"
+                deal_io_exception(app, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
+                next
               end
             end
           when :mirr
