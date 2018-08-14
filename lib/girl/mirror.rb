@@ -48,6 +48,7 @@ module Girl
               puts "r #{reads[sock]} #{e.class} ?"
               next
             rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH => e
+              puts "read room #{e.class} #{Time.new}"
               reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title)
               break
             end
@@ -159,8 +160,8 @@ module Girl
       close_after_writes.clear
       readable_socks.clear
       writable_socks.clear
-      sleep 1
-      print "retry #{reconn} "
+      sleep 5
+      print "retry #{reconn}"
       connect_roomd(roomd_sockaddr, reads, buffs, writes, room_title)
 
       reconn
