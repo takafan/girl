@@ -20,6 +20,7 @@ module Girl
       }
       pub_socks = {} # nameserver => sock
       rvd_socks = {} # resolvd => sock
+      reconn = 0
 
       if nameservers.empty?
         nameservers = %w[ 114.114.114.114 114.114.115.115 ]
@@ -68,7 +69,21 @@ module Girl
               if expire > now
                 cache[0, 2] = id
                 cache[ttl_ix, 4] = [ (expire - now).to_i ].pack('N')
-                sock.sendmsg(cache, 0, sender)
+
+                begin
+                  sock.sendmsg(cache, 0, sender)
+                  reconn = 0
+                rescue Errno::ENETUNREACH => e
+                  if reconn > 100
+                    raise e
+                  end
+
+                  sleep 5
+                  reconn += 1
+                  puts "#{e.class}, retry send cache #{reconn}"
+                  retry
+                end
+
                 next
               else
                 caches.delete(question)
@@ -80,11 +95,36 @@ module Girl
             if is_custom
               rvd_socks.each do |sockaddr, sock|
                 data[12, qname_len] = swap(qname)
-                sock.sendmsg(data, 0, sockaddr)
+
+                begin
+                  sock.sendmsg(data, 0, sockaddr)
+                  reconn = 0
+                rescue Errno::ENETUNREACH => e
+                  if reconn > 100
+                    raise e
+                  end
+
+                  sleep 5
+                  reconn += 1
+                  puts "#{e.class}, retry sendmsg to rvd #{reconn}"
+                  retry
+                end
               end
             else
               pub_socks.each do |sockaddr, sock|
-                sock.sendmsg(data, 0, sockaddr)
+                begin
+                  sock.sendmsg(data, 0, sockaddr)
+                  reconn = 0
+                rescue Errno::ENETUNREACH => e
+                  if reconn > 100
+                    raise e
+                  end
+
+                  sleep 5
+                  reconn += 1
+                  puts "#{e.class}, retry sendmsg to pub #{reconn}"
+                  retry
+                end
               end
             end
 
@@ -102,7 +142,19 @@ module Girl
               qname = data[12, qname_len]
             end
 
-            (is_ipv6 ? sock6 : sock4).sendmsg(data, 0, src)
+            begin
+              (is_ipv6 ? sock6 : sock4).sendmsg(data, 0, src)
+              reconn = 0
+            rescue Errno::ENETUNREACH => e
+              if reconn > 100
+                raise e
+              end
+
+              sleep 5
+              reconn += 1
+              puts "#{e.class}, retry sendmsg to src #{reconn}"
+              retry
+            end
 
             next if ancount == 0 && nscount == 0
 

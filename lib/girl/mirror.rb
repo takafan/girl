@@ -23,12 +23,13 @@ module Girl
       connect_roomd(roomd_sockaddr, reads, buffs, writes, room_title)
       appd_sockaddr = Socket.sockaddr_in(appd_port, appd_host)
       reconn = 0
+      renet = 0
 
       loop do
         readable_socks, writable_socks = IO.select(reads.keys, writes.keys, [], timeout)
 
         unless readable_socks
-          puts "reconnect #{Time.new}"
+          puts "flash #{Time.new}"
           reads.keys.each{|_sock| _sock.close}
           reads.clear
           buffs.clear
@@ -44,6 +45,8 @@ module Girl
           when :room
             begin
               data = sock.read_nonblock(4096)
+              reconn = 0
+              renet = 0
             rescue IO::WaitReadable => e
               puts "r #{reads[sock]} #{e.class} ?"
               next
@@ -51,6 +54,18 @@ module Girl
               puts "read room #{e.class} #{Time.new}"
               reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title)
               break
+            rescue Errno::ETIMEDOUT => e
+              puts "read room #{e.class} #{Time.new}"
+              if RUBY_PLATFORM.include?('linux') && renet == 0
+                # upper gateway panic may cause clients loosing networking and sockets getting ETIMEDOUT, try a restart here
+                renet += 1
+                puts "systemctl restart networking"
+                system 'systemctl restart networking;'
+                reconn = reconnect_roomd(reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title)
+                break
+              end
+
+              raise e
             end
 
             data.split(';').map{|s| s.to_i}.each do |mirrd_port|
