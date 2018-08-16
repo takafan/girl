@@ -3,7 +3,7 @@ require 'socket'
 module Girl
   class Mirrord
 
-    def initialize(roomd_port = 6060, appd_host = '127.0.0.1', tmp_dir = '/tmp/mirrord')
+    def initialize(roomd_port = 6060, appd_host = '127.0.0.1', tmp_dir = '/tmp/mirrord', room_timeout = 3600)
       roomd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
       roomd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1) # avoid EADDRINUSE after a restart
       roomd.setsockopt(Socket::SOL_TCP, Socket::TCP_NODELAY, 1) if RUBY_PLATFORM.include?('linux')
@@ -21,6 +21,7 @@ module Girl
       close_after_writes = {} # sock => exception
       pending_apps = {} # app11 => appd1
       appd_infos = {} # appd1 => { room: room1, mirrd: mirrd1, pending_apps: { app11: '' }, linked_apps: { app12: mirr12 } }
+      timestamps = {} # room => room.last_mirr_read.timestamp
 
       loop do
         readable_socks, writable_socks = IO.select(reads.keys, writes.keys)
@@ -28,6 +29,16 @@ module Girl
         readable_socks.each do |sock|
           case reads[sock]
           when :roomd
+            now = Time.new
+
+            # clients' eof may dropped by its upper gateway.
+            # so check timeouted rooms on server side too. close them before accept a new one.
+            timestamps.select{|_room, timestamp| now - timestamp > room_timeout }.each do |_room, timestamp|
+              puts "d> close timeouted room"
+              deal_io_exception(_room, reads, buffs, writes, twins, reads[_room], close_after_writes, EOFError.new, readable_socks, writable_socks, pending_apps, appd_infos)
+              timestamps.delete(_room)
+            end
+
             begin
               room, addr = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR => e
@@ -37,6 +48,7 @@ module Girl
 
             reads[room] = :room
             buffs[room] = ''
+            timestamps[room] = now
 
             appd = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
             appd.setsockopt(Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1)
@@ -116,6 +128,8 @@ module Girl
               next
             end
 
+            timestamps[sock] = Time.new
+
             _, appd_info = appd_infos.find{|_appd, _info| _info[:room] == sock }
             if appd_info
               begin
@@ -163,6 +177,10 @@ module Girl
             app = twins[sock]
             buffs[app] << data
             writes[app] = :app
+
+            appd = pending_apps[app]
+            appd_info = appd_infos[appd]
+            timestamps[appd_info[:room]] = Time.new
           end
         end
 
