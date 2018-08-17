@@ -34,7 +34,6 @@ module Girl
             # clients' eof may dropped by its upper gateway.
             # so check timeouted rooms on server side too. close them before accept a new one.
             timestamps.select{|_room, timestamp| now - timestamp > room_timeout }.each do |_room, timestamp|
-              puts "d> close timeouted room"
               deal_io_exception(_room, reads, buffs, writes, twins, reads[_room], close_after_writes, EOFError.new, readable_socks, writable_socks, pending_apps, appd_infos)
               timestamps.delete(_room)
             end
@@ -139,7 +138,15 @@ module Girl
 
               tmp_path = "#{appd_info[:tmp_path].split('-').first}-#{data}"
               Dir.mkdir(tmp_dir) unless Dir.exist?(tmp_dir)
-              File.open(tmp_path, 'w')
+
+              begin
+                File.open(tmp_path, 'w')
+              rescue Errno::ENOENT => e
+                puts "open tmp path #{e.class}"
+                deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos)
+                next
+              end
+
               appd_info[:tmp_path] = tmp_path
             end
           when :app
