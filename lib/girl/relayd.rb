@@ -78,6 +78,10 @@ module Girl
                 deal_io_exception(dest, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks)
                 next
               end
+
+              if data.empty?
+                next
+              end
             end
 
             buffs[dest] << data
