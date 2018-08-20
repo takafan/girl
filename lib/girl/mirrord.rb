@@ -141,7 +141,7 @@ module Girl
 
               begin
                 File.open(tmp_path, 'w')
-              rescue Errno::ENOENT => e
+              rescue Errno::ENOENT, ArgumentError => e
                 puts "open tmp path #{e.class}"
                 deal_io_exception(sock, reads, buffs, writes, twins, reads[sock], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos)
                 next
