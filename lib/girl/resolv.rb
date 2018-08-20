@@ -1,3 +1,13 @@
+##
+# usage
+# =====
+#
+# Girl::Resolvd.new(7070) # server
+#
+# Girl::Resolv.new(1818, [ '114.114.114.114' ], 'your.server.ip', 7070, [ 'google.com' ]) # home
+#
+# dig google.com @127.0.0.1 -p1818
+#
 require 'socket'
 
 module Girl
