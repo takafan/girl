@@ -23,7 +23,7 @@ export default {
     },
 
     load: function () {
-      axios.post( settings.host + '/api/load' ).then( res => {
+      axios.post( settings.api_host + '/api/load' ).then( res => {
         let data = res.data
         let enableds = {}
         let colour_actives = {}
@@ -68,7 +68,7 @@ export default {
 
     save_text: function( file ) {
       this.loading[ 'save@' + file ] = true
-      axios.post( settings.host + '/api/save_text', { file: file, text: this.data.texts[ file ] } ).then( res => {
+      axios.post( settings.api_host + '/api/save_text', { file: file, text: this.data.texts[ file ] } ).then( res => {
         this.loading[ 'save@' + file ] = false
         let data = res.data
         if ( data.success ) {
@@ -93,7 +93,7 @@ export default {
 
     show_hostapd_service: function() {
       this.poppings[ 'service@hostapd' ] = true
-      axios.post( settings.host + '/api/dump_wlan0_station' ).then( res => {
+      axios.post( settings.api_host + '/api/dump_wlan0_station' ).then( res => {
         let data = res.data
         if ( data.success ) {
           this.connections_info = data.info.replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;').replace(/\n/g, '<br />')
@@ -133,7 +133,7 @@ export default {
     systemctl: function( command, service ) {
       this.loadings[ command + '@' + service ] = true
 
-      axios.post( settings.host + '/api/systemctl', { command: command, service: service } ).then( res => {
+      axios.post( settings.api_host + '/api/systemctl', { command: command, service: service } ).then( res => {
         let data = res.data
 
         this.loading[ command + '@' + service ] = false

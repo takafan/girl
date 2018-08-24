@@ -1,9 +1,9 @@
 // nginx conf add line: proxy_set_header Host $host;
 // HOST=192.168.1.59 yarn serve
-let host = process.env.HOST || ''
+let api_host = process.env.API_HOST || ''
 
-console.log('host: ' + host)
+console.log('api host: ' + api_host)
 
 export default {
-  host: host
+  api_host: api_host
 }
