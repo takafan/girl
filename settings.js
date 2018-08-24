@@ -1,11 +1,9 @@
-let host = 'http://192.168.1.59'
-
-if (process.env.NODE_ENV === 'production') {
-  host = '' // nginx conf add line: proxy_set_header Host $host;
-}
+// nginx conf add line: proxy_set_header Host $host;
+// HOST=192.168.1.59 yarn serve
+let host = process.env.HOST || ''
 
 console.log('host: ' + host)
 
-module.exports = {
+export default {
   host: host
 }

@@ -5,270 +5,300 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22" id="header">
         <span class="title">最终路由器彼女 ~</span>
+        <span>{{ data.im }}</span>
         <img id="bear" src="./assets/bear.jpg" />
         <div v-if="data.is_locked"><Icon type="locked"></Icon></div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">redir</div>
+        <div class="title bold">妹子网关</div>
         <div class="interval">
-          <span class="output" v-html="data.redir_active" v-on:click="show_redir_service"></span>
+          <span class="output" v-html="colour_actives.redir" v-on:click="show_redir_service"></span>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.redir_service" title="redir服务">
-      <p slot="footer"></p>
-      <div class="bottom-interval">
-        妹子加速服务
-      </div>
-      <div class="row" v-html="data.redir_active"></div>
-      <div v-html="expire_info" v-if="expire_info"></div>
-      <div class="right">
-        <Button @click="systemctl('stop', 'redir', 'redir_service')" :loading="loading.stop_redir" v-if="data.redir_running" :disabled="data.is_locked">停止</Button>
-        <Button @click="systemctl('start', 'redir', 'redir_service')" :loading="loading.start_redir" v-if="!data.redir_running" :disabled="data.is_locked">启动</Button>
-        <Button @click="systemctl('restart', 'redir', 'redir_service')" :loading="loading.restart_redir" v-if="data.redir_running" :disabled="data.is_locked">重启</Button>
-      </div>
-    </Modal>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">dnsmasq</div>
+        <div class="title bold">妹子dns</div>
         <div class="interval">
-          <span class="output" v-html="data.dnsmasq_active" v-on:click="modals.dnsmasq_service = true"></span>
+          <span class="output" v-html="colour_actives.resolv" v-on:click="poppings[ 'service@resolv' ] = true"></span>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.dnsmasq_service" title="dnsmasq服务">
-      <p slot="footer"></p>
-      <div class="row" v-html="data.dnsmasq_active"></div>
-      <div class="right">
-        <Button @click="systemctl('stop', 'dnsmasq', 'dnsmasq_service')" :loading="loading.stop_dnsmasq" v-if="data.dnsmasq_running" :disabled="data.is_locked">停止</Button>
-        <Button @click="systemctl('start', 'dnsmasq', 'dnsmasq_service')" :loading="loading.start_dnsmasq" v-if="!data.dnsmasq_running" :disabled="data.is_locked">启动</Button>
-        <Button @click="systemctl('restart', 'dnsmasq', 'dnsmasq_service')" :loading="loading.restart_dnsmasq" v-if="data.dnsmasq_running" :disabled="data.is_locked">重启</Button>
-      </div>
-    </Modal>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">networking</div>
+        <div class="title bold">sshd映射</div>
         <div class="interval">
-          <span class="output" v-html="data.networking_active" v-on:click="modals.networking_service = true"></span>
+          <span class="output" v-html="colour_actives.mirror_sshd" v-on:click="poppings[ 'service@mirror_sshd' ] = true"></span>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">hostapd</div>
+        <div class="title bold">网卡</div>
         <div class="interval">
-          <span class="output" v-html="data.hostapd_active" v-on:click="show_hostapd_service"></span>
+          <span class="output" v-html="colour_actives.networking" v-on:click="poppings[ 'service@networking' ] = true"></span>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.networking_service" title="networking服务">
-      <p slot="footer"></p>
-      <div class="row" v-html="data.networking_active"></div>
-      <div class="right">
-        <Button @click="systemctl('restart', 'networking', 'networking_service')" :loading="loading.restart_networking" :disabled="data.is_locked">重启</Button>
-      </div>
-    </Modal>
-
-    <Modal v-model="modals.hostapd_service" title="hostapd服务" :styles="{ top: '20px' }">
-      <p slot="footer"></p>
-      <div class="row" v-html="data.hostapd_active"></div>
-      <div class="output-area mh400 bottom-interval"
-           v-html="connections_info" v-if="connections_info">
-      </div>
-      <div class="right">
-        <Checkbox v-model="data.hostapd_enabled" @on-change="check_hostapd" :disabled="data.is_locked">开机自动启动</Checkbox>
-        <Button @click="systemctl('stop', 'hostapd', 'hostapd_service')" :loading="loading.stop_hostapd" v-if="data.hostapd_running" :disabled="data.is_locked">停止</Button>
-        <Button @click="systemctl('start', 'hostapd', 'hostapd_service')" :loading="loading.start_hostapd" v-if="!data.hostapd_running" :disabled="data.is_locked">启动</Button>
-        <Button @click="systemctl('restart', 'hostapd', 'hostapd_service')" :loading="loading.restart_hostapd" v-if="data.hostapd_running" :disabled="data.is_locked">重启</Button>
-      </div>
-    </Modal>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">远程地址</div>
+        <div class="title bold">热点</div>
+        <div class="interval">
+          <span class="output" v-html="colour_actives.hostapd" v-on:click="show_hostapd_service"></span>
+        </div>
+      </Col>
+      <Col span="1">&nbsp;</Col>
+    </Row>
+    <Row class="row">
+      <Col span="1">&nbsp;</Col>
+      <Col span="22">
+        <div class="title bold">网关远端地址</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.relay_text ? data.relay_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.relay_text = true">
+            v-html="data.texts[ 'girl.relayd' ] ? data.texts[ 'girl.relayd' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@redir' ] = true">
           </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.relay_text" title="编辑远程地址">
-      <p slot="footer"></p>
-      <Input type="textarea" :rows="10" v-model="data.relay_text" autofocus></Input>
-      <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.relay_text" class="interval">{{ error_on_save.relay_text }}</Alert>
-        <Button @click="save_text('relay_text')" :loading="loading.save_relay_text" :disabled="data.is_locked">保存</Button>
-      </div>
-    </Modal>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">远程resolv</div>
+        <div class="title bold">dns远端地址</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.resolv_text ? data.resolv_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.resolv_text = true">
+            v-html="data.texts[ 'girl.resolvd' ] ? data.texts[ 'girl.resolvd' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@girl.resolvd' ] = true">
           </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.resolv_text" title="编辑远程地址">
-      <p slot="footer"></p>
-      <Input type="textarea" :rows="10" v-model="data.resolv_text" autofocus></Input>
-      <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.resolv_text" class="interval">{{ error_on_save.resolv_text }}</Alert>
-        <Button @click="save_text('resolv_text')" :loading="loading.save_resolv_text" :disabled="data.is_locked">保存</Button>
-      </div>
-    </Modal>
-
+    <Row class="row">
+      <Col span="1">&nbsp;</Col>
+      <Col span="22">
+        <div class="title bold">dns就近地址</div>
+        <div class="interval">
+          <div class="output output-area mh200 mw512"
+            v-html="data.texts[ 'nameservers.txt' ] ? data.texts[ 'nameservers.txt' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@nameservers.txt' ] = true">
+          </div>
+        </div>
+      </Col>
+      <Col span="1">&nbsp;</Col>
+    </Row>
+    <Row class="row">
+      <Col span="1">&nbsp;</Col>
+      <Col span="22">
+        <div class="title bold">sshd映射远端地址</div>
+        <div class="interval">
+          <div class="output output-area mh200 mw512"
+            v-html="data.texts[ 'girl.mirrord' ] ? data.texts[ 'girl.mirrord' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@girl.mirrord' ] = true">
+          </div>
+        </div>
+      </Col>
+      <Col span="1">&nbsp;</Col>
+    </Row>
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">自定义</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.custom_text ? data.custom_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.custom_text = true"
-            :loading="loading.save_custom_text">
+            v-html="data.texts[ 'girl.custom.txt' ] ? data.texts[ 'girl.custom.txt' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@girl.custom.txt' ] = true">
           </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.custom_text" title="编辑自定义" :styles="{ top: '20px' }">
-      <p slot="footer"></p>
-      <div class="bottom-interval">
-        填写域名，该域名dns查询走妹子。例如：google.com<br />
-        一行一个。<br />
-        填写ip，该ip走妹子。例如：69.63.32.36<br />
-        通常情况不需要填写ip，妹子会自动识别国外ip绕道。<br />
-        前缀 “!” 表示忽略，不走妹子。例如：!69.63.32.36<br />
-        “#” 接注释。例如：!69.63.32.36 # 忽略tasvideos
-      </div>
-      <Input type="textarea" :rows="20" v-model="data.custom_text" autofocus></Input>
-      <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.custom_text" class="interval">{{ error_on_save.custom_text }}</Alert>
-        <Button @click="save_text('custom_text')" :loading="loading.save_custom_text" :disabled="data.is_locked">保存</Button>
-      </div>
-    </Modal>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
-        <div class="title bold">默认dns</div>
+        <div class="title bold">国内ip</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.dns_text ? data.dns_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.dns_text = true"></div>
+            v-html="data.texts[ 'chnroute.txt' ] ? data.texts[ 'chnroute.txt' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@chnroute.txt' ] = true">
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.dns_text" title="编辑默认dns">
-      <p slot="footer"></p>
-      <div class="bottom-interval">
-        设置默认dns。一行一个。例如： nameserver 114.114.114.114<br />
-        填写最近最快的dns即可
-      </div>
-      <Input type="textarea" :rows="10" v-model="data.dns_text" autofocus></Input>
-      <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.dns_text" class="interval">{{ error_on_save.dns_text }}</Alert>
-        <Button @click="save_text('dns_text')" :loading="loading.save_dns_text" :disabled="data.is_locked">保存</Button>
-      </div>
-    </Modal>
-
-    <Row class="row">
-      <Col span="1">&nbsp;</Col>
-      <Col span="22">
-        <div class="title bold">网络</div>
-        <div class="interval">
-          <div class="output output-area mh200 mw512"
-            v-html="data.br0_text ? data.br0_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.br0_text = true"></div>
-        </div>
-      </Col>
-      <Col span="1">&nbsp;</Col>
-    </Row>
-
-    <Modal v-model="modals.br0_text" title="编辑网络">
-      <p slot="footer"></p>
-      <div class="bottom-interval">
-        设置妹子的内网ip，更改address行。<br />
-        若要指定物理地址，添加行： hwaddress ether a1:b2:c3:d4:e5:f6
-      </div>
-      <Input type="textarea" :rows="10" v-model="data.br0_text" autofocus></Input>
-      <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.br0_text" class="interval">{{ error_on_save.br0_text }}</Alert>
-        <Button @click="save_text('br0_text')" :loading="loading.save_br0_text" :disabled="data.is_locked">保存</Button>
-      </div>
-    </Modal>
-
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">热点配置</div>
         <div class="interval">
           <div class="output output-area mh200 mw512"
-            v-html="data.hostapd_text ? data.hostapd_text.replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="modals.hostapd_text = true"></div>
+            v-html="data.texts[ 'hostapd.conf' ] ? data.texts[ 'hostapd.conf' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@hostapd.conf' ] = true">
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="modals.hostapd_text" title="编辑热点配置" :styles="{ top: '20px' }">
-      <p slot="footer"></p>
-      <div class="bottom-interval">
-        设置wifi名称，更改ssid行。例如： ssid=girl<br />
-        设置信道，更改channel行。例如：channel=11<br />
-        设置wifi密码，更改wpa_passphrase行。例如：wpa_passphrase=lastcomm<br />
-        设置是否隐藏，更改ignore_broadcast_ssid行。取值：0显示，1隐藏。例如：ignore_broadcast_ssid=1<br />
-        设置5GHz wifi，更改hw_mode行：hw_mode=a，更改channel行：channel=36
-      </div>
-      <Input type="textarea" :rows="20" v-model="data.hostapd_text" autofocus></Input>
-      <div class="right top-interval">
-        <Alert type="error" v-if="error_on_save.hostapd_text" class="interval">{{ error_on_save.hostapd_text }}</Alert>
-        <Button @click="save_text('hostapd_text')" :loading="loading.save_hostapd_text" :disabled="data.is_locked">保存</Button>
-      </div>
-    </Modal>
-
+    <Row class="row">
+      <Col span="1">&nbsp;</Col>
+      <Col span="22">
+        <div class="title bold">网卡配置</div>
+        <div class="interval">
+          <div class="output output-area mh200 mw512"
+            v-html="data.texts[ 'interfaces.d/br0.cfg' ] ? data.texts[ 'interfaces.d/br0.cfg' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
+            v-on:click="poppings[ 'text@interfaces.d/br0.cfg' ] = true">
+          </div>
+        </div>
+      </Col>
+      <Col span="1">&nbsp;</Col>
+    </Row>
     <Row>
       <Col span="1">&nbsp;</Col>
       <Col span="22" id="footer">
         <div class="right">{{ data.measure_temp }}</div>
         <img id="shadow" src="./assets/shadow.jpg" />
-        <div v-html="data.girla_active"></div>
+        <div v-html="colour_actives.girla"></div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
+
+    <Modal v-model="poppings[ 'service@redir' ]" title="妹子网关">
+      <div class="row" v-html="colour_actives.redir"></div>
+      <div v-html="expire_info" v-if="expire_info"></div>
+      <p slot="footer" class="right">
+        <Button @click="systemctl( 'stop', 'redir' )" :loading="loadings[ 'stop@redir' ]" v-if="runnings.redir" :disabled="data.is_locked">停止</Button>
+        <Button @click="systemctl( 'start', 'redir' )" :loading="loadings[ 'start@redir' ]" v-if="!runnings.redir" :disabled="data.is_locked">启动</Button>
+        <Button @click="systemctl( 'restart', 'redir' )" :loading="loadings[ 'restart@redir' ]" v-if="runnings.redir" :disabled="data.is_locked">重启</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'service@resolv' ]" title="妹子dns">
+      <div class="row" v-html="colour_actives.resolv"></div>
+      <p slot="footer">
+        <Button @click="systemctl( 'stop', 'resolv' )" :loading="loadings[ 'stop@resolv' ]" v-if="runnings.resolv" :disabled="data.is_locked">停止</Button>
+        <Button @click="systemctl( 'start', 'resolv' )" :loading="loadings[ 'start@resolv' ]" v-if="!runnings.resolv" :disabled="data.is_locked">启动</Button>
+        <Button @click="systemctl( 'restart', 'resolv' )" :loading="loadings[ 'restart@resolv' ]" v-if="runnings.resolv" :disabled="data.is_locked">重启</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'service@mirror_sshd' ]" title="sshd映射">
+      <div class="row" v-html="colour_actives.mirror_sshd"></div>
+      <p slot="footer">
+        <Button @click="systemctl( 'stop', 'mirror_sshd' )" :loading="loadings[ 'stop@mirror_sshd' ]" v-if="runnings.mirror_sshd" :disabled="data.is_locked">停止</Button>
+        <Button @click="systemctl( 'start', 'mirror_sshd' )" :loading="loadings[ 'start@mirror_sshd' ]" v-if="!runnings.mirror_sshd" :disabled="data.is_locked">启动</Button>
+        <Button @click="systemctl( 'restart', 'mirror_sshd' )" :loading="loadings[ 'restart@mirror_sshd' ]" v-if="runnings.mirror_sshd" :disabled="data.is_locked">重启</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'service@networking' ]" title="网卡">
+      <div class="row" v-html="colour_actives.networking"></div>
+      <p slot="footer">
+        <Button @click="systemctl( 'restart', 'networking' )" :loading="loadings[ 'restart@networking' ]" :disabled="data.is_locked">重启</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'service@hostapd' ]" title="热点">
+      <div class="row" v-html="colour_actives.hostapd"></div>
+      <div class="output-area bottom-interval" v-html="connections_info" v-if="connections_info"></div>
+      <p slot="footer">
+        <Checkbox v-model="enableds.hostapd" @on-change="check_hostapd" :disabled="data.is_locked">开机自动启动</Checkbox>
+        <Button @click="systemctl( 'stop', 'hostapd' )" :loading="loadings[ 'stop@hostapd' ]" v-if="runnings.hostapd" :disabled="data.is_locked">停止</Button>
+        <Button @click="systemctl( 'start', 'hostapd' )" :loading="loadings[ 'start@hostapd' ]" v-if="!runnings.hostapd" :disabled="data.is_locked">启动</Button>
+        <Button @click="systemctl( 'restart', 'hostapd' )" :loading="loadings[ 'restart@hostapd' ]" v-if="runnings.hostapd" :disabled="data.is_locked">重启</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'text@girl.relayd' ]" title="编辑：网关远端地址">
+      <Input type="textarea" :rows="10" v-model="data.texts[ 'girl.relayd' ]" autofocus></Input>
+      <div class="right top-interval">
+        <Alert type="error" v-if="error_on_saves[ 'girl.relayd' ]" class="interval">{{ error_on_saves[ 'girl.relayd' ] }}</Alert>
+      </div>
+      <p slot="footer">
+        <Button @click="save_text( 'girl.relayd' )" :loading="loadings[ 'save@girl.relayd' ]" :disabled="data.is_locked">保存</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'text@girl.resolvd' ]" title="编辑：dns远端地址">
+      <Input type="textarea" :rows="10" v-model="data.texts[ 'girl.resolvd' ]" autofocus></Input>
+      <div class="right top-interval">
+        <Alert type="error" v-if="error_on_saves[ 'girl.resolvd' ]" class="interval">{{ error_on_saves[ 'girl.resolvd' ] }}</Alert>
+      </div>
+      <p slot="footer">
+        <Button @click="save_text( 'girl.resolvd' )" :loading="loadings[ 'save@girl.resolvd' ]" :disabled="data.is_locked">保存</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'text@nameservers.txt' ]" title="编辑：dns就近地址">
+      <Input type="textarea" :rows="10" v-model="data.texts[ 'nameservers.txt' ]" autofocus></Input>
+      <div class="right top-interval">
+        <Alert type="error" v-if="error_on_saves[ 'nameservers.txt' ]" class="interval">{{ error_on_saves[ 'nameservers.txt' ] }}</Alert>
+      </div>
+      <p slot="footer">
+        <Button @click="save_text( 'nameservers.txt' )" :loading="loadings[ 'save@nameservers.txt' ]" :disabled="data.is_locked">保存</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'text@girl.custom.txt' ]" title="编辑：自定义" :styles="{ top: '20px' }">
+      <div class="bottom-interval">
+        填写域名，该域名dns查询走妹子。例如：google.com<br />
+        一行一个。<br />
+        填写ip，该ip走妹子。例如：69.63.32.36<br />
+        通常情况不需要填写ip，非国内ip自动走妹子。<br />
+        前缀 “!” 表示忽略，不走妹子。例如：!69.63.32.36<br />
+        “#” 接注释。例如：!69.63.32.36 # 忽略tasvideos
+      </div>
+      <Input type="textarea" :rows="20" v-model="data.texts[ 'girl.custom.txt' ]" autofocus></Input>
+      <div class="right top-interval">
+        <Alert type="error" v-if="error_on_saves[ 'girl.custom.txt' ]" class="interval">{{ error_on_saves[ 'girl.custom.txt' ] }}</Alert>
+      </div>
+      <p slot="footer">
+        <Button @click="save_text( 'girl.custom.txt' )" :loading="loadings[ 'save@girl.custom.txt' ]" :disabled="data.is_locked">保存</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'text@interfaces.d/eth0.cfg' ]" title="配置网卡">
+      <div class="bottom-interval">
+        设置妹子的内网ip，更改address行。<br />
+        若要指定物理地址，添加行： hwaddress ether a1:b2:c3:d4:e5:f6
+      </div>
+      <Input type="textarea" :rows="10" v-model="data.texts[ 'interfaces.d/eth0.cfg' ]" autofocus></Input>
+      <div class="right top-interval">
+        <Alert type="error" v-if="error_on_saves[ 'interfaces.d/eth0.cfg' ]" class="interval">{{ error_on_saves[ 'interfaces.d/eth0.cfg' ] }}</Alert>
+      </div>
+      <p slot="footer">
+        <Button @click="save_text('br0_text')" :loading="loadings[ 'save@interfaces.d/eth0.cfg' ]" :disabled="data.is_locked">保存</Button>
+      </p>
+    </Modal>
+
+    <Modal v-model="poppings[ 'text@hostapd.conf' ]" title="配置热点" :styles="{ top: '20px' }">
+      <div class="bottom-interval">
+        设置wifi名称，更改ssid行。例如：ssid=妹子<br />
+        设置信道，更改channel行。例如：channel=11<br />
+        设置wifi密码，更改wpa_passphrase行。例如：wpa_passphrase=lastcomm<br />
+        设置是否隐藏，更改ignore_broadcast_ssid行。取值：0显示，1隐藏。例如：ignore_broadcast_ssid=1<br />
+        设置5GHz wifi，更改hw_mode行：hw_mode=a，更改channel行：channel=36
+      </div>
+      <Input type="textarea" :rows="20" v-model="data.texts[ 'hostapd.conf' ]" autofocus></Input>
+      <div class="right top-interval">
+        <Alert type="error" v-if="error_on_saves[ 'hostapd.conf' ]" class="interval">{{ error_on_saves[ 'hostapd.conf' ] }}</Alert>
+      </div>
+      <p slot="footer">
+        <Button @click="save_text( 'hostapd.conf' )" :loading="loadings[ 'save@hostapd.conf' ]" :disabled="data.is_locked">保存</Button>
+      </p>
+    </Modal>
 
     <Modal v-model="modals.exception" :title="exception.title" width="60" :styles="{ top: '20px', marginBottom: '20px' }">
       <p slot="footer">

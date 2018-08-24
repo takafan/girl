@@ -7,6 +7,5 @@ import './assets/app.css'
 Vue.use(iview)
 
 new Vue({
-  el: '#app',
   render: h => h(App)
-})
+}).$mount('#app')
