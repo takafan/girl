@@ -1,5 +1,4 @@
 import axios from 'axios'
-import settings from '../settings'
 
 export default {
   name: 'app',
@@ -23,7 +22,7 @@ export default {
     },
 
     load: function () {
-      axios.post( settings.api_host + '/api/load' ).then( res => {
+      axios.post( process.env.VUE_APP_HOST + '/api/load' ).then( res => {
         let data = res.data
         let enableds = {}
         let colour_actives = {}
@@ -54,12 +53,15 @@ export default {
           error_on_saves[ pair[0] ] = ''
         })
 
-        this.data = data
         this.colour_actives = colour_actives
         this.runnings = runnings
         this.enableds = enableds
         this.poppings = poppings
         this.loadings = loadings
+        this.texts = data.texts
+        this.im = data.im
+        this.is_locked = data.is_locked
+        this.measure_temp = data.measure_temp
         this.error_on_saves = error_on_saves
       }).catch( err => {
         this.$Modal.error({ content: err.message })
@@ -68,7 +70,7 @@ export default {
 
     save_text: function( file ) {
       this.loading[ 'save@' + file ] = true
-      axios.post( settings.api_host + '/api/save_text', { file: file, text: this.data.texts[ file ] } ).then( res => {
+      axios.post( process.env.VUE_APP_HOST + '/api/save_text', { file: file, text: this.data.texts[ file ] } ).then( res => {
         this.loading[ 'save@' + file ] = false
         let data = res.data
         if ( data.success ) {
@@ -93,7 +95,7 @@ export default {
 
     show_hostapd_service: function() {
       this.poppings[ 'service@hostapd' ] = true
-      axios.post( settings.api_host + '/api/dump_wlan0_station' ).then( res => {
+      axios.post( process.env.VUE_APP_HOST + '/api/dump_wlan0_station' ).then( res => {
         let data = res.data
         if ( data.success ) {
           this.connections_info = data.info.replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;').replace(/\n/g, '<br />')
@@ -133,7 +135,7 @@ export default {
     systemctl: function( command, service ) {
       this.loadings[ command + '@' + service ] = true
 
-      axios.post( settings.api_host + '/api/systemctl', { command: command, service: service } ).then( res => {
+      axios.post( process.env.VUE_APP_HOST + '/api/systemctl', { command: command, service: service } ).then( res => {
         let data = res.data
 
         this.loading[ command + '@' + service ] = false
@@ -172,9 +174,13 @@ export default {
         title: ''
       },
       expire_info: '',
+      im: '',
+      is_locked: false,
       loadings: {},
+      measure_temp: null,
       poppings: {},
       runnings: {},
+      texts: {},
       translates: {
         disable: '关闭自动启动',
         enable: '打开自动启动',
