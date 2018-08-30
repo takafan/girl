@@ -4,10 +4,8 @@
     <Row>
       <Col span="1">&nbsp;</Col>
       <Col span="22" id="header">
-        <span class="title">最终路由器彼女 ~</span>
-        <span>{{ im }}</span>
         <img id="bear" src="./assets/bear.jpg" />
-        <div v-if="is_locked"><Icon type="locked"></Icon></div>
+        <div v-if="texts['girl.im']">{{ texts['girl.im'].trim() }}<span v-if="is_locked">&nbsp;<Icon type="md-lock" /></span></div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
@@ -78,7 +76,7 @@
         <div class="interval">
           <div class="output output-area mh200 mw512"
             v-html="texts[ 'girl.relayd' ] ? texts[ 'girl.relayd' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-            v-on:click="poppings[ 'text@redir' ] = true">
+            v-on:click="poppings[ 'text@girl.relayd' ] = true">
           </div>
         </div>
       </Col>
@@ -220,6 +218,7 @@
     <Modal v-model="poppings[ 'service@mirror_sshd' ]" title="sshd映射">
       <div class="row" v-html="colour_actives.mirror_sshd"></div>
       <p slot="footer">
+        <Checkbox v-model="enableds.mirror_sshd" @on-change="check_mirror_sshd" :disabled="is_locked">开机自动启动</Checkbox>
         <Button @click="systemctl( 'stop', 'mirror_sshd' )" :loading="loadings[ 'stop@mirror_sshd' ]" v-if="runnings.mirror_sshd" :disabled="is_locked">停止</Button>
         <Button @click="systemctl( 'start', 'mirror_sshd' )" :loading="loadings[ 'start@mirror_sshd' ]" v-if="!runnings.mirror_sshd" :disabled="is_locked">启动</Button>
         <Button @click="systemctl( 'restart', 'mirror_sshd' )" :loading="loadings[ 'restart@mirror_sshd' ]" v-if="runnings.mirror_sshd" :disabled="is_locked">重启</Button>
@@ -336,35 +335,38 @@
       </p>
     </Modal>
 
-    <Modal v-model="poppings.exception" :title="exception.title" width="60" :styles="{ top: '20px', marginBottom: '20px' }">
+    <Modal v-model="poppings.exception" width="60" :styles="{ top: '20px', marginBottom: '20px' }">
+      <p slot="header" style="color:#f60;text-align:center">
+        <Icon type="ios-information-circle"></Icon>
+        <span>{{ exception.title }}</span>
+      </p>
+      <div v-html="exception.message.replace(new RegExp(/\n/, 'g'), '<br />')"></div>
       <p slot="footer">
         <Button @click="poppings.exception = false">关闭</Button>
       </p>
-
-      <div v-html="exception.message.replace(new RegExp(/\n/, 'g'), '<br />')"></div>
     </Modal>
 
-    <Modal v-model="poppings['saved@redir']" title="编辑网关远端地址成功">
+    <Modal v-model="poppings['saved@girl.relayd']" title="编辑网关远端地址成功">
       <p slot="footer"></p>
       <div> 配置生效需要重启妹子网关，确认重启服务吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'redir')" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启妹子网关</Button>
+        <Button @click="systemctl('restart', 'redir', 'saved@girl.relayd')" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启妹子网关</Button>
       </div>
     </Modal>
 
-    <Modal v-model="poppings['saved@resolv']" title="编辑dns远端地址成功">
+    <Modal v-model="poppings['saved@girl.resolvd']" title="编辑dns远端地址成功">
       <p slot="footer"></p>
       <div> 配置生效需要重启妹子dns，确认重启服务吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'resolv')" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启妹子dns</Button>
+        <Button @click="systemctl('restart', 'resolv', 'saved@girl.resolvd')" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启妹子dns</Button>
       </div>
     </Modal>
 
-    <Modal v-model="poppings['saved@mirror_sshd']" title="编辑sshd映射远端地址成功">
+    <Modal v-model="poppings['saved@girl.mirror_sshd']" title="编辑sshd映射远端地址成功">
       <p slot="footer"></p>
       <div> 配置生效需要重启sshd映射，确认重启服务吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'mirror_sshd')" :loading="loadings[ 'restart@mirror_sshd' ]" :disabled="is_locked">重启sshd映射</Button>
+        <Button @click="systemctl('restart', 'mirror_sshd', 'saved@girl.mirror_sshd')" :loading="loadings[ 'restart@mirror_sshd' ]" :disabled="is_locked">重启sshd映射</Button>
       </div>
     </Modal>
 
@@ -372,7 +374,7 @@
       <p slot="footer"></p>
       <div> 配置生效需要重启热点，确认重启服务吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'hostapd')" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启热点</Button>
+        <Button @click="systemctl('restart', 'hostapd', 'saved@hostapd.conf')" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启热点</Button>
       </div>
     </Modal>
 
@@ -380,7 +382,7 @@
       <p slot="footer"></p>
       <div> 配置生效需要重启网卡，确认重启服务吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'dhcpcd')" :loading="loadings[ 'restart@dhcpcd' ]" :disabled="is_locked">重启网卡</Button>
+        <Button @click="systemctl('restart', 'dhcpcd', 'saved@dhcpcd.conf')" :loading="loadings[ 'restart@dhcpcd' ]" :disabled="is_locked">重启网卡</Button>
       </div>
     </Modal>
 
@@ -388,7 +390,7 @@
       <p slot="footer"></p>
       <div> 配置生效需要重启dhcp租约，确认重启服务吗？ </div>
       <div class="right top-interval">
-        <Button @click="systemctl('restart', 'dnsmasq')" :loading="loadings[ 'restart@dnsmasq' ]" :disabled="is_locked">重启dhcp租约</Button>
+        <Button @click="systemctl('restart', 'dnsmasq', 'saved@dnsmasq.d/wlan0.conf')" :loading="loadings[ 'restart@dnsmasq' ]" :disabled="is_locked">重启dhcp租约</Button>
       </div>
     </Modal>
 
