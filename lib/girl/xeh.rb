@@ -1,10 +1,10 @@
 module Girl
   class Xeh
-    def swap(data)
+    def swap( data )
       data
     end
 
-    def decode(data, info)
+    def decode( data, info )
       unless data
         return {
           success: false,
@@ -12,13 +12,13 @@ module Girl
         }
       end
 
-      head = data[/.+/]
-      dst_host, dst_port_str = head.split(':')
+      head = data[ /.+/ ]
+      dst_host, dst_port_str = head.split( ':' )
 
       {
         success: true,
         data: [
-          data.sub("#{head}\n", ''),
+          data.sub( "#{ head }\n", '' ),
           dst_host,
           dst_port_str.to_i
         ]
