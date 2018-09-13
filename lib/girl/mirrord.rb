@@ -17,10 +17,10 @@ module Girl
       }
       buffs = {} # sock => ''
       writes = {} # sock => :room / :app / :mirr
-      twins = {} # app11 <=> mirr11
+      twins = {} # app <=> mirr
       close_after_writes = {} # sock => exception
-      pending_apps = {} # app11 => appd1
-      appd_infos = {} # appd1 => { room: room1, mirrd: mirrd1, pending_apps: { app11: '' }, linked_apps: { app12: mirr12 } }
+      pending_apps = {} # app => appd
+      appd_infos = {} # appd => { room: room, mirrd: mirrd, pending_apps: { app: '' }, linked_apps: { app: mirr } }
       timestamps = {} # room => room.last_mirr_read.timestamp
 
       loop do

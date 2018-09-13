@@ -24,6 +24,7 @@ module Girl
       roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       connect_roomd( roomd_sockaddr, reads, buffs, writes, room_title )
       appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
+      reconn = 0
 
       loop do
         readable_socks, writable_socks = IO.select( reads.keys, writes.keys, [], timeout )
