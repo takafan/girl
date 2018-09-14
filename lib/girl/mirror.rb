@@ -2,13 +2,13 @@
 # usage
 # =====
 #
-# Girl::Mirrord.new( 6060, '127.0.0.1' ) # @server
+# 1. Girl::Mirrord.new( 6060, '127.0.0.1' ) # @server
 #
-# Girl::Mirror.new( 'your.server.ip', 6060, '127.0.0.1', 22, '周立波' ) # @home
+# 2. Girl::Mirror.new( '{ your.server.ip }', 6060, '127.0.0.1', 22, '周立波' ) # @home
 #
-# ls -lt /tmp/mirrord # saw 45678-周立波 @server
+# 3. echo "ls -lt" | sftp -q root@{ your.server.ip }:/tmp/mirrord # saw 45678-周立波
 #
-# ssh -p45678 root@localhost
+# 4. ssh -p45678 root@localhost
 #
 require 'socket'
 

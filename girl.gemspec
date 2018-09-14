@@ -20,6 +20,9 @@ lib/girl.rb
 lib/girl/hex.rb
 lib/girl/mirror.rb
 lib/girl/mirrord.rb
+lib/girl/p2p1.rb
+lib/girl/p2p2.rb
+lib/girl/p2pd.rb
 lib/girl/redir.rb
 lib/girl/relayd.rb
 lib/girl/resolv.rb
