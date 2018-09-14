@@ -95,7 +95,7 @@ module Girl
                   File.delete( tmp_path )
                 rescue Errno::ENOENT
                 end
-                
+
                 raise e
               else
                 rep2p += 1
@@ -116,8 +116,6 @@ module Girl
 
               raise e
             end
-
-            puts "data #{data.inspect}"
 
             app = twins[ sock ]
             buffs[ app ] << data
@@ -159,7 +157,6 @@ module Girl
             raise e
           end
 
-          puts "written #{ written }"
           buffs[ sock ] = buff[ written..-1 ]
 
           unless buffs[ sock ].empty?
