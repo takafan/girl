@@ -5,8 +5,8 @@ module Girl
       data
     end
 
-    def mix( data, dst_host, dst_port )
-      data.prepend("#{ dst_host }:#{ dst_port }\n")
+    def mix( dst_host, dst_port )
+      "#{ dst_host }:#{ dst_port }\n"
     end
   end
 end
