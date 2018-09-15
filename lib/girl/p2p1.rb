@@ -3,7 +3,7 @@ require 'socket'
 module Girl
   class P2p1
 
-    def initialize( roomd_host, roomd_port, appd_host, appd_port, room_title = nil, timeout = 3600 )
+    def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil )
       reads = {}  # sock => :room / :p1 / :app
       buffs = {} # sock => ''
       writes = {} # sock => :room / :p1 / :app

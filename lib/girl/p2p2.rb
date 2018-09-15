@@ -3,7 +3,7 @@
 #
 # 1. Girl::P2pd.new( 6262, '/tmp/p2pd' ) # @server
 #
-# 2. Girl::P2p1.new( '{ your.server.ip }', 6262, '192.168.1.70', 22, '周立波' ) # @home.pi
+# 2. Girl::P2p1.new( '{ your.server.ip }', 6262, '192.168.1.70', 22, 1800, '周立波' ) # @home.pi
 #
 # 3. echo "ls -lt" | sftp -q root@{ your.server.ip }:/tmp/p2pd # saw 6.6.6.6:12345-周立波
 #

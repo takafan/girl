@@ -4,7 +4,7 @@
 #
 # 1. Girl::Mirrord.new( 6060, '127.0.0.1' ) # @server
 #
-# 2. Girl::Mirror.new( '{ your.server.ip }', 6060, '127.0.0.1', 22, '周立波' ) # @home
+# 2. Girl::Mirror.new( '{ your.server.ip }', 6060, '127.0.0.1', 22, 1800, '周立波' ) # @home
 #
 # 3. echo "ls -lt" | sftp -q root@{ your.server.ip }:/tmp/mirrord # saw 45678-周立波
 #
@@ -15,7 +15,7 @@ require 'socket'
 module Girl
   class Mirror
 
-    def initialize( roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22, room_title = nil, timeout = 3600 )
+    def initialize( roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22, timeout = 1800, room_title = nil )
       reads = {}  # sock => :room / :mirr / :app
       buffs = {} # sock => ''
       writes = {} # sock => :room / :mirr / :app
