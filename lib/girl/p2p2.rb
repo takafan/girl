@@ -116,7 +116,7 @@ module Girl
               rescue Errno::ENOENT
               end
 
-              raise e
+              e.is_a?( EOFError ) ? exit : raise( e )
             end
 
             app = twins[ sock ]
@@ -134,7 +134,7 @@ module Girl
               rescue Errno::ENOENT
               end
 
-              raise e
+              e.is_a?( EOFError ) ? exit : raise( e )
             end
 
             p2 = twins[ sock ]
