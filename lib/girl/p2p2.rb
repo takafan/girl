@@ -83,6 +83,8 @@ module Girl
             buffs[ app ] = ''
             twins[ app ] = p2
             twins[ p2 ] = app
+            buffs[ p2 ] = '!'
+            writes[ p2 ] = :p2
           when :p2
             begin
               data = sock.read_nonblock( 4096 )
@@ -196,7 +198,6 @@ module Girl
       p2.bind( room.local_address ) # use the hole
 
       begin
-        puts 'd> p2 connect p1'
         p2.connect_nonblock( p1_sockaddr )
       rescue IO::WaitWritable
       end

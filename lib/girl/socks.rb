@@ -72,7 +72,7 @@ module Girl
               writes[ sock ] = :source
               procs[ sock ] = :request
             elsif procs[ sock ] == :request
-              
+
               # +----+-----+-------+------+----------+----------+
               # |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
               # +----+-----+-------+------+----------+----------+
@@ -101,7 +101,8 @@ module Girl
 
               relay = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
               reads[ relay ] = :relay
-              buffs[ relay ] = ''
+              buffs[ relay ] = hex.swap( hex.mix( dst_host, dst_port ) )
+              writes[ relay ] = :relay
               twins[ relay ] = sock
               twins[ sock ] = relay
 
@@ -112,10 +113,6 @@ module Girl
                 deal_io_exception( relay, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
                 next
               end
-
-              data = hex.mix( '', dst_host, dst_port )
-              buffs[ relay ] << hex.swap( data )
-              writes[ relay ] = :relay
 
               # +----+-----+-------+------+----------+----------+
               # |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |

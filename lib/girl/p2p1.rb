@@ -99,6 +99,13 @@ module Girl
                 connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, room_title )
                 break
               end
+
+              if data[ 0 ] == '!' # here comes a new app!
+                data = data[ 1..-1 ]
+                if data.empty?
+                  next
+                end
+              end
             end
 
             buffs[ app ] << data
@@ -134,7 +141,6 @@ module Girl
             break
           end
 
-          puts "written #{ written }"
           buffs[ sock ] = buff[ written..-1 ]
 
           unless buffs[ sock ].empty?
@@ -161,7 +167,6 @@ module Girl
       sock.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
-        puts 'connect roomd'
         sock.connect_nonblock( roomd_sockaddr )
       rescue IO::WaitWritable
         reads[ sock ] = :room

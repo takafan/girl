@@ -41,6 +41,33 @@ module Girl
 
             reads[ source ] = :source
             buffs[ source ] = ''
+
+            begin
+              # SO_ORIGINAL_DST https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter_ipv4.h
+              # http://man7.org/linux/man-pages/man2/getsockopt.2.html
+              dst_addr = source.getsockopt( Socket::SOL_IP, 80 )
+            rescue Exception => e
+              puts "get SO_ORIGINAL_DST #{ e.class }"
+              close_socket( source, reads, buffs, writes, twins )
+              next
+            end
+
+            dst_family, dst_port, dst_host = dst_addr.unpack( 'nnN' )
+            relay = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+            relay.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+            reads[ relay ] = :relay
+            buffs[ relay ] = hex.swap( hex.mix( dst_host, dst_port ) )
+            writes[ relay ] = :relay
+            twins[ relay ] = source
+            twins[ source ] = relay
+
+            begin
+              relay.connect_nonblock( relayd_sockaddr )
+            rescue IO::WaitWritable
+            rescue Exception => e
+              deal_io_exception( relay, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+              next
+            end
           when :source
             begin
               data = sock.read_nonblock( 4096 )
@@ -52,36 +79,6 @@ module Girl
             end
 
             relay = twins[ sock ]
-
-            unless relay
-              begin
-                # SO_ORIGINAL_DST https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter_ipv4.h
-                # http://man7.org/linux/man-pages/man2/getsockopt.2.html
-                dst_addr = sock.getsockopt( Socket::SOL_IP, 80 )
-              rescue Exception => e
-                puts "get SO_ORIGINAL_DST #{ e.class }"
-                close_socket( sock, reads, buffs, writes, twins )
-                next
-              end
-
-              dst_family, dst_port, dst_host = dst_addr.unpack( 'nnN' )
-              data = hex.mix( data, dst_host, dst_port )
-              relay = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-              relay.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-              reads[ relay ] = :relay
-              buffs[ relay ] = ''
-              twins[ relay ] = sock
-              twins[ sock ] = relay
-
-              begin
-                relay.connect_nonblock( relayd_sockaddr )
-              rescue IO::WaitWritable
-              rescue Exception => e
-                deal_io_exception( relay, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
-                next
-              end
-            end
-
             buffs[ relay ] << hex.swap( data )
             writes[ relay ] = :relay
           when :relay
