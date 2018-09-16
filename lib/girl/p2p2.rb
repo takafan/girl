@@ -3,15 +3,15 @@
 #
 # 1. Girl::P2pd.new( 6262, '/tmp/p2pd' ) # @server
 #
-# 2. Girl::P2p1.new( '{ your.server.ip }', 6262, '192.168.1.70', 22, 1800, '周立波' ) # @home.pi
+# 2. Girl::P2p1.new( '{ your.server.ip }', 6262, '127.0.0.1', 22, 1800, '周立波' ) # @home
 #
-# 3. echo "ls -lt" | sftp -q root@{ your.server.ip }:/tmp/p2pd # saw 6.6.6.6:12345-周立波
+# 3. echo "ls -lt" | sftp -q root@{ your.server.ip }:/tmp/p2pd # @company, saw 6.6.6.6:12345-周立波
 #
-# 4. Girl::P2p2.new( 'your.server.ip', 6262, '6.6.6.6:12345-周立波', '/tmp/p2p2' ) # @company.pi
+# 4. Girl::P2p2.new( 'your.server.ip', 6262, '6.6.6.6:12345-周立波', '/tmp/p2p2' )
 #
-# 5. echo "ls -lt" | sftp -q root@10.17.2.59:/tmp/p2p2 # saw 45678--6.6.6.6:12345-周立波
+# 5. ls -lt /tmp/p2p2 # saw 45678--6.6.6.6:12345-周立波
 #
-# 6. ssh -p45678 root@10.17.2.59
+# 6. ssh -p45678 libo@localhost
 #
 require 'socket'
 
@@ -31,8 +31,6 @@ module Girl
 
       room = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       room.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      room.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      room.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         room.connect_nonblock( Socket.sockaddr_in( roomd_port, roomd_host ) )
@@ -172,7 +170,6 @@ module Girl
 
             appd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
             appd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 ) # avoid EADDRINUSE after a restart
-            appd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
             appd.bind( Socket.pack_sockaddr_in( 0, '0.0.0.0' ) )
             appd.listen( 5 )
             puts "appd listening on #{ appd.local_address.ip_unpack.join(':') }"
@@ -193,8 +190,6 @@ module Girl
     def p2p( room, p1_sockaddr, reads, buffs )
       p2 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       p2.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      p2.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      p2.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       p2.bind( room.local_address ) # use the hole
 
       begin

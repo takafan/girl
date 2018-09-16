@@ -55,8 +55,6 @@ module Girl
 
             p1 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
             p1.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-            p1.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-            p1.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
             p1.bind( sock.local_address ) # use the hole
             reads[ p1 ] = :p1
             buffs[ p1 ] = ''
@@ -85,7 +83,6 @@ module Girl
 
             unless app
               app = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-              app.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
               reads[ app ] = :app
               buffs[ app ] = ''
               twins[ app ] = sock
@@ -163,8 +160,6 @@ module Girl
 
       sock = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      sock.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         sock.connect_nonblock( roomd_sockaddr )

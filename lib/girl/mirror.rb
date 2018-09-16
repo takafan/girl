@@ -6,9 +6,9 @@
 #
 # 2. Girl::Mirror.new( '{ your.server.ip }', 6060, '127.0.0.1', 22, 1800, '周立波' ) # @home
 #
-# 3. echo "ls -lt" | sftp -q root@{ your.server.ip }:/tmp/mirrord # saw 45678-周立波
+# 3. ls -lt /tmp/mirrord # @server, saw 45678-周立波
 #
-# 4. ssh -p45678 root@localhost
+# 4. ssh -p45678 libo@localhost
 #
 require 'socket'
 
@@ -58,10 +58,7 @@ module Girl
 
             data.split( ';' ).map{ | s | s.to_i }.each do | mirrd_port |
               mirr = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-              mirr.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-
               app = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-              app.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
               reads[ mirr ] = :mirr
               buffs[ mirr ] = ''
@@ -180,8 +177,6 @@ module Girl
     def connect_roomd( roomd_sockaddr, reads, buffs, writes, room_title )
       sock = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      sock.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       reads[ sock ] = :room
 
       begin
