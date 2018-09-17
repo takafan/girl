@@ -55,7 +55,15 @@ module Girl
 
             p1 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
             p1.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-            p1.bind( sock.local_address ) # use the hole
+
+            begin
+              p1.bind( sock.local_address ) # use the hole
+            rescue Errno::EADDRINUSE => e # SO_REUSEADDR could reuse a TIME_WAIT port, but not other
+              puts "bind #{ e.class }, flash a room"
+              connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, room_title )
+              break
+            end
+
             reads[ p1 ] = :p1
             buffs[ p1 ] = ''
 
