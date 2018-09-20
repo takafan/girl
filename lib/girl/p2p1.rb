@@ -31,7 +31,7 @@ module Girl
             rescue IO::WaitReadable => e
               puts "r #{ reads[ sock ] } #{ e.class } ?"
               next
-            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ETIMEDOUT => e
+            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
               if e.is_a?( EOFError )
                 reconn = 0
               elsif reconn > 100

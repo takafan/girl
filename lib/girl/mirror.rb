@@ -22,7 +22,7 @@ module Girl
       twins = {} # mirr <=> app
       close_after_writes = {} # sock => exception
       roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
-      connect_roomd( roomd_sockaddr, reads, buffs, writes, room_title )
+      connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
       appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
       reconn = 0
 
@@ -31,13 +31,7 @@ module Girl
 
         unless readable_socks
           puts "flash #{ Time.new }"
-          reads.keys.each{ | sock | sock.close }
-          reads.clear
-          buffs.clear
-          writes.clear
-          twins.clear
-          close_after_writes.clear
-          connect_roomd( roomd_sockaddr, reads, buffs, writes, room_title )
+          connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
           next
         end
 
@@ -50,9 +44,19 @@ module Girl
             rescue IO::WaitReadable => e
               puts "r #{ reads[ sock ] } #{ e.class } ?"
               next
-            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ETIMEDOUT => e
-              puts "read room #{ e.class } #{ Time.new }"
-              reconn = reconnect_roomd( reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title )
+            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
+              if e.is_a?( EOFError )
+                reconn = 0
+              elsif reconn > 100
+                raise e
+              else
+                reconn += 1
+              end
+
+              sleep 5
+              puts "#{ e.class }, reconn #{ reconn }"
+              connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
+
               break
             end
 
@@ -150,39 +154,22 @@ module Girl
 
     private
 
-    def reconnect_roomd( reconn, e, roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, readable_socks, writable_socks, room_title )
-      if e.is_a?( EOFError )
-        reconn = 0
-      elsif reconn > 100
-        raise e
-      else
-        reconn += 1
-      end
-
+    def connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
       reads.keys.each{ | sock | sock.close }
       reads.clear
       buffs.clear
       writes.clear
       twins.clear
       close_after_writes.clear
-      readable_socks.clear
-      writable_socks.clear
-      sleep 5
-      print "retry #{ reconn }"
-      connect_roomd( roomd_sockaddr, reads, buffs, writes, room_title )
 
-      reconn
-    end
-
-    def connect_roomd( roomd_sockaddr, reads, buffs, writes, room_title )
       sock = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      reads[ sock ] = :room
 
       begin
-        puts 'connect roomd'
         sock.connect_nonblock( roomd_sockaddr )
       rescue IO::WaitWritable
+        reads[ sock ] = :room
+
         if room_title
           buffs[ sock ] = room_title.unpack( "C*" ).map{ | c | c.chr }.join
           writes[ sock ] = :room
