@@ -363,68 +363,56 @@
     </Row>
 
     <Modal v-model="poppings.exception" width="60" :styles="{ top: '20px', marginBottom: '20px' }">
-      <p slot="header" style="color:#f60; text-align:center;">
+      <div slot="header" style="color:#f60; text-align:center;">
         <Icon type="ios-information-circle"></Icon>
         <span>{{ exception.title }}</span>
-      </p>
+      </div>
       <div v-html="exception.message.replace(new RegExp(/\n/, 'g'), '<br />')"></div>
-      <p slot="footer">
+      <div slot="footer">
         <Button @click="poppings.exception = false">关闭</Button>
-      </p>
+      </div>
     </Modal>
 
     <Modal v-model="poppings['saved@girl.relayd']" :title="'编辑' + translates[ 'girl.relayd' ] + '成功'">
       <div> 配置生效需要重启{{ translates.redir }}，确认重启服务吗？ </div>
-      <p slot="footer">
-        <div class="right top-interval">
-          <Button @click="systemctl('restart', 'redir', 'saved@girl.relayd')" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启{{ translates.redir }}</Button>
-        </div>
-      </p>
+      <div slot="footer" class="right">
+        <Button @click="systemctl('restart', 'redir', 'saved@girl.relayd')" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启{{ translates.redir }}</Button>
+      </div>
     </Modal>
 
     <Modal v-model="poppings['saved@girl.resolvd']" :title="'编辑' + translates[ 'girl.resolvd' ] + '成功'">
       <div> 配置生效需要重启{{ translates.resolv }}，确认重启服务吗？ </div>
-      <p slot="footer">
-        <div class="right top-interval">
-          <Button @click="systemctl('restart', 'resolv', 'saved@girl.resolvd')" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启{{ translates.resolv }}</Button>
-        </div>
-      </p>
+      <div slot="footer" class="right">
+        <Button @click="systemctl('restart', 'resolv', 'saved@girl.resolvd')" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启{{ translates.resolv }}</Button>
+      </div>
     </Modal>
 
     <Modal v-model="poppings['saved@girl.p2pd']" :title="'编辑' + translates[ 'girl.p2pd' ] + '成功'">
       <div> 配置生效需要重启{{ translates.p2p1_sshd }}，确认重启服务吗？ </div>
-      <p slot="footer">
-        <div class="right top-interval">
-          <Button @click="systemctl('restart', 'p2p1_sshd', 'saved@girl.p2pd')" :loading="loadings[ 'restart@p2p1_sshd' ]" :disabled="is_locked">重启{{ translates.p2p1_sshd }}</Button>
-        </div>
-      </p>
+      <div slot="footer" class="right">
+        <Button @click="systemctl('restart', 'p2p1_sshd', 'saved@girl.p2pd')" :loading="loadings[ 'restart@p2p1_sshd' ]" :disabled="is_locked">重启{{ translates.p2p1_sshd }}</Button>
+      </div>
     </Modal>
 
     <Modal v-model="poppings['saved@hostapd.conf']" :title="'编辑' + translates[ 'hostapd.conf' ] + '成功'">
       <div> 配置生效需要重启{{ translates.hostapd }}，确认重启服务吗？ </div>
-      <p slot="footer">
-        <div class="right top-interval">
-          <Button @click="systemctl('restart', 'hostapd', 'saved@hostapd.conf')" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启{{ translates.hostapd }}</Button>
-        </div>
-      </p>
+      <div slot="footer" class="right">
+        <Button @click="systemctl('restart', 'hostapd', 'saved@hostapd.conf')" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启{{ translates.hostapd }}</Button>
+      </div>
     </Modal>
 
     <Modal v-model="poppings['saved@dhcpcd.conf']" :title="'编辑' + translates[ 'dhcpcd.conf' ] + '成功'">
       <div> 配置生效需要重启{{ translates.dhcpcd }}，确认重启服务吗？ </div>
-      <p slot="footer">
-        <div class="right top-interval">
-          <Button @click="systemctl('restart', 'dhcpcd', 'saved@dhcpcd.conf')" :loading="loadings[ 'restart@dhcpcd' ]" :disabled="is_locked">重启{{ translates.dhcpcd }}</Button>
-        </div>
-      </p>
+      <div slot="footer" class="right">
+        <Button @click="systemctl('restart', 'dhcpcd', 'saved@dhcpcd.conf')" :loading="loadings[ 'restart@dhcpcd' ]" :disabled="is_locked">重启{{ translates.dhcpcd }}</Button>
+      </div>
     </Modal>
 
     <Modal v-model="poppings['saved@dnsmasq.d/wlan0.conf']" :title="'编辑' + translates[ 'dnsmasq.d/wlan0.conf' ] + '成功'">
       <div> 配置生效需要重启{{ translates.dnsmasq }}，确认重启服务吗？ </div>
-      <p slot="footer">
-        <div class="right top-interval">
-          <Button @click="systemctl('restart', 'dnsmasq', 'saved@dnsmasq.d/wlan0.conf')" :loading="loadings[ 'restart@dnsmasq' ]" :disabled="is_locked">重启{{ translates.dnsmasq }}</Button>
-        </div>
-      </p>
+      <div slot="footer" class="right">
+        <Button @click="systemctl('restart', 'dnsmasq', 'saved@dnsmasq.d/wlan0.conf')" :loading="loadings[ 'restart@dnsmasq' ]" :disabled="is_locked">重启{{ translates.dnsmasq }}</Button>
+      </div>
     </Modal>
 
   </div>
