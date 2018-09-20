@@ -1,7 +1,3 @@
-.area {
-  max-width: 512px;
-}
-
 .dead {
   color: #bbbec4;
 }
@@ -71,7 +67,7 @@
 }
 
 #bear {
-  height: 96.8px; 
+  height: 96.8px;
 }
 
 #header {

@@ -1,3 +1,3 @@
-妹子 - the last 江南style traffic relay
+妹子
 
 http://lastcomm.com/

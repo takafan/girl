@@ -4,8 +4,8 @@ import iview from 'iview'
 import 'iview/dist/styles/iview.css'
 import './assets/app.css'
 
-Vue.use(iview)
+Vue.use( iview )
 
 new Vue({
-  render: h => h(App)
-}).$mount('#app')
+  render: h => h( App )
+}).$mount( '#app' )
