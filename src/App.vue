@@ -9,6 +9,7 @@
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
+
     <Row class="row">
       <Col span="1">&nbsp;</Col>
       <Col span="22">
@@ -97,6 +98,7 @@
               <Button @click="systemctl( 'restart', 'hostapd' )" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启</Button>
             </span>
           </div>
+          <div class="top-interval">已连接的客户端：</div>
           <div class="top-interval output-area" v-html="connections_info" v-if="connections_info"></div>
         </div>
       </Col>
@@ -173,6 +175,9 @@
               <Button @click="systemctl( 'restart', 'p2p1_sshd' )" :loading="loadings[ 'restart@p2p1_sshd' ]" :disabled="is_locked">重启</Button>
             </span>
           </div>
+          <div class="top-interval">
+            允许别人ssh连你。
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -190,10 +195,19 @@
             <Button @click="save_text( 'girl.relayd' )" :loading="loadings[ 'save@girl.relayd' ]" :disabled="is_locked">保存</Button>
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'girl.relayd' ] ? texts[ 'girl.relayd' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'girl.relayd'">
+        <div v-else>
+          <div v-html="texts[ 'girl.relayd' ] ? texts[ 'girl.relayd' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'girl.relayd'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'girl.relayd'" class="mw512 right">
+            <div> 配置生效需要重启{{ translates.redir }}，确认重启服务吗？ </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'redir' )" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启{{ translates.redir }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -210,10 +224,19 @@
             <Button @click="save_text( 'girl.resolvd' )" :loading="loadings[ 'save@girl.resolvd' ]" :disabled="is_locked">保存</Button>
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'girl.resolvd' ] ? texts[ 'girl.resolvd' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'girl.resolvd'">
+        <div v-else>
+          <div v-html="texts[ 'girl.resolvd' ] ? texts[ 'girl.resolvd' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'girl.resolvd'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'girl.resolvd'" class="mw512 right">
+            <div> 配置生效需要重启{{ translates.resolv }}，确认重启服务吗？ </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'resolv' )" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启{{ translates.resolv }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -230,10 +253,19 @@
             <Button @click="save_text( 'nameservers.txt' )" :loading="loadings[ 'save@nameservers.txt' ]" :disabled="is_locked">保存</Button>
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'nameservers.txt' ] ? texts[ 'nameservers.txt' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'nameservers.txt'">
+        <div v-else>
+          <div v-html="texts[ 'nameservers.txt' ] ? texts[ 'nameservers.txt' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'nameservers.txt'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'nameservers.txt'" class="mw512 right">
+            <div> 配置生效需要重启{{ translates.resolv }}，确认重启服务吗？ </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'resolv' )" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启{{ translates.resolv }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -258,10 +290,21 @@
             “#” 接注释。例如：!69.63.32.36 # 忽略tasvideos
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'girl.custom.txt' ] ? texts[ 'girl.custom.txt' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'girl.custom.txt'">
+        <div v-else>
+          <div v-html="texts[ 'girl.custom.txt' ] ? texts[ 'girl.custom.txt' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'girl.custom.txt'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'girl.custom.txt'" class="mw512 right">
+            <div> 域名生效需要重启{{ translates.resolv }}，ip生效需要重启{{ translates.redir }}，选择要重启的服务： </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'redir' )" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启{{ translates.redir }}</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'resolv' )" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启{{ translates.resolv }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -284,10 +327,19 @@
             设置是否隐藏，更改 ignore_broadcast_ssid 行。取值：0显示，1隐藏。
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'hostapd.conf' ] ? texts[ 'hostapd.conf' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'hostapd.conf'">
+        <div v-else>
+          <div v-html="texts[ 'hostapd.conf' ] ? texts[ 'hostapd.conf' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'hostapd.conf'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'hostapd.conf'" class="mw512 right">
+            <div> 配置生效需要重启{{ translates.hostapd }}，确认重启服务吗？ </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'hostapd' )" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启{{ translates.hostapd }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -304,10 +356,19 @@
             <Button @click="save_text( 'dhcpcd.conf' )" :loading="loadings[ 'save@dhcpcd.conf' ]" :disabled="is_locked">保存</Button>
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'dhcpcd.conf' ] ? texts[ 'dhcpcd.conf' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'dhcpcd.conf'">
+        <div v-else>
+          <div v-html="texts[ 'dhcpcd.conf' ] ? texts[ 'dhcpcd.conf' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'dhcpcd.conf'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'dhcpcd.conf'" class="mw512 right">
+            <div> 配置生效需要重启{{ translates.dhcpcd }}，确认重启服务吗？ </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'dhcpcd' )" :loading="loadings[ 'restart@dhcpcd' ]" :disabled="is_locked">重启{{ translates.dhcpcd }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -324,10 +385,19 @@
             <Button @click="save_text( 'dnsmasq.d/wlan0.conf' )" :loading="loadings[ 'save@dnsmasq.d/wlan0.conf' ]" :disabled="is_locked">保存</Button>
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'dnsmasq.d/wlan0.conf' ] ? texts[ 'dnsmasq.d/wlan0.conf' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'dnsmasq.d/wlan0.conf'">
+        <div v-else>
+          <div v-html="texts[ 'dnsmasq.d/wlan0.conf' ] ? texts[ 'dnsmasq.d/wlan0.conf' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'dnsmasq.d/wlan0.conf'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'dnsmasq.d/wlan0.conf'" class="mw512 right">
+            <div> 配置生效需要重启{{ translates.dnsmasq }}，确认重启服务吗？ </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'dnsmasq' )" :loading="loadings[ 'restart@dnsmasq' ]" :disabled="is_locked">重启{{ translates.dnsmasq }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -344,14 +414,24 @@
             <Button @click="save_text( 'girl.p2pd' )" :loading="loadings[ 'save@girl.p2pd' ]" :disabled="is_locked">保存</Button>
           </div>
         </div>
-        <div v-else
-          class="output mh200 output-area interval mw512"
-          v-html="texts[ 'girl.p2pd' ] ? texts[ 'girl.p2pd' ].replace(new RegExp(/\n/, 'g'), '<br />') : ''"
-          v-on:click="editing = 'girl.p2pd'">
+        <div v-else>
+          <div v-html="texts[ 'girl.p2pd' ] ? texts[ 'girl.p2pd' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+            v-on:click="editing = 'girl.p2pd'"
+            class="output mh200 output-area interval mw512"
+          />
+          <div v-if="saved == 'girl.p2pd'" class="mw512 right">
+            <div> 配置生效需要重启{{ translates.p2p1_sshd }}，确认重启服务吗？ </div>
+            <div class="top-interval">
+              <Button @click="saved = null">取消</Button>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'restart', 'p2p1_sshd' )" :loading="loadings[ 'restart@p2p1_sshd' ]" :disabled="is_locked">重启{{ translates.p2p1_sshd }}</Button>
+            </div>
+          </div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
+
     <Row>
       <Col span="1">&nbsp;</Col>
       <Col span="22" id="footer">
@@ -367,51 +447,9 @@
         <Icon type="ios-information-circle"></Icon>
         <span>{{ exception.title }}</span>
       </div>
-      <div v-html="exception.message.replace(new RegExp(/\n/, 'g'), '<br />')"></div>
+      <div v-html="exception.message.replace( new RegExp( /\n/, 'g' ), '<br />' )"></div>
       <div slot="footer">
         <Button @click="poppings.exception = false">关闭</Button>
-      </div>
-    </Modal>
-
-    <Modal v-model="poppings['saved@girl.relayd']" :title="'编辑' + translates[ 'girl.relayd' ] + '成功'">
-      <div> 配置生效需要重启{{ translates.redir }}，确认重启服务吗？ </div>
-      <div slot="footer" class="right">
-        <Button @click="systemctl('restart', 'redir', 'saved@girl.relayd')" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启{{ translates.redir }}</Button>
-      </div>
-    </Modal>
-
-    <Modal v-model="poppings['saved@girl.resolvd']" :title="'编辑' + translates[ 'girl.resolvd' ] + '成功'">
-      <div> 配置生效需要重启{{ translates.resolv }}，确认重启服务吗？ </div>
-      <div slot="footer" class="right">
-        <Button @click="systemctl('restart', 'resolv', 'saved@girl.resolvd')" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启{{ translates.resolv }}</Button>
-      </div>
-    </Modal>
-
-    <Modal v-model="poppings['saved@girl.p2pd']" :title="'编辑' + translates[ 'girl.p2pd' ] + '成功'">
-      <div> 配置生效需要重启{{ translates.p2p1_sshd }}，确认重启服务吗？ </div>
-      <div slot="footer" class="right">
-        <Button @click="systemctl('restart', 'p2p1_sshd', 'saved@girl.p2pd')" :loading="loadings[ 'restart@p2p1_sshd' ]" :disabled="is_locked">重启{{ translates.p2p1_sshd }}</Button>
-      </div>
-    </Modal>
-
-    <Modal v-model="poppings['saved@hostapd.conf']" :title="'编辑' + translates[ 'hostapd.conf' ] + '成功'">
-      <div> 配置生效需要重启{{ translates.hostapd }}，确认重启服务吗？ </div>
-      <div slot="footer" class="right">
-        <Button @click="systemctl('restart', 'hostapd', 'saved@hostapd.conf')" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启{{ translates.hostapd }}</Button>
-      </div>
-    </Modal>
-
-    <Modal v-model="poppings['saved@dhcpcd.conf']" :title="'编辑' + translates[ 'dhcpcd.conf' ] + '成功'">
-      <div> 配置生效需要重启{{ translates.dhcpcd }}，确认重启服务吗？ </div>
-      <div slot="footer" class="right">
-        <Button @click="systemctl('restart', 'dhcpcd', 'saved@dhcpcd.conf')" :loading="loadings[ 'restart@dhcpcd' ]" :disabled="is_locked">重启{{ translates.dhcpcd }}</Button>
-      </div>
-    </Modal>
-
-    <Modal v-model="poppings['saved@dnsmasq.d/wlan0.conf']" :title="'编辑' + translates[ 'dnsmasq.d/wlan0.conf' ] + '成功'">
-      <div> 配置生效需要重启{{ translates.dnsmasq }}，确认重启服务吗？ </div>
-      <div slot="footer" class="right">
-        <Button @click="systemctl('restart', 'dnsmasq', 'saved@dnsmasq.d/wlan0.conf')" :loading="loadings[ 'restart@dnsmasq' ]" :disabled="is_locked">重启{{ translates.dnsmasq }}</Button>
       </div>
     </Modal>
 

@@ -37,7 +37,6 @@ export default {
         Object.entries( data.actives ).forEach( pair => {
           colour_actives[ pair[ 0 ] ] = this.colour_in( pair[ 1 ] )
           runnings[ pair[ 0 ] ] = pair[ 1 ].includes( 'running' )
-          poppings[ 'service@' + pair[ 0 ] ] = false
           loadings[ 'restart@' + pair[ 0 ] ] = false
           loadings[ 'start@' + pair[ 0 ] ] = false
           loadings[ 'stop@' + pair[ 0 ] ] = false
@@ -46,8 +45,6 @@ export default {
         })
 
         Object.entries( data.texts ).forEach( pair => {
-          poppings[ 'text@' + pair[ 0 ] ] = false
-          poppings[ 'saved@' + pair[ 0 ] ] = false
           loadings[ 'save@' + pair[ 0 ] ] = false
         })
 
@@ -71,11 +68,8 @@ export default {
         let data = res.data
         if ( data.success ) {
           this.editing = null
-          if ( this.poppings.hasOwnProperty( 'saved@' + file ) ) {
-            this.poppings[ 'saved@' + file ] = true
-          } else {
-            this.$Message.info( this.translates[ file ] + ' 已更新' )
-          }
+          this.saved = file
+          this.$Notice.success( { title: this.translates[ file ] + ' 已更新' } )
         }
       }).catch( err => {
         this.$Modal.error( { content: err.message } )
@@ -128,23 +122,21 @@ export default {
       }
     },
 
-    systemctl: function( command, service, from_popping ) {
+    systemctl: function( command, service ) {
       this.loadings[ command + '@' + service ] = true
       axios.post( this.http_host + '/api/systemctl', { command: command, service: service } ).then( res => {
         this.loadings[ command + '@' + service ] = false
         let data = res.data
         if ( data.success ) {
           this.colour_actives[ service ] = this.colour_in( data.active )
-          if ([ 'start', 'stop', 'restart' ].includes( command )) {
+          if ( [ 'start', 'stop', 'restart' ].includes( command ) ) {
             this.runnings[ service ] = data.active.includes( 'running' )
-            if ( from_popping ) {
-              this.poppings[ from_popping ] = false
-            }
-          } else if ([ 'disable', 'enable' ].includes( command )) {
+          } else if ( [ 'disable', 'enable' ].includes( command ) ) {
             this.enableds[ service ] = data.loaded.includes( 'enabled;' )
           }
           this.editing = null
-          this.$Message.info( this.translates[ service ] + ' 已' + this.translates[ command ] )
+          this.saved = null
+          this.$Notice.success( { title: this.translates[ service ] + ' 已' + this.translates[ command ] } )
         } else {
           this.set_exception( this.translates[ service ] + ' ' + this.translates[ command ] + '失败', data.msg )
         }
@@ -173,6 +165,7 @@ export default {
       measure_temp: null,
       poppings: {},
       runnings: {},
+      saved: null,
       texts: {},
       translates: {
         dhcpcd: '网卡',
