@@ -24,10 +24,6 @@ module Girl
 
       puts "Binding on #{ port }"
 
-      reads = {
-        sock4 => false, # not ipv6
-        sock6 => true # is ipv6
-      }
       pub_socks = {} # nameserver => sock
       rvd_socks = {} # resolvd => sock
       reconn = 0
@@ -49,7 +45,7 @@ module Girl
       caches = {}
 
       loop do
-        readable_socks, _ = IO.select( reads.keys )
+        readable_socks, _ = IO.select( [ sock4, sock6 ] )
         readable_socks.each do | sock |
           # https://tools.ietf.org/html/rfc1035#page-26
           data, addrinfo, rflags, *controls = sock.recvmsg
@@ -103,11 +99,11 @@ module Girl
             is_custom = custom_qnames.any?{ | custom | qname.include?( custom ) }
 
             if is_custom
-              rvd_socks.each do | sockaddr, sock |
+              rvd_socks.each do | sockaddr, alias_sock |
                 data[ 12, qname_len ] = swap( qname )
 
                 begin
-                  sock.sendmsg( data, 0, sockaddr )
+                  alias_sock.sendmsg( data, 0, sockaddr )
                   reconn = 0
                 rescue Errno::ENETUNREACH => e
                   if reconn > 100
@@ -121,9 +117,9 @@ module Girl
                 end
               end
             else
-              pub_socks.each do | sockaddr, sock |
+              pub_socks.each do | sockaddr, alias_sock |
                 begin
-                  sock.sendmsg( data, 0, sockaddr )
+                  alias_sock.sendmsg( data, 0, sockaddr )
                   reconn = 0
                 rescue Errno::ENETUNREACH => e
                   if reconn > 100
@@ -138,10 +134,10 @@ module Girl
               end
             end
 
-            ids[ id ] = [ sender, is_custom, reads[ sock ] ]
+            ids[ id ] = [ sender, is_custom, sock ]
           elsif qr == '1' && ids.include?( id )
             # relay the fastest response, ignore followings
-            src, is_custom, is_ipv6 = ids.delete( id )
+            src, is_custom, alias_sock = ids.delete( id )
             ancount = data[ 6, 2 ].unpack( 'n' ).first
             nscount = data[ 8, 2 ].unpack( 'n' ).first
 
@@ -153,7 +149,7 @@ module Girl
             end
 
             begin
-              ( is_ipv6 ? sock6 : sock4 ).sendmsg( data, 0, src )
+              alias_sock.sendmsg( data, 0, src )
               reconn = 0
             rescue Errno::ENETUNREACH => e
               if reconn > 100
