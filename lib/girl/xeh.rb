@@ -4,7 +4,7 @@ module Girl
       data
     end
 
-    def decode( data, info )
+    def decode( data, addr )
       unless data
         return {
           success: false,

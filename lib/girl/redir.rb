@@ -35,7 +35,7 @@ module Girl
 
             begin
               source, _ = sock.accept_nonblock
-            rescue IO::WaitReadable, Errno::EINTR => e
+            rescue IO::WaitReadable, Errno::EINTR
               next
             end
 
@@ -63,7 +63,7 @@ module Girl
 
             begin
               relay.connect_nonblock( relayd_sockaddr )
-            rescue IO::WaitWritable
+            rescue IO::WaitWritable, Errno::EINTR
             rescue Exception => e
               deal_io_exception( relay, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
               next
@@ -71,7 +71,7 @@ module Girl
           when :source
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable # WaitWritable for SSL renegotiation
               next
             rescue Exception => e
               deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -84,7 +84,7 @@ module Girl
           when :relay
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable # WaitWritable for SSL renegotiation
               next
             rescue Exception => e
               deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -102,7 +102,7 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable # WaitReadable for SSL renegotiation
             next
           rescue Exception => e
             deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )

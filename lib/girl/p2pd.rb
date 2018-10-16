@@ -36,8 +36,7 @@ module Girl
 
             begin
               room, addr = sock.accept_nonblock
-            rescue IO::WaitReadable, Errno::EINTR => e
-              puts "accept a room #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR
               next
             end
 
@@ -54,8 +53,7 @@ module Girl
           when :room
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
-              puts "r #{ reads[ sock ] } #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
               close_socket( sock, reads, buffs, writes, infos, writable_socks )
@@ -120,7 +118,7 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
             next
           rescue Exception => e
             close_socket( sock, reads, buffs, writes, infos, writable_socks )

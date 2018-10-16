@@ -34,7 +34,7 @@ module Girl
 
       begin
         room.connect_nonblock( Socket.sockaddr_in( roomd_port, roomd_host ) )
-      rescue IO::WaitWritable
+      rescue IO::WaitWritable, Errno::EINTR
       end
 
       reads[ room ] = :room
@@ -51,8 +51,7 @@ module Girl
           when :room
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
-              puts "r #{ reads[ sock ] } #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
               begin
@@ -65,8 +64,7 @@ module Girl
           when :appd
             begin
               app, addr = sock.accept_nonblock
-            rescue IO::WaitReadable, Errno::EINTR => e
-              puts "accept a app #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR
               next
             end
 
@@ -86,8 +84,7 @@ module Girl
           when :p2
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
-              puts "r #{ reads[ sock ] } #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Errno::ECONNREFUSED => e
               if rep2p > 10
@@ -123,8 +120,7 @@ module Girl
           when :app
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
-              puts "r #{ reads[ sock ] } #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
               begin
@@ -146,7 +142,7 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
             next
           rescue Exception => e
             begin
@@ -194,7 +190,7 @@ module Girl
 
       begin
         p2.connect_nonblock( p1_sockaddr )
-      rescue IO::WaitWritable
+      rescue IO::WaitWritable, Errno::EINTR
       end
 
       reads[ p2 ] = :p2

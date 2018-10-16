@@ -42,7 +42,7 @@ module Girl
 
             begin
               source, _ = sock.accept_nonblock
-            rescue IO::WaitReadable, Errno::EINTR => e
+            rescue IO::WaitReadable, Errno::EINTR
               print ' a'
               next
             end
@@ -53,7 +53,7 @@ module Girl
           when :source
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
               deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -108,7 +108,7 @@ module Girl
 
               begin
                 relay.connect_nonblock( relayd_sockaddr )
-              rescue IO::WaitWritable
+              rescue IO::WaitWritable, Errno::EINTR
               rescue Exception => e
                 deal_io_exception( relay, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
                 next
@@ -132,7 +132,7 @@ module Girl
           when :relay
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
               deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -150,7 +150,7 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable => e
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
             next
           rescue Exception => e
             deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )

@@ -41,8 +41,7 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
               reconn = 0
-            rescue IO::WaitReadable => e
-              puts "r #{ reads[ sock ] } #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
               if e.is_a?( EOFError )
@@ -74,7 +73,7 @@ module Girl
 
               begin
                 mirr.connect_nonblock( Socket.sockaddr_in( mirrd_port, roomd_host ) )
-              rescue IO::WaitWritable
+              rescue IO::WaitWritable, Errno::EINTR
               rescue Errno::EADDRNOTAVAIL => e
                 puts "connect mirrd #{ roomd_host }:#{ mirrd_port } #{ e.class }"
                 deal_io_exception( mirr, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -83,7 +82,7 @@ module Girl
 
               begin
                 app.connect_nonblock( appd_sockaddr )
-              rescue IO::WaitWritable
+              rescue IO::WaitWritable, Errno::EINTR
               rescue Errno::EADDRNOTAVAIL => e
                 puts "connect appd #{ appd_host }:#{ appd_port } #{ e.class }"
                 deal_io_exception( app, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -93,8 +92,7 @@ module Girl
           when :mirr
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
-              puts "r #{ reads[ sock ] } #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
               deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -107,8 +105,7 @@ module Girl
           when :app
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable => e
-              puts "r #{ reads[ sock ] } #{ e.class } ?"
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
               deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -126,7 +123,7 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
             next
           rescue Exception => e
             deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
@@ -167,7 +164,7 @@ module Girl
 
       begin
         sock.connect_nonblock( roomd_sockaddr )
-      rescue IO::WaitWritable
+      rescue IO::WaitWritable, Errno::EINTR
         reads[ sock ] = :room
 
         if room_title
