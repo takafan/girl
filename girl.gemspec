@@ -7,7 +7,7 @@ Gem::Specification.new do |spec|
   spec.name          = 'girl'
   spec.version       = Girl::VERSION
   spec.authors       = ['takafan']
-  spec.email         = ['takafan@163.com']
+  spec.email         = ['qqtakafan@gmail.com']
 
   spec.summary       = %q{妹子}
   spec.description   = %q{a 江南style traffic relay}
