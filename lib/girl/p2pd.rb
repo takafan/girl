@@ -16,8 +16,8 @@ module Girl
       }
       buffs = {} # sock => ''
       writes = {} # sock => :room
+      timestamps = {} # sock => push_to_reads_or_writes.timestamp
       infos = {} # pending_room => { ip_port: '6.6.6.6:12345', tmp_path: '/tmp/p2pr/6.6.6.6:12345' }
-      timestamps = {} # room => room.last_client_read.timestamp
 
       Dir.mkdir( tmp_dir ) unless Dir.exist?( tmp_dir )
 
@@ -29,9 +29,8 @@ module Girl
           when :roomd
             now = Time.new
 
-            timestamps.select{ | _, timestamp | now - timestamp > room_timeout }.each do | room, _ |
-              close_socket( room, reads, buffs, writes, infos, writable_socks )
-              timestamps.delete( room )
+            timestamps.select{ | _, stamp | now - stamp > room_timeout }.each do | room, _ |
+              close_socket( room, reads, buffs, writes, timestamps, infos, writable_socks )
             end
 
             begin
@@ -54,13 +53,15 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, infos, writable_socks )
               next
             rescue Exception => e
-              close_socket( sock, reads, buffs, writes, infos, writable_socks )
+              close_socket( sock, reads, buffs, writes, timestamps, infos, writable_socks )
               next
             end
 
-            timestamps[ sock ] = Time.new
+            now = Time.new
+            timestamps[ sock ] = now
 
             if data[ 0, 4 ] == 'room' # p1 set room title
               info = infos[ sock ]
@@ -77,7 +78,7 @@ module Girl
                 File.open( tmp_path, 'w' )
               rescue Errno::ENOENT, ArgumentError => e
                 puts "open tmp path #{ e.class }"
-                close_socket( sock, reads, buffs, writes, infos, writable_socks )
+                close_socket( sock, reads, buffs, writes, timestamps, infos, writable_socks )
                 next
               end
 
@@ -90,7 +91,7 @@ module Girl
 
               unless p1_info
                 sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-                close_socket( sock, reads, buffs, writes, infos, writable_socks )
+                close_socket( sock, reads, buffs, writes, timestamps, infos, writable_socks )
                 next
               end
 
@@ -119,12 +120,14 @@ module Girl
           begin
             written = sock.write_nonblock( buff )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
+            check_timeout( 'w', sock, reads, buffs, writes, timestamps, infos, writable_socks )
             next
           rescue Exception => e
-            close_socket( sock, reads, buffs, writes, infos, writable_socks )
+            close_socket( sock, reads, buffs, writes, timestamps, infos, writable_socks )
             next
           end
 
+          timestamps[ sock ] = Time.new
           buffs[ sock ] = buff[ written..-1 ]
 
           unless buffs[ sock ].empty?
@@ -138,7 +141,19 @@ module Girl
 
     private
 
-    def close_socket( sock, reads, buffs, writes, infos, writable_socks )
+    def check_timeout( mode, sock, reads, buffs, writes, timestamps, infos, writable_socks )
+      if Time.new - timestamps[ sock ] >= 5
+        puts "#{ mode == 'r' ? reads[ sock ] : writes[ sock ] } #{ mode } #{ e.class } timeout"
+        close_socket( sock, reads, buffs, writes, timestamps, infos, writable_socks )
+      end
+    end
+
+    def close_socket( sock, reads, buffs, writes, timestamps, infos, writable_socks )
+      sock.close
+      reads.delete( sock )
+      buffs.delete( sock )
+      writes.delete( sock )
+      timestamps.delete( sock )
       info = infos.delete( sock )
 
       if info
@@ -148,10 +163,6 @@ module Girl
         end
       end
 
-      sock.close
-      reads.delete( sock )
-      buffs.delete( sock )
-      writes.delete( sock )
       writable_socks.delete( sock )
     end
 

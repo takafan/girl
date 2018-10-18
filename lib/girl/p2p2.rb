@@ -22,6 +22,7 @@ module Girl
       reads = {} # sock => :room / :p2 / :appd / :app
       buffs = {} # sock => ''
       writes = {} # sock => :room / :p2 / :app
+      timestamps = {} # sock => push_to_reads_or_writes.timestamp
       twins = {} # app <=> p2
       connect_p1_after_write = true
       tmp_path = ''
@@ -51,7 +52,8 @@ module Girl
           when :room
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, writes, timestamps, e )
               next
             rescue Exception => e
               begin
@@ -61,6 +63,8 @@ module Girl
 
               raise e
             end
+
+            timestamps[ sock ] = Time.new
           when :appd
             begin
               app, addr = sock.accept_nonblock
@@ -74,17 +78,23 @@ module Girl
               next
             end
 
+            now = Time.new
+
             p2, _ = reads.find{ | _, role | role == :p2 }
             reads[ app ] = :app
             buffs[ app ] = ''
+            timestamps[ app ] = now
+
             twins[ app ] = p2
             twins[ p2 ] = app
             buffs[ p2 ] = '!'
             writes[ p2 ] = :p2
+            timestamps[ p2 ] = now
           when :p2
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, writes, timestamps, e )
               next
             rescue Errno::ECONNREFUSED => e
               if rep2p > 10
@@ -114,13 +124,18 @@ module Girl
               e.is_a?( EOFError ) ? exit : raise( e )
             end
 
+            now = Time.new
+            timestamps[ sock ] = now
+
             app = twins[ sock ]
             buffs[ app ] << data
             writes[ app ] = :app
+            timestamps[ app ] = now
           when :app
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, writes, timestamps, e )
               next
             rescue Exception => e
               begin
@@ -131,9 +146,13 @@ module Girl
               e.is_a?( EOFError ) ? exit : raise( e )
             end
 
+            now = Time.new
+            timestamps[ sock ] = now
+
             p2 = twins[ sock ]
             buffs[ p2 ] << data
             writes[ p2 ] = :p2
+            timestamps[ p2 ] = now
           end
         end
 
@@ -142,7 +161,8 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
+            check_timeout( 'r', sock, reads, writes, timestamps, e )
             next
           rescue Exception => e
             begin
@@ -153,6 +173,7 @@ module Girl
             raise e
           end
 
+          timestamps[ sock ] = Time.new
           buffs[ sock ] = buff[ written..-1 ]
 
           unless buffs[ sock ].empty?
@@ -182,6 +203,13 @@ module Girl
     end
 
     private
+
+    def check_timeout( mode, sock, reads, writes, timestamps, e )
+      if Time.new - timestamps[ sock ] >= 5
+        puts "#{ mode == 'r' ? reads[ sock ] : writes[ sock ] } #{ mode } #{ e.class } timeout"
+        raise e
+      end
+    end
 
     def p2p( room, p1_sockaddr, reads, buffs )
       p2 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )

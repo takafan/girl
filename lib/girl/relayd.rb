@@ -21,6 +21,7 @@ module Girl
       }
       buffs = {} # sock => ''
       writes = {} # sock => :relay / :dest
+      timestamps = {} # sock => push_to_reads_or_writes.timestamp
       twins = {} # relay <=> dest
       close_after_writes = {} # sock => exception
       addrs = {} # sock => addrinfo
@@ -41,17 +42,21 @@ module Girl
 
             reads[ relay ] = :relay
             buffs[ relay ] = ''
+            timestamps[ relay ] = Time.new
             addrs[ relay ] = addr
           when :relay
             begin
               data = xeh.swap( sock.read_nonblock( 4096 ) )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable # WaitWritable for SSL renegotiation
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e # WaitWritable for SSL renegotiation
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+              deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             end
 
+            now = Time.new
+            timestamps[ sock ] = now
             dest = twins[ sock ]
 
             unless dest
@@ -59,7 +64,7 @@ module Girl
               unless ret[ :success ]
                 puts ret[ :error ]
                 sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-                close_socket( sock, reads, buffs, writes, twins )
+                close_socket( sock, reads, buffs, writes, timestamps, twins )
                 next
               end
 
@@ -68,6 +73,7 @@ module Girl
               dest.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
               reads[ dest ] = :dest
               buffs[ dest ] = ''
+              timestamps[ dest ] = now
               twins[ dest ] = sock
               twins[ sock ] = dest
 
@@ -75,7 +81,7 @@ module Girl
                 dest.connect_nonblock( Socket.sockaddr_in( dst_port, dst_host ) )
               rescue IO::WaitWritable, Errno::EINTR
               rescue Exception => e
-                deal_io_exception( dest, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+                deal_io_exception( dest, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
                 next
               end
 
@@ -86,35 +92,41 @@ module Girl
 
             buffs[ dest ] << data
             writes[ dest ] = :dest
+            timestamps[ dest ] = now
           when :dest
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable # WaitWritable for SSL renegotiation
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e # WaitWritable for SSL renegotiation
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+              deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             end
+
+            now = Time.new
+            timestamps[ sock ] = now
 
             relay = twins[ sock ]
             buffs[ relay ] << xeh.swap( data )
             writes[ relay ] = :relay
+            timestamps[ relay ] = now
           end
         end
 
         writable_socks.each do | sock |
-          buff = buffs[ sock ]
-
           begin
-            written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable # WaitReadable for SSL renegotiation
+            written = sock.write_nonblock( buffs[ sock ] )
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e # WaitReadable for SSL renegotiation
+            check_timeout( 'w', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
             next
           rescue Exception => e
-            deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+            deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
             next
           end
 
-          buffs[ sock ] = buff[ written..-1 ]
+          timestamps[ sock ] = Time.new
+          buffs[ sock ] = buffs[ sock ][ written..-1 ]
 
           unless buffs[ sock ].empty?
             next
@@ -124,7 +136,7 @@ module Girl
 
           if e
             sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-            close_socket( sock, reads, buffs, writes, twins )
+            close_socket( sock, reads, buffs, writes, timestamps, twins )
             next
           end
 
@@ -135,8 +147,15 @@ module Girl
 
     private
 
-    def deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
-      twin = close_socket( sock, reads, buffs, writes, twins )
+    def check_timeout( mode, sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+      if Time.new - timestamps[ sock ] >= 5
+        puts "#{ mode == 'r' ? reads[ sock ] : writes[ sock ] } #{ mode } #{ e.class } timeout"
+        deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+      end
+    end
+
+    def deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+      twin = close_socket( sock, reads, buffs, writes, timestamps, twins )
 
       if twin
         if writes.include?( twin )
@@ -145,7 +164,7 @@ module Girl
           close_after_writes[ twin ] = e
         else
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-          close_socket( twin, reads, buffs, writes, twins )
+          close_socket( twin, reads, buffs, writes, timestamps, twins )
           writable_socks.delete( twin )
         end
 
@@ -155,11 +174,12 @@ module Girl
       writable_socks.delete( sock )
     end
 
-    def close_socket( sock, reads, buffs, writes, twins )
+    def close_socket( sock, reads, buffs, writes, timestamps, twins )
       sock.close
       reads.delete( sock )
       buffs.delete( sock )
       writes.delete( sock )
+      timestamps.delete( sock )
       twins.delete( sock )
     end
 

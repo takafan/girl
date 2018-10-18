@@ -17,11 +17,12 @@ module Girl
       }
       buffs = {} # sock => ''
       writes = {} # sock => :room / :app / :mirr
+      timestamps = {} # sock => push_to_reads_or_writes.timestamp
       twins = {} # app <=> mirr
       close_after_writes = {} # sock => exception
       pending_apps = {} # app => appd
       appd_infos = {} # appd => { room: room, mirrd: mirrd, pending_apps: { app: '' }, linked_apps: { app: mirr } }
-      timestamps = {} # room => room.last_mirr_read.timestamp
+      roomstamps = {} # room => room.last_mirr_read.timestamp
 
       loop do
         readable_socks, writable_socks = IO.select( reads.keys, writes.keys )
@@ -32,10 +33,10 @@ module Girl
             now = Time.new
 
             # clients' eof may dropped by its upper gateway.
-            # so check timeouted rooms on server side too. close them before accept a new one.
-            timestamps.select{ | _, timestamp | now - timestamp > room_timeout }.each do | room, _ |
-              deal_io_exception( room, reads, buffs, writes, twins, reads[ room ], close_after_writes, EOFError.new, readable_socks, writable_socks, pending_apps, appd_infos )
-              timestamps.delete( room )
+            # so check timeouted rooms on server side too.
+            roomstamps.select{ | _, roomstamp | now - roomstamp > room_timeout }.each do | room, _ |
+              deal_io_exception( reads[ room ], room, reads, buffs, writes, timestamps, twins, close_after_writes, EOFError.new, readable_socks, writable_socks, pending_apps, appd_infos )
+              roomstamps.delete( room )
             end
 
             begin
@@ -83,15 +84,20 @@ module Girl
               next
             end
 
+            now = Time.new
             appd_info = appd_infos[ sock ]
             room = appd_info[ :room ]
             mirrd = appd_info[ :mirrd ]
+
             reads[ app ] = :app
             buffs[ app ] = ''
+            timestamps[ app ] = now
             pending_apps[ app ] = sock
+
             appd_info[ :pending_apps ][ app ] = ''
             buffs[ room ] = "#{ mirrd.local_address.ip_unpack.last };"
             writes[ room ] = :room
+            timestamps[ room ] = now
           when :mirrd
             begin
               mirr, addr = sock.accept_nonblock
@@ -109,17 +115,20 @@ module Girl
 
             reads[ mirr ] = :mirr
             buffs[ mirr ] = buff
+            timestamps[ mirr ] = Time.new
             writes[ mirr ] = :mirr unless buff.empty?
+
             twins[ mirr ] = app
             twins[ app ] = mirr
             appd_info[ :linked_apps ][ app ] = mirr
           when :room
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, twins, reads[ sock ], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+              deal_io_exception( reads[ sock ], sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
               next
             end
 
@@ -139,7 +148,7 @@ module Girl
                 File.open( tmp_path, 'w' )
               rescue Errno::ENOENT, ArgumentError => e
                 puts "open tmp path #{ e.class }"
-                deal_io_exception( sock, reads, buffs, writes, twins, reads[ sock ], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+                deal_io_exception( reads[ sock ], sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
                 next
               end
 
@@ -148,12 +157,16 @@ module Girl
           when :app
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, twins, reads[ sock ], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+              deal_io_exception( reads[ sock ], sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
               next
             end
+
+            now = Time.new
+            timestamps[ sock ] = now
 
             mirr = twins[ sock ]
             unless mirr
@@ -165,23 +178,29 @@ module Girl
 
             buffs[ mirr ] << data
             writes[ mirr ] = :mirr
+            timestamps[ mirr ] = now
           when :mirr
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, twins, reads[ sock ], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+              deal_io_exception( reads[ sock ], sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
               next
             end
+
+            now = Time.new
+            timestamps[ sock ] = now
 
             app = twins[ sock ]
             buffs[ app ] << data
             writes[ app ] = :app
+            timestamps[ app ] = now
 
             appd = pending_apps[ app ]
             appd_info = appd_infos[ appd ]
-            timestamps[ appd_info[ :room ] ] = Time.new
+            timestamps[ appd_info[ :room ] ] = now
           end
         end
 
@@ -190,13 +209,15 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
+            check_timeout( 'w', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
             next
           rescue Exception => e
-            deal_io_exception( sock, reads, buffs, writes, twins, writes[ sock ], close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+            deal_io_exception( writes[ sock ], sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
             next
           end
 
+          timestamps[ sock ] = Time.new
           buffs[ sock ] = buff[ written..-1 ]
 
           unless buffs[ sock ].empty?
@@ -207,7 +228,7 @@ module Girl
 
           if e
             sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-            close_socket( sock, reads, buffs, writes, twins )
+            close_socket( sock, reads, buffs, writes, timestamps, twins )
             next
           end
 
@@ -218,8 +239,16 @@ module Girl
 
     private
 
-    def deal_io_exception( sock, reads, buffs, writes, twins, role, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
-      twin = close_socket( sock, reads, buffs, writes, twins )
+    def check_timeout( mode, sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+      if Time.new - timestamps[ sock ] >= 5
+        role = ( mode == 'r' ? reads[ sock ] : writes[ sock ] )
+        puts "#{ role } #{ mode } #{ e.class } timeout"
+        deal_io_exception( role, sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+      end
+    end
+
+    def deal_io_exception( role, sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks, pending_apps, appd_infos )
+      twin = close_socket( sock, reads, buffs, writes, timestamps, twins )
 
       if twin
         if writes.include?( twin )
@@ -228,7 +257,7 @@ module Girl
           close_after_writes[ twin ] = e
         else
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-          close_socket( twin, reads, buffs, writes, twins )
+          close_socket( twin, reads, buffs, writes, timestamps, twins )
           writable_socks.delete( twin )
         end
 
@@ -244,7 +273,7 @@ module Girl
         if appd
           appd_port = appd.local_address.ip_unpack.last
           appd.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-          close_socket( appd, reads, buffs, writes, twins )
+          close_socket( appd, reads, buffs, writes, timestamps, twins )
 
           begin
             File.delete( appd_info[ :tmp_path ] )
@@ -254,20 +283,20 @@ module Girl
           mirrd = appd_info[ :mirrd ]
           mirrd_port = mirrd.local_address.ip_unpack.last
           mirrd.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-          close_socket( mirrd, reads, buffs, writes, twins )
+          close_socket( mirrd, reads, buffs, writes, timestamps, twins )
 
           appd_info[ :pending_apps ].each do | app, _ |
             app.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-            close_socket( app, reads, buffs, writes, twins )
+            close_socket( app, reads, buffs, writes, timestamps, twins )
             pending_apps.delete( app )
           end
 
           appd_info[ :linked_apps ].each do | app, mirr |
             app.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-            close_socket( app, reads, buffs, writes, twins )
+            close_socket( app, reads, buffs, writes, timestamps, twins )
             pending_apps.delete( app )
             mirr.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-            close_socket( mirr, reads, buffs, writes, twins )
+            close_socket( mirr, reads, buffs, writes, timestamps, twins )
           end
 
           appd_infos.delete( appd )
@@ -287,11 +316,12 @@ module Girl
       end
     end
 
-    def close_socket( sock, reads, buffs, writes, twins )
+    def close_socket( sock, reads, buffs, writes, timestamps, twins )
       sock.close
       reads.delete( sock )
       buffs.delete( sock )
       writes.delete( sock )
+      timestamps.delete( sock )
       twins.delete( sock )
     end
 

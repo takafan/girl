@@ -19,10 +19,11 @@ module Girl
       reads = {}  # sock => :room / :mirr / :app
       buffs = {} # sock => ''
       writes = {} # sock => :room / :mirr / :app
+      timestamps = {} # sock => push_to_reads_or_writes.timestamp
       twins = {} # mirr <=> app
       close_after_writes = {} # sock => exception
       roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
-      connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
+      connect_roomd( roomd_sockaddr, reads, buffs, writes, timestamps, twins, close_after_writes, room_title )
       appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
       reconn = 0
 
@@ -31,7 +32,7 @@ module Girl
 
         unless readable_socks
           puts "flash #{ Time.new }"
-          connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
+          connect_roomd( roomd_sockaddr, reads, buffs, writes, timestamps, twins, close_after_writes, room_title )
           next
         end
 
@@ -41,7 +42,12 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
               reconn = 0
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              if Time.new - timestamps[ sock ] >= 5
+                puts "room r #{ e.class } timeout"
+                connect_roomd( roomd_sockaddr, reads, buffs, writes, timestamps, twins, close_after_writes, room_title )
+              end
+
               next
             rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
               if e.is_a?( EOFError )
@@ -54,10 +60,13 @@ module Girl
 
               sleep 5
               puts "#{ e.class }, reconn #{ reconn }"
-              connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
+              connect_roomd( roomd_sockaddr, reads, buffs, writes, timestamps, twins, close_after_writes, room_title )
 
               break
             end
+
+            now = Time.new
+            timestamps[ sock ] = now
 
             data.split( ';' ).map{ | s | s.to_i }.each do | mirrd_port |
               mirr = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
@@ -65,10 +74,12 @@ module Girl
 
               reads[ mirr ] = :mirr
               buffs[ mirr ] = ''
+              timestamps[ mirr ] = now
               twins[ mirr ] = app
 
               reads[ app ] = :app
               buffs[ app ] = ''
+              timestamps[ app ] = now
               twins[ app ] = mirr
 
               begin
@@ -76,7 +87,7 @@ module Girl
               rescue IO::WaitWritable, Errno::EINTR
               rescue Errno::EADDRNOTAVAIL => e
                 puts "connect mirrd #{ roomd_host }:#{ mirrd_port } #{ e.class }"
-                deal_io_exception( mirr, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+                deal_io_exception( mirr, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
                 next
               end
 
@@ -85,36 +96,46 @@ module Girl
               rescue IO::WaitWritable, Errno::EINTR
               rescue Errno::EADDRNOTAVAIL => e
                 puts "connect appd #{ appd_host }:#{ appd_port } #{ e.class }"
-                deal_io_exception( app, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+                deal_io_exception( app, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
                 next
               end
             end
           when :mirr
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+              deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             end
+
+            now = Time.new
+            timestamps[ sock ] = now
 
             app = twins[ sock ]
             buffs[ app ] << data
             writes[ app ] = :app
+            timestamps[ app ] = now
           when :app
             begin
               data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
+            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+              deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
               next
             end
+
+            now = Time.new
+            timestamps[ sock ] = now
 
             mirr = twins[ sock ]
             buffs[ mirr ] << data
             writes[ mirr ] = :mirr
+            timestamps[ mirr ] = now
           end
         end
 
@@ -123,13 +144,15 @@ module Girl
 
           begin
             written = sock.write_nonblock( buff )
-          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
+            check_timeout( 'w', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
             next
           rescue Exception => e
-            deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
+            deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
             next
           end
 
+          timestamps[ sock ] = Time.new
           buffs[ sock ] = buff[ written..-1 ]
 
           unless buffs[ sock ].empty?
@@ -140,7 +163,7 @@ module Girl
 
           if e
             sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-            close_socket( sock, reads, buffs, writes, twins )
+            close_socket( sock, reads, buffs, writes, timestamps, twins )
             next
           end
 
@@ -151,11 +174,12 @@ module Girl
 
     private
 
-    def connect_roomd( roomd_sockaddr, reads, buffs, writes, twins, close_after_writes, room_title )
+    def connect_roomd( roomd_sockaddr, reads, buffs, writes, timestamps, twins, close_after_writes, room_title )
       reads.keys.each{ | sock | sock.close }
       reads.clear
       buffs.clear
       writes.clear
+      timestamps.clear
       twins.clear
       close_after_writes.clear
 
@@ -174,8 +198,16 @@ module Girl
       end
     end
 
-    def deal_io_exception( sock, reads, buffs, writes, twins, close_after_writes, e, readable_socks, writable_socks )
-      twin = close_socket( sock, reads, buffs, writes, twins )
+    def check_timeout( mode, sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+      if Time.new - timestamps[ sock ] >= 5
+        role = ( mode == 'r' ? reads[ sock ] : writes[ sock ] )
+        puts "#{ role } #{ mode } #{ e.class } timeout"
+        deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+      end
+    end
+
+    def deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+      twin = close_socket( sock, reads, buffs, writes, timestamps, twins )
 
       if twin
         if writes.include?( twin )
@@ -184,7 +216,7 @@ module Girl
           close_after_writes[ twin ] = e
         else
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-          close_socket( twin, reads, buffs, writes, twins )
+          close_socket( twin, reads, buffs, writes, timestamps, twins )
           writable_socks.delete( twin )
         end
 
@@ -194,11 +226,12 @@ module Girl
       writable_socks.delete( sock )
     end
 
-    def close_socket( sock, reads, buffs, writes, twins )
+    def close_socket( sock, reads, buffs, writes, timestamps, twins )
       sock.close
       reads.delete( sock )
       buffs.delete( sock )
       writes.delete( sock )
+      timestamps.delete( sock )
       twins.delete( sock )
     end
 
