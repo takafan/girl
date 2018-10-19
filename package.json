@@ -1,6 +1,6 @@
 {
-  "name": "girl",
-  "version": "0.23.4",
+  "name": "最终路由器彼女",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "serve": "vue-cli-service serve",
