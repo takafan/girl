@@ -22,7 +22,6 @@ module Girl
       close_after_writes = {} # sock => exception
       pending_apps = {} # app => appd
       appd_infos = {} # appd => { room: room, mirrd: mirrd, pending_apps: { app: '' }, linked_apps: { app: mirr } }
-      roomstamps = {} # room => room.last_mirr_read.timestamp
 
       loop do
         readable_socks, writable_socks = IO.select( reads.keys, writes.keys )
@@ -34,9 +33,8 @@ module Girl
 
             # clients' eof may dropped by its upper gateway.
             # so check timeouted rooms on server side too.
-            roomstamps.select{ | _, roomstamp | now - roomstamp > room_timeout }.each do | room, _ |
-              deal_io_exception( reads[ room ], room, reads, buffs, writes, timestamps, twins, close_after_writes, EOFError.new, readable_socks, writable_socks, pending_apps, appd_infos )
-              roomstamps.delete( room )
+            timestamps.select{ | so, stamp | ( reads[ so ] == :room ) && ( now - stamp > room_timeout ) }.each do | room, _ |
+              deal_io_exception( :room, room, reads, buffs, writes, timestamps, twins, close_after_writes, EOFError.new, readable_socks, writable_socks, pending_apps, appd_infos )
             end
 
             begin

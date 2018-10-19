@@ -1,3 +1,17 @@
+##
+# usage
+# =====
+#
+# Girl::Relayd.new( 8080 ) # @server
+#
+# Girl::Redir.new( 1919, 'your.server.ip', 8080 ) # @home
+#
+# dig www.google.com @127.0.0.1 -p1818 # dig with girl/resolv, got 216.58.217.196
+#
+# iptables -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
+#
+# curl https://www.google.com/
+#
 require 'girl/hex'
 require 'socket'
 
