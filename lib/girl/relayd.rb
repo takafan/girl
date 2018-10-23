@@ -10,7 +10,6 @@ module Girl
       relayd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relayd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       relayd.bind( Socket.pack_sockaddr_in( port, '0.0.0.0' ) )
       relayd.listen( 128 ) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
 

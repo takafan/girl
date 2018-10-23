@@ -24,7 +24,6 @@ module Girl
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       redir.bind( Socket.pack_sockaddr_in( redir_port, '0.0.0.0' ) )
       redir.listen( 128 )
 
@@ -60,8 +59,8 @@ module Girl
             timestamps[ source ] = now
 
             begin
-              # SO_ORIGINAL_DST https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter_ipv4.h
-              # http://man7.org/linux/man-pages/man2/getsockopt.2.html
+              # SO_ORIGINAL_DST
+              # https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter_ipv4.h
               dst_addr = source.getsockopt( Socket::SOL_IP, 80 )
             rescue Exception => e
               puts "get SO_ORIGINAL_DST #{ e.class }"

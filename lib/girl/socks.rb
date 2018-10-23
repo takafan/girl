@@ -2,9 +2,9 @@
 # usage
 # =====
 #
-# Girl::Socks.new( '127.0.0.1', 1080, '127.0.0.1', 1818, 'your.server.ip', 8080 )
+# Girl::Socks.new( '0.0.0.0', 1080, '127.0.0.1', 1818, 'your.server.ip', 8080 ) # @gateway
 #
-# ALL_PROXY=socks5://127.0.0.1:1080 git pull
+# ALL_PROXY=socks5://192.168.1.59:1080 brew update # @mac
 #
 require 'socket'
 require 'resolv'
