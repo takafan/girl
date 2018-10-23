@@ -2,9 +2,9 @@
 # usage
 # =====
 #
-# Girl::Socks.new( '0.0.0.0', 1080, '127.0.0.1', 1818, 'your.server.ip', 8080 ) # @gateway
+# 1. Girl::Socks.new( '0.0.0.0', 1080, '127.0.0.1', 1818, 'your.server.ip', 8080 ).looping # @gateway
 #
-# ALL_PROXY=socks5://192.168.1.59:1080 brew update # @mac
+# 2. ALL_PROXY=socks5://192.168.1.59:1080 brew update # @mac
 #
 require 'socket'
 require 'resolv'
@@ -13,31 +13,34 @@ module Girl
   class Socks
 
     def initialize( socks_host, socks_port, resolv_host, resolv_port, relayd_host, relayd_port )
-      hex = Girl::Hex.new
+      @reads = []
+      @writes = []
+      @roles = {} # :socks5 / :source / :relay
+      @procs = {} # source => :connect / :request / :passing
+      @buffs = {} # sock => ''
+      @timestamps = {} # sock => push_to_reads_or_writes.timestamp
+      @twins = {} # source <=> relay
+      @close_after_writes = {} # sock => exception
+      @dns = Resolv::DNS.new( nameserver_port: [ [ resolv_host, resolv_port ] ] )
+      @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
+      @hex = Girl::Hex.new
+
       socks5 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       socks5.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       socks5.bind( Socket.pack_sockaddr_in( socks_port, socks_host ) )
       socks5.listen( 128 )
-
       puts "p#{ Process.pid } listening on #{ socks_host }:#{ socks_port }"
 
-      reads = {
-        socks5 => :socks5 # :socks5 / :source / :relay
-      }
-      procs = {} # source => :connect / :request / :passing
-      buffs = {} # sock => ''
-      writes = {}  # sock => :source / :relay
-      timestamps = {} # sock => push_to_reads_or_writes.timestamp
-      twins = {} # source <=> relay
-      close_after_writes = {} # sock => exception
-      dns = Resolv::DNS.new( nameserver_port: [ [ resolv_host, resolv_port ] ] )
-      relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
+      @reads << socks5
+      @roles[ socks5 ] = :socks5
+    end
 
+    def looping
       loop do
-        readable_socks, writable_socks = IO.select( reads.keys, writes.keys )
+        readable_socks, writable_socks = IO.select( @reads, @writes )
 
         readable_socks.each do | sock |
-          case reads[ sock ]
+          case @roles[ sock ]
           when :socks5
             print "p#{ Process.pid } #{ Time.new } "
 
@@ -48,36 +51,37 @@ module Girl
               next
             end
 
-            reads[ source ] = :source
-            buffs[ source ] = ''
-            timestamps[ source ] = Time.new
-            procs[ source ] = :connect
+            @reads << source
+            @roles[ source ] = :source
+            @buffs[ source ] = ''
+            @timestamps[ source ] = Time.new
+            @procs[ source ] = :connect
           when :source
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+              check_timeout( sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+              deal_io_exception( sock, e, readable_socks, writable_socks )
               next
             end
 
             now = Time.new
-            timestamps[ sock ] = now
+            @timestamps[ sock ] = now
 
-            if procs[ sock ] == :connect
+            if @procs[ sock ] == :connect
               ver = data[ 0 ].unpack( 'C' ).first
               if ver != 5
                 sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-                close_socket( sock, reads, buffs, writes, timestamps, twins )
+                close_socket( sock )
                 next
               end
 
-              buffs[ sock ] << [ 5, 0 ].pack( 'C2' )
-              writes[ sock ] = :source
-              procs[ sock ] = :request
-            elsif procs[ sock ] == :request
+              @buffs[ sock ] << [ 5, 0 ].pack( 'C2' )
+              @writes << sock
+              @procs[ sock ] = :request
+            elsif @procs[ sock ] == :request
 
               # +----+-----+-------+------+----------+----------+
               # |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -96,28 +100,29 @@ module Girl
                 len = data[ 4 ].unpack( 'C' ).first
                 domain_name = data[ 5, len ]
                 dst_port = data[ 5 + len, 2 ].unpack( 'n' ).first
-                ip = dns.getaddress( domain_name ).to_s
+                ip = @dns.getaddress( domain_name ).to_s
                 dst_addr = Socket.sockaddr_in( dst_port, ip )
                 _, dst_port, dst_host = dst_addr.unpack( 'nnN' )
               else
                 sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-                close_socket( sock, reads, buffs, writes, timestamps, twins )
+                close_socket( sock )
                 next
               end
 
               relay = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-              reads[ relay ] = :relay
-              buffs[ relay ] = hex.swap( hex.mix( dst_host, dst_port ) )
-              writes[ relay ] = :relay
-              timestamps[ relay ] = now
-              twins[ relay ] = sock
-              twins[ sock ] = relay
+              @reads << relay
+              @roles[ relay ] = :relay
+              @buffs[ relay ] = @hex.swap( @hex.mix( dst_host, dst_port ) )
+              @writes << relay
+              @timestamps[ relay ] = now
+              @twins[ relay ] = sock
+              @twins[ sock ] = relay
 
               begin
-                relay.connect_nonblock( relayd_sockaddr )
+                relay.connect_nonblock( @relayd_sockaddr )
               rescue IO::WaitWritable, Errno::EINTR
               rescue Exception => e
-                deal_io_exception( relay, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+                deal_io_exception( relay, e, readable_socks, writable_socks )
                 next
               end
 
@@ -128,89 +133,102 @@ module Girl
               # +----+-----+-------+------+----------+----------+
 
               _, sock_port, sock_host = sock.getsockname.unpack( 'nnN' )
-              buffs[ sock ] << [ 5, 0, 0, 1, sock_host, sock_port ].pack( 'C4Nn' )
-              writes[ sock ] = :source
-              procs[ sock ] = :passing
-            elsif procs[ sock ] == :passing
-              relay = twins[ sock ]
-              buffs[ relay ] << hex.swap( data )
-              writes[ relay ] = :relay
-              timestamps[ relay ] = now
+              @buffs[ sock ] << [ 5, 0, 0, 1, sock_host, sock_port ].pack( 'C4Nn' )
+              @writes << sock
+              @procs[ sock ] = :passing
+            elsif @procs[ sock ] == :passing
+              relay = @twins[ sock ]
+              @buffs[ relay ] << @hex.swap( data )
+              @writes << relay
+              @timestamps[ relay ] = now
             end
           when :relay
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( 'r', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+              check_timeout( sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+              deal_io_exception( sock, e, readable_socks, writable_socks )
               next
             end
 
             now = Time.new
-            timestamps[ sock ] = now
+            @timestamps[ sock ] = now
 
-            source = twins[ sock ]
-            buffs[ source ] << hex.swap( data )
-            writes[ source ] = :source
-            timestamps[ source ] = now
+            source = @twins[ sock ]
+            @buffs[ source ] << hex.swap( data )
+            @writes << source
+            @timestamps[ source ] = now
           end
         end
 
         writable_socks.each do | sock |
-          buff = buffs[ sock ]
-
           begin
-            written = sock.write_nonblock( buff )
+            written = sock.write_nonblock( @buffs[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-            check_timeout( 'w', sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+            check_timeout( sock, e, readable_socks, writable_socks )
             next
           rescue Exception => e
-            deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+            deal_io_exception( sock, e, readable_socks, writable_socks )
             next
           end
 
-          timestamps[ sock ] = Time.new
-          buffs[ sock ] = buff[ written..-1 ]
+          @timestamps[ sock ] = Time.new
+          @buffs[ sock ] = @buffs[ sock ][ written..-1 ]
 
-          unless buffs[ sock ].empty?
+          unless @buffs[ sock ].empty?
             next
           end
 
-          e = close_after_writes.delete( sock )
+          e = @close_after_writes.delete( sock )
 
           if e
             sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-            close_socket( sock, reads, buffs, writes, timestamps, twins )
+            close_socket( sock )
             next
           end
 
-          writes.delete( sock )
+          @writes.delete( sock )
         end
       end
     end
 
+    # quit! in Signal.trap :TERM
+    def quit!
+      @reads.each{ | sock | sock.close }
+      @reads.clear
+      @writes.clear
+      @roles.clear
+      @buffs.clear
+      @timestamps.clear
+      @twins.clear
+      @close_after_writes.clear
+
+      exit
+    end
+
     private
 
-    def check_timeout( mode, sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
-      if Time.new - timestamps[ sock ] >= 5
-        puts "#{ mode == 'r' ? reads[ sock ] : writes[ sock ] } #{ mode } #{ e.class } timeout"
-        deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
+    def check_timeout( sock, e, readable_socks, writable_socks )
+      if Time.new - @timestamps[ sock ] >= 5
+        puts "#{ @roles[ sock ] } #{ e.class } timeout"
+        deal_io_exception( sock, e, readable_socks, writable_socks )
       end
     end
 
-    def deal_io_exception( sock, reads, buffs, writes, timestamps, twins, close_after_writes, e, readable_socks, writable_socks )
-      twin = close_socket( sock, reads, buffs, writes, timestamps, twins )
+    def deal_io_exception( sock, e, readable_socks, writable_socks )
+      twin = @twins[ sock ]
+      close_socket( sock )
 
       if twin
-        if writes.include?( twin )
-          reads.delete( twin )
-          twins.delete( twin )
-          close_after_writes[ twin ] = e
+        if @writes.include?( twin )
+          @reads.delete( twin )
+          @twins.delete( twin )
+          @close_after_writes[ twin ] = e
         else
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [1, 0].pack( 'ii' ) ) unless e.is_a?( EOFError )
-          close_socket( twin, reads, buffs, writes, timestamps, twins )
+          close_socket( twin )
           writable_socks.delete( twin )
         end
 
@@ -220,13 +238,14 @@ module Girl
       writable_socks.delete( sock )
     end
 
-    def close_socket( sock, reads, buffs, writes, timestamps, twins )
+    def close_socket( sock )
       sock.close
-      reads.delete( sock )
-      buffs.delete( sock )
-      writes.delete( sock )
-      timestamps.delete( sock )
-      twins.delete( sock )
+      @reads.delete( sock )
+      @writes.delete( sock )
+      @roles.delete( sock )
+      @buffs.delete( sock )
+      @timestamps.delete( sock )
+      @twins.delete( sock )
     end
 
   end

@@ -15,15 +15,20 @@ module Girl
       puts "Binding on #{ port }"
 
       pub_socks = {} # nameserver => sock
-      ids = {}
-      reconn = 0
 
       nameservers.each do | ip |
         pub_socks[ Socket.sockaddr_in( 53, ip ) ] = Addrinfo.udp( ip, 53 ).ipv6? ? sock6 : sock4
       end
 
+      @reads = [ sock4, sock6 ]
+      @pub_socks = pub_socks
+      @ids = {}
+      @reconn = 0
+    end
+
+    def looping
       loop do
-        readable_socks, _ = IO.select( [ sock4, sock6 ] )
+        readable_socks, _ = IO.select( @reads )
 
         readable_socks.each do | sock |
           data, addrinfo, rflags, *controls = sock.recvmsg
@@ -47,26 +52,26 @@ module Girl
             qname = swap( data[ 12, qname_len ] )
             data[ 12, qname_len ] = qname
 
-            pub_socks.each do | sockaddr, alias_sock |
+            @pub_socks.each do | sockaddr, alias_sock |
               begin
                 alias_sock.sendmsg( data, 0, sockaddr )
-                reconn = 0
+                @reconn = 0
               rescue Errno::ENETUNREACH => e
-                if reconn > 100
+                if @reconn > 100
                   raise e
                 end
 
                 sleep 5
-                reconn += 1
-                puts "#{ e.class }, retry sendmsg to pub #{ reconn }"
+                @reconn += 1
+                puts "#{ e.class }, retry sendmsg to pub #{ @reconn }"
                 retry
               end
             end
 
-            ids[ id ] = [ sender, sock ]
-          elsif qr == '1' && ids.include?( id )
+            @ids[ id ] = [ sender, sock ]
+          elsif qr == '1' && @ids.include?( id )
             # relay the fastest response, ignore followings
-            src, alias_sock = ids.delete( id )
+            src, alias_sock = @ids.delete( id )
             qname = data[ 12, qname_len ]
             data[ 12, qname_len ] = swap( qname )
             alias_sock.sendmsg( data, 0, src )
@@ -77,6 +82,16 @@ module Girl
 
     def swap( data )
       data
+    end
+
+    # quit! in Signal.trap :TERM
+    def quit!
+      @reads.each{ | sock | sock.close }
+      @reads.clear
+      @pub_socks.clear
+      @ids.clear
+
+      exit
     end
 
   end
