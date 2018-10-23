@@ -157,7 +157,7 @@ module Girl
             @timestamps[ sock ] = now
 
             source = @twins[ sock ]
-            @buffs[ source ] << hex.swap( data )
+            @buffs[ source ] << @hex.swap( data )
             @writes << source
             @timestamps[ source ] = now
           end
