@@ -5,9 +5,8 @@ module Girl
 
     def initialize( roomd_port = 6262, tmp_dir = '/tmp/p2pd', room_timeout = 3600 )
       @reads = []
-      @writes = []
+      @writes = {} # sock => ''
       @roles = {} # :roomd / :room
-      @buffs = {} # sock => ''
       @timestamps = {} # sock => push_to_reads_or_writes.timestamp
       @tmp_dir = tmp_dir
       @room_timeout = room_timeout
@@ -27,7 +26,7 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]
@@ -46,7 +45,7 @@ module Girl
 
             @reads << room
             @roles[ room ] = :room
-            @buffs[ room ] = ''
+            @writes[ room ] = ''
             @timestamps[ room ] = now
             ip_port = addr.ip_unpack.join( ':' )
             tmp_path = File.join( @tmp_dir, ip_port )
@@ -101,8 +100,7 @@ module Girl
                 next
               end
 
-              @buffs[ p1_room ] << p2_info[ :ip_port ]
-              @writes << p1_room
+              @writes[ p1_room ] << p2_info[ :ip_port ]
 
               begin
                 File.delete( p1_info[ :tmp_path ] )
@@ -122,7 +120,7 @@ module Girl
 
         writable_socks.each do | sock |
           begin
-            written = sock.write_nonblock( @buffs[ sock ] )
+            written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
             check_timeout( sock, writable_socks )
             next
@@ -132,13 +130,11 @@ module Girl
           end
 
           @timestamps[ sock ] = Time.new
-          @buffs[ sock ] = @buffs[ sock ][ written..-1 ]
+          @writes[ sock ] = @writes[ sock ][ written..-1 ]
 
-          unless @buffs[ sock ].empty?
+          unless @writes[ sock ].empty?
             next
           end
-
-          @writes.delete( sock )
         end
       end
     end
@@ -149,7 +145,6 @@ module Girl
       @reads.clear
       @writes.clear
       @roles.clear
-      @buffs.clear
       @timestamps.clear
 
       exit
@@ -169,7 +164,6 @@ module Girl
       @reads.delete( sock )
       @writes.delete( sock )
       @roles.delete( sock )
-      @buffs.delete( sock )
       @timestamps.delete( sock )
       info = @infos.delete( sock )
 

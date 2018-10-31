@@ -20,9 +20,8 @@ module Girl
 
     def initialize( roomd_host, roomd_port, p1_info, tmp_dir = '/tmp/p2p2' )
       @reads = []
-      @writes = []
+      @writes = {} # sock => ''
       @roles = {} # sock => :room / :p2 / :appd / :app
-      @buffs = {} # sock => ''
       @timestamps = {} # sock => push_to_reads_or_writes.timestamp
       @twins = {} # app <=> p2
       @p1_info = p1_info
@@ -43,14 +42,13 @@ module Girl
 
       @reads << room
       @roles[ room ] = :room
-      @buffs[ room ] = "come#{ p1_host }:#{ p1_port }"
-      @writes << room
+      @writes[ room ] = "come#{ p1_host }:#{ p1_port }"
       Dir.mkdir( tmp_dir ) unless Dir.exist?( tmp_dir )
     end
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]
@@ -88,13 +86,12 @@ module Girl
             p2, _ = @roles.find{ | _, role | role == :p2 }
             @reads << app
             @roles[ app ] = :app
-            @buffs[ app ] = ''
+            @writes[ app ] = ''
             @timestamps[ app ] = now
 
             @twins[ app ] = p2
             @twins[ p2 ] = app
-            @buffs[ p2 ] = '!'
-            @writes << p2
+            @writes[ p2 ] = '!'
             @timestamps[ p2 ] = now
           when :p2
             begin
@@ -118,7 +115,7 @@ module Girl
               sock.close
               @reads.delete( sock )
               @roles.delete( sock )
-              @buffs.delete( sock )
+              @writes.delete( sock )
               sleep 1
               p2p
               break
@@ -135,8 +132,7 @@ module Girl
             @timestamps[ sock ] = now
 
             app = @twins[ sock ]
-            @buffs[ app ] << data
-            @writes << app
+            @writes[ app ] << data
             @timestamps[ app ] = now
           when :app
             begin
@@ -157,15 +153,14 @@ module Girl
             @timestamps[ sock ] = now
 
             p2 = @twins[ sock ]
-            @buffs[ p2 ] << data
-            @writes << p2
+            @writes[ p2 ] << data
             @timestamps[ p2 ] = now
           end
         end
 
         writable_socks.each do | sock |
           begin
-            written = sock.write_nonblock( @buffs[ sock ] )
+            written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
             check_timeout( sock, e )
             next
@@ -179,13 +174,11 @@ module Girl
           end
 
           @timestamps[ sock ] = Time.new
-          @buffs[ sock ] = @buffs[ sock ][ written..-1 ]
+          @writes[ sock ] = @writes[ sock ][ written..-1 ]
 
-          unless @buffs[ sock ].empty?
+          unless @writes[ sock ].empty?
             next
           end
-
-          @writes.delete( sock )
 
           if @connect_p1_after_write
             p2p
@@ -198,7 +191,7 @@ module Girl
 
             @reads << appd
             @roles[ appd ] = :appd
-            @buffs[ appd ] = ''
+            @writes[ appd ] = ''
             @tmp_path = File.join( @tmp_dir, "#{ appd.local_address.ip_unpack.last }--#{ @p1_info }" )
             File.open( @tmp_path, 'w' )
 
@@ -214,7 +207,6 @@ module Girl
       @reads.clear
       @writes.clear
       @roles.clear
-      @buffs.clear
       @timestamps.clear
       @twins.clear
 
@@ -243,7 +235,7 @@ module Girl
 
       @reads << p2
       @roles[ p2 ] = :p2
-      @buffs[ p2 ] = ''
+      @writes[ p2 ] = ''
     end
 
   end

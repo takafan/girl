@@ -17,9 +17,8 @@ module Girl
 
     def initialize( roomd_host, roomd_port, appd_host = '127.0.0.1', appd_port = 22, timeout = 1800, room_title = nil )
       @reads = []
-      @writes = []
+      @writes = {} # sock => ''
       @roles = {}  # sock => :room / :mirr / :app
-      @buffs = {} # sock => ''
       @timestamps = {} # sock => push_to_reads_or_writes.timestamp
       @twins = {} # mirr <=> app
       @close_after_writes = {} # sock => exception
@@ -37,7 +36,7 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes, [], @timeout )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys, [], @timeout )
 
         unless readable_socks
           puts "flash #{ Time.new }"
@@ -82,13 +81,13 @@ module Girl
 
               @reads << mirr
               @roles[ mirr ] = :mirr
-              @buffs[ mirr ] = ''
+              @writes[ mirr ] = ''
               @timestamps[ mirr ] = now
               @twins[ mirr ] = app
 
               @reads << app
               @roles[ app ] = :app
-              @buffs[ app ] = ''
+              @writes[ app ] = ''
               @timestamps[ app ] = now
               @twins[ app ] = mirr
 
@@ -125,8 +124,7 @@ module Girl
             @timestamps[ sock ] = now
 
             app = @twins[ sock ]
-            @buffs[ app ] << data
-            @writes << app
+            @writes[ app ] << data
             @timestamps[ app ] = now
           when :app
             begin
@@ -143,15 +141,14 @@ module Girl
             @timestamps[ sock ] = now
 
             mirr = @twins[ sock ]
-            @buffs[ mirr ] << data
-            @writes << mirr
+            @writes[ mirr ] << data
             @timestamps[ mirr ] = now
           end
         end
 
         writable_socks.each do | sock |
           begin
-            written = sock.write_nonblock( @buffs[ sock ] )
+            written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
             check_timeout( sock, e, readable_socks, writable_socks )
             next
@@ -161,9 +158,9 @@ module Girl
           end
 
           @timestamps[ sock ] = Time.new
-          @buffs[ sock ] = @buffs[ sock ][ written..-1 ]
+          @writes[ sock ] = @writes[ sock ][ written..-1 ]
 
-          unless @buffs[ sock ].empty?
+          unless @writes[ sock ].empty?
             next
           end
 
@@ -174,8 +171,6 @@ module Girl
             close_socket( sock )
             next
           end
-
-          @writes.delete( sock )
         end
       end
     end
@@ -186,7 +181,6 @@ module Girl
       @reads.clear
       @writes.clear
       @roles.clear
-      @buffs.clear
       @timestamps.clear
       @twins.clear
       @close_after_writes.clear
@@ -201,7 +195,6 @@ module Girl
       @reads.clear
       @writes.clear
       @roles.clear
-      @buffs.clear
       @timestamps.clear
       @twins.clear
       @close_after_writes.clear
@@ -215,8 +208,7 @@ module Girl
         @roles[ sock ] = :room
 
         if @room_title
-          @buffs[ sock ] = @room_title.unpack( "C*" ).map{ | c | c.chr }.join
-          @writes << sock
+          @writes[ sock ] = @room_title.unpack( "C*" ).map{ | c | c.chr }.join
         end
       end
     end
@@ -254,7 +246,6 @@ module Girl
       @reads.delete( sock )
       @writes.delete( sock )
       @roles.delete( sock )
-      @buffs.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
     end

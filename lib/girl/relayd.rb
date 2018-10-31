@@ -10,9 +10,8 @@ module Girl
       end
 
       @reads = []
-      @writes = []
+      @writes = {} # sock => ''
       @roles = {} # :relayd / :relay / :dest
-      @buffs = {} # sock => ''
       @timestamps = {} # sock => push_to_reads_or_writes.timestamp
       @twins = {} # relay <=> dest
       @close_after_writes = {} # sock => exception
@@ -32,7 +31,7 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]
@@ -47,7 +46,7 @@ module Girl
 
             @reads << relay
             @roles[ relay ] = :relay
-            @buffs[ relay ] = ''
+            @writes[ relay ] = ''
             @timestamps[ relay ] = Time.new
             @addrs[ relay ] = addr
           when :relay
@@ -79,7 +78,7 @@ module Girl
               dest.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
               @reads << dest
               @roles[ dest ] = :dest
-              @buffs[ dest ] = ''
+              @writes[ dest ] = ''
               @timestamps[ dest ] = now
               @twins[ dest ] = sock
               @twins[ sock ] = dest
@@ -97,8 +96,7 @@ module Girl
               end
             end
 
-            @buffs[ dest ] << data
-            @writes << dest
+            @writes[ dest ] << data
             @timestamps[ dest ] = now
           when :dest
             begin
@@ -115,15 +113,14 @@ module Girl
             @timestamps[ sock ] = now
 
             relay = @twins[ sock ]
-            @buffs[ relay ] << @xeh.swap( data )
-            @writes << relay
+            @writes[ relay ] << @xeh.swap( data )
             @timestamps[ relay ] = now
           end
         end
 
         writable_socks.each do | sock |
           begin
-            written = sock.write_nonblock( @buffs[ sock ] )
+            written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e # WaitReadable for SSL renegotiation
             check_timeout( sock, e, readable_socks, writable_socks )
             next
@@ -133,9 +130,9 @@ module Girl
           end
 
           @timestamps[ sock ] = Time.new
-          @buffs[ sock ] = @buffs[ sock ][ written..-1 ]
+          @writes[ sock ] = @writes[ sock ][ written..-1 ]
 
-          unless @buffs[ sock ].empty?
+          unless @writes[ sock ].empty?
             next
           end
 
@@ -146,8 +143,6 @@ module Girl
             close_socket( sock )
             next
           end
-
-          @writes.delete( sock )
         end
       end
     end
@@ -158,7 +153,6 @@ module Girl
       @reads.clear
       @writes.clear
       @roles.clear
-      @buffs.clear
       @timestamps.clear
       @twins.clear
       @close_after_writes.clear
@@ -201,7 +195,6 @@ module Girl
       @reads.delete( sock )
       @writes.delete( sock )
       @roles.delete( sock )
-      @buffs.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
     end
