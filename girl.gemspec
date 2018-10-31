@@ -28,6 +28,7 @@ lib/girl/relayd.rb
 lib/girl/resolv.rb
 lib/girl/resolvd.rb
 lib/girl/socks.rb
+lib/girl/usr.rb
 lib/girl/version.rb
 lib/girl/xeh.rb
   ]

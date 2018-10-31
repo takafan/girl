@@ -13,6 +13,7 @@
 #
 # 6. ssh -p45678 libo@127.0.0.1
 #
+require 'girl/usr'
 require 'socket'
 
 module Girl
@@ -31,6 +32,7 @@ module Girl
       p1_host, p1_port = p1_info[ 0, p1_info.index( '-' ) ].split( ':' )
       @p1_sockaddr = Socket.sockaddr_in( p1_port, p1_host )
       @rep2p = 0
+      @usr = Girl::Usr.new
 
       room = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       room.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
@@ -132,7 +134,7 @@ module Girl
             @timestamps[ sock ] = now
 
             app = @twins[ sock ]
-            @writes[ app ] << data
+            @writes[ app ] << @usr.swap( data )
             @timestamps[ app ] = now
           when :app
             begin
@@ -153,7 +155,7 @@ module Girl
             @timestamps[ sock ] = now
 
             p2 = @twins[ sock ]
-            @writes[ p2 ] << data
+            @writes[ p2 ] << @usr.swap( data )
             @timestamps[ p2 ] = now
           end
         end

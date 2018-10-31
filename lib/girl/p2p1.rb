@@ -1,3 +1,4 @@
+require 'girl/usr'
 require 'socket'
 
 module Girl
@@ -16,6 +17,7 @@ module Girl
       @timeout = timeout
       @room_title = room_title
       @reconn = 0
+      @usr = Girl::Usr.new
 
       connect_roomd
     end
@@ -128,7 +130,7 @@ module Girl
               end
             end
 
-            @writes[ app ] << data
+            @writes[ app ] << @usr.swap( data )
             @timestamps[ app ] = now
           when :app
             begin
@@ -146,7 +148,7 @@ module Girl
             @timestamps[ sock ] = now
 
             p1 = @twins[ sock ]
-            @writes[ p1 ] << data
+            @writes[ p1 ] << @usr.swap( data )
             @timestamps[ p1 ] = now
           end
         end
