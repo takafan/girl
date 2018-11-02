@@ -7,7 +7,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {} # :roomd / :room
-      @timestamps = {} # sock => push_to_reads_or_writes.timestamp
+      @timestamps = {} # sock => r/w.timestamp
       @tmp_dir = tmp_dir
       @room_timeout = room_timeout
       @infos = {} # pending_room => { ip_port: '6.6.6.6:12345', tmp_path: '/tmp/p2pr/6.6.6.6:12345' }
@@ -26,7 +26,7 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]

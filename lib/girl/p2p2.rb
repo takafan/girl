@@ -23,7 +23,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {} # sock => :room / :p2 / :appd / :app
-      @timestamps = {} # sock => push_to_reads_or_writes.timestamp
+      @timestamps = {} # sock => r/w.timestamp
       @twins = {} # app <=> p2
       @p1_info = p1_info
       @tmp_dir = tmp_dir
@@ -50,7 +50,7 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]

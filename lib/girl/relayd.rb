@@ -12,7 +12,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {} # :relayd / :relay / :dest
-      @timestamps = {} # sock => push_to_reads_or_writes.timestamp
+      @timestamps = {} # sock => r/w.timestamp
       @twins = {} # relay <=> dest
       @close_after_writes = {} # sock => exception
       @addrs = {} # sock => addrinfo
@@ -21,6 +21,7 @@ module Girl
       relayd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relayd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       relayd.bind( Socket.pack_sockaddr_in( port, '0.0.0.0' ) )
       relayd.listen( 128 ) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
       puts "p#{ Process.pid } listening on #{ port }"
@@ -31,23 +32,31 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]
           when :relayd
-            print "p#{ Process.pid } #{ Time.new } "
+            now = Time.new
+            print "p#{ Process.pid } #{ now } "
+
+            @timestamps.select{ | so, stamp | ( @roles[ so ] == :relay ) && ( now - stamp > 600 ) }.each do | so, _ |
+              deal_io_exception( so, EOFError.new, readable_socks, writable_socks )
+            end
 
             begin
               relay, addr = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR
               next
+            rescue Errno::EMFILE => e
+              puts e.class
+              quit!
             end
 
             @reads << relay
             @roles[ relay ] = :relay
             @writes[ relay ] = ''
-            @timestamps[ relay ] = Time.new
+            @timestamps[ relay ] = now
             @addrs[ relay ] = addr
           when :relay
             begin
@@ -172,11 +181,11 @@ module Girl
     def deal_io_exception( sock, e, readable_socks, writable_socks )
       twin = @twins[ sock ]
       close_socket( sock )
+      readable_socks.delete( sock )
+      writable_socks.delete( sock )
 
       if twin
-        if @writes.include?( twin )
-          @reads.delete( twin )
-          @twins.delete( twin )
+        if @writes[ twin ] && !@writes[ twin ].empty?
           @close_after_writes[ twin ] = e
         else
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
@@ -186,8 +195,6 @@ module Girl
 
         readable_socks.delete( twin )
       end
-
-      writable_socks.delete( sock )
     end
 
     def close_socket( sock )
@@ -197,6 +204,7 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
+      @close_after_writes.delete( sock )
     end
 
   end

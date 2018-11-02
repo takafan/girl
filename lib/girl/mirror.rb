@@ -19,7 +19,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {}  # sock => :room / :mirr / :app
-      @timestamps = {} # sock => push_to_reads_or_writes.timestamp
+      @timestamps = {} # sock => r/w.timestamp
       @twins = {} # mirr <=> app
       @close_after_writes = {} # sock => exception
       @roomd_host = roomd_host
@@ -36,7 +36,7 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys, [], @timeout )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys, [], @timeout )
 
         unless readable_socks
           puts "flash #{ Time.new }"
@@ -223,11 +223,11 @@ module Girl
     def deal_io_exception( sock, e, readable_socks, writable_socks )
       twin = @twins[ sock ]
       close_socket( sock )
+      readable_socks.delete( sock )
+      writable_socks.delete( sock )
 
       if twin
-        if @writes.include?( twin )
-          @reads.delete( twin )
-          @twins.delete( twin )
+        if @writes[ twin ] && !@writes[ twin ].empty?
           @close_after_writes[ twin ] = e
         else
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
@@ -237,8 +237,6 @@ module Girl
 
         readable_socks.delete( twin )
       end
-
-      writable_socks.delete( sock )
     end
 
     def close_socket( sock )
@@ -248,6 +246,7 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
+      @close_after_writes.delete( sock )
     end
 
   end

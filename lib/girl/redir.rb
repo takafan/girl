@@ -26,7 +26,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {} # :redir / :source / :relay
-      @timestamps = {} # sock => push_to_reads_or_writes.timestamp
+      @timestamps = {} # sock => r/w.timestamp
       @twins = {} # source <=> relay
       @close_after_writes = {} # sock => exception
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
@@ -35,6 +35,7 @@ module Girl
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       redir.bind( Socket.pack_sockaddr_in( redir_port, '0.0.0.0' ) )
       redir.listen( 128 )
       puts "p#{ Process.pid } listening on #{ redir_port }"
@@ -45,20 +46,27 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]
           when :redir
-            print "p#{ Process.pid } #{ Time.new } "
+            now = Time.new
+            print "p#{ Process.pid } #{ now } "
+
+            @timestamps.select{ | so, stamp | ( @roles[ so ] == :source ) && ( now - stamp > 600 ) }.each do | so, _ |
+              deal_io_exception( so, EOFError.new, readable_socks, writable_socks )
+            end
 
             begin
               source, _ = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR
               next
+            rescue Errno::EMFILE => e
+              puts e.class
+              quit!
             end
 
-            now = Time.new
             @reads << source
             @roles[ source ] = :source
             @writes[ source ] = ''
@@ -183,11 +191,11 @@ module Girl
     def deal_io_exception( sock, e, readable_socks, writable_socks )
       twin = @twins[ sock ]
       close_socket( sock )
+      readable_socks.delete( sock )
+      writable_socks.delete( sock )
 
       if twin
-        if @writes.include?( twin )
-          @reads.delete( twin )
-          @twins.delete( twin )
+        if @writes[ twin ] && !@writes[ twin ].empty?
           @close_after_writes[ twin ] = e
         else
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
@@ -197,8 +205,6 @@ module Girl
 
         readable_socks.delete( twin )
       end
-
-      writable_socks.delete( sock )
     end
 
     def close_socket( sock )
@@ -208,6 +214,7 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
+      @close_after_writes.delete( sock )
     end
 
   end

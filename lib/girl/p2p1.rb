@@ -8,7 +8,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {}  # sock => :room / :p1 / :app
-      @timestamps = {} # sock => push_to_reads_or_writes.timestamp
+      @timestamps = {} # sock => r/w.timestamp
       @twins = {} # p1 <=> app
       @roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       @appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
@@ -24,7 +24,7 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ |_, buff| !buff.empty? }.keys, [], @timeout )
+        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys, [], @timeout )
 
         unless readable_socks
           puts "flash #{ Time.new }"
