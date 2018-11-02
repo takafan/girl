@@ -230,7 +230,6 @@ module Girl
         if @writes[ twin ] && !@writes[ twin ].empty?
           @close_after_writes[ twin ] = e
         else
-          twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
           close_socket( twin )
           writable_socks.delete( twin )
         end
