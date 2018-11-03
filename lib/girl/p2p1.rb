@@ -39,7 +39,6 @@ module Girl
               data = sock.read_nonblock( 4096 )
               @reconn = 0
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e )
               next
             rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
               if e.is_a?( EOFError )
@@ -92,7 +91,6 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e )
               next
             rescue Exception => e
               puts "r #{ @roles[ sock ] } #{ e.class }, flash a room"
@@ -136,7 +134,6 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e )
               next
             rescue Exception => e
               puts "r #{ @roles[ sock ] } #{ e.class }, flash a room"
@@ -157,7 +154,6 @@ module Girl
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-            check_timeout( sock, e )
             next
           rescue Exception => e
             puts "w #{ @roles[ sock ] } #{ e.class }, flash a room"
@@ -188,13 +184,6 @@ module Girl
     end
 
     private
-
-    def check_timeout( sock, e )
-      if Time.new - @timestamps[ sock ] >= 5
-        puts "#{ @roles[ sock ] } #{ e.class } timeout"
-        connect_roomd
-      end
-    end
 
     def connect_roomd
       @reads.each{ | sock | sock.close }

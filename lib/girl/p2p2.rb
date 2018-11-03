@@ -58,7 +58,6 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e )
               next
             rescue Exception => e
               begin
@@ -99,7 +98,6 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e )
               next
             rescue Errno::ECONNREFUSED => e
               if @rep2p > 10
@@ -140,7 +138,6 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e )
               next
             rescue Exception => e
               begin
@@ -164,7 +161,6 @@ module Girl
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-            check_timeout( sock, e )
             next
           rescue Exception => e
             begin
@@ -216,13 +212,6 @@ module Girl
     end
 
     private
-
-    def check_timeout( sock, e )
-      if Time.new - @timestamps[ sock ] >= 5
-        puts "#{ @roles[ sock ] } #{ e.class } timeout"
-        raise e
-      end
-    end
 
     def p2p
       p2 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )

@@ -58,7 +58,6 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
-              check_timeout( sock, writable_socks )
               next
             rescue Exception => e
               close_socket( sock, writable_socks )
@@ -122,7 +121,6 @@ module Girl
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
-            check_timeout( sock, writable_socks )
             next
           rescue Exception => e
             close_socket( sock, writable_socks )
@@ -151,13 +149,6 @@ module Girl
     end
 
     private
-
-    def check_timeout( sock, writable_socks )
-      if Time.new - @timestamps[ sock ] >= 5
-        puts "#{ @roles[ sock ] } #{ e.class } timeout"
-        close_socket( sock, writable_socks )
-      end
-    end
 
     def close_socket( sock, writable_socks )
       sock.close

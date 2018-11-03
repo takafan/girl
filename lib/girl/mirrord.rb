@@ -9,7 +9,6 @@ module Girl
       @roles = {} # sock => # :roomd / :appd / :mirrd / :room / :app / :mirr
       @timestamps = {} # sock => r/w.timestamp
       @twins = {} # app <=> mirr
-      @close_after_writes = {} # sock => exception
       @pending_apps = {} # app => appd
       @appd_infos = {} # appd => { room: room, mirrd: mirrd, pending_apps: { app: '' }, linked_apps: { app: mirr } }
       @appd_host = appd_host
@@ -40,7 +39,7 @@ module Girl
             # clients' eof may dropped by its upper gateway.
             # so check timeouted rooms on server side too.
             @timestamps.select{ | so, stamp | ( @roles[ so ] == :room ) && ( now - stamp > @room_timeout ) }.each do | so, _ |
-              deal_io_exception( so, EOFError.new, readable_socks, writable_socks )
+              close_socket( so )
             end
 
             begin
@@ -132,10 +131,9 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( 'r', sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, e, readable_socks, writable_socks )
+              close_socket( sock )
               next
             end
 
@@ -155,27 +153,32 @@ module Girl
                 File.open( tmp_path, 'w' )
               rescue Errno::ENOENT, ArgumentError => e
                 puts "open tmp path #{ e.class }"
-                deal_io_exception( sock, e, readable_socks, writable_socks )
+                close_socket( sock )
                 next
               end
 
               appd_info[ :tmp_path ] = tmp_path
             end
           when :app
+            mirr = @twins[ sock ]
+
+            if mirr && mirr.closed?
+              close_socket( sock )
+              next
+            end
+
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( 'r', sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, e, readable_socks, writable_socks )
+              close_socket( sock )
               next
             end
 
             now = Time.new
             @timestamps[ sock ] = now
 
-            mirr = @twins[ sock ]
             unless mirr
               appd = @pending_apps[ sock ]
               appd_info = @appd_infos[ appd ]
@@ -186,20 +189,24 @@ module Girl
             @writes[ mirr ] << data
             @timestamps[ mirr ] = now
           when :mirr
+            app = @twins[ sock ]
+
+            if app.closed?
+              close_socket( sock )
+              next
+            end
+
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( 'r', sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, e, readable_socks, writable_socks )
+              close_socket( sock )
               next
             end
 
             now = Time.new
             @timestamps[ sock ] = now
-
-            app = @twins[ sock ]
             @writes[ app ] << data
             @timestamps[ app ] = now
 
@@ -210,35 +217,25 @@ module Girl
         end
 
         writable_socks.each do | sock |
+          if sock.closed?
+            next
+          end
+          
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-            check_timeout( 'w', sock, e, readable_socks, writable_socks )
             next
           rescue Exception => e
-            deal_io_exception( sock, e, readable_socks, writable_socks )
+            close_socket( sock )
             next
           end
 
           @timestamps[ sock ] = Time.new
           @writes[ sock ] = @writes[ sock ][ written..-1 ]
-
-          unless @writes[ sock ].empty?
-            next
-          end
-
-          e = @close_after_writes.delete( sock )
-
-          if e
-            sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-            close_socket( sock )
-            next
-          end
         end
       end
     end
 
-    # quit! in Signal.trap :TERM
     def quit!
       @reads.each{ | sock | sock.close }
       @reads.clear
@@ -246,39 +243,23 @@ module Girl
       @roles.clear
       @timestamps.clear
       @twins.clear
-      @close_after_writes.clear
       @pending_apps.clear
       @appd_infos.clear
-
       exit
     end
 
     private
 
-    def check_timeout( sock, e, readable_socks, writable_socks )
-      if Time.new - @timestamps[ sock ] >= 5
-        puts "#{ @roles[ sock ] } #{ e.class } timeout"
-        deal_io_exception( sock, e, readable_socks, writable_socks )
-      end
-    end
-
-    def deal_io_exception( sock, e, readable_socks, writable_socks )
+    def close_socket( sock )
       role = @roles[ sock ]
       twin = @twins[ sock ]
-      close_socket( sock )
-      readable_socks.delete( sock )
-      writable_socks.delete( sock )
 
-      if twin
-        if @writes[ twin ] && !@writes[ twin ].empty?
-          @close_after_writes[ twin ] = e
-        else
-          close_socket( twin )
-          writable_socks.delete( twin )
-        end
-
-        readable_socks.delete( twin )
-      end
+      sock.close
+      @reads.delete( sock )
+      @writes.delete( sock )
+      @roles.delete( sock )
+      @timestamps.delete( sock )
+      @twins.delete( sock )
 
       case role
       when :room
@@ -328,16 +309,6 @@ module Girl
           appd_info[ :linked_apps ].delete( twin )
         end
       end
-    end
-
-    def close_socket( sock )
-      sock.close
-      @reads.delete( sock )
-      @writes.delete( sock )
-      @roles.delete( sock )
-      @timestamps.delete( sock )
-      @twins.delete( sock )
-      @close_after_writes.delete( sock )
     end
 
   end

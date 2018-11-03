@@ -19,7 +19,6 @@ module Girl
       @procs = {} # source => :connect / :request / :passing
       @timestamps = {} # sock => r/w.timestamp
       @twins = {} # source <=> relay
-      @close_after_writes = {} # sock => exception
       @dns = Resolv::DNS.new( nameserver_port: [ [ resolv_host, resolv_port ] ] )
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
@@ -46,7 +45,6 @@ module Girl
             begin
               source, _ = sock.accept_nonblock
             rescue IO::WaitReadable, Errno::EINTR
-              print ' a'
               next
             end
 
@@ -59,10 +57,9 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, e, readable_socks, writable_socks )
+              close_socket( sock )
               next
             end
 
@@ -108,20 +105,21 @@ module Girl
               end
 
               relay = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+
+              begin
+                relay.connect_nonblock( @relayd_sockaddr )
+              rescue IO::WaitWritable, Errno::EINTR
+              rescue Exception => e
+                relay.close
+                next
+              end
+
               @reads << relay
               @roles[ relay ] = :relay
               @writes[ relay ] = @hex.swap( @hex.mix( dst_host, dst_port ) )
               @timestamps[ relay ] = now
               @twins[ relay ] = sock
               @twins[ sock ] = relay
-
-              begin
-                relay.connect_nonblock( @relayd_sockaddr )
-              rescue IO::WaitWritable, Errno::EINTR
-              rescue Exception => e
-                deal_io_exception( relay, e, readable_socks, writable_socks )
-                next
-              end
 
               # +----+-----+-------+------+----------+----------+
               # |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -141,10 +139,9 @@ module Girl
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              check_timeout( sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, e, readable_socks, writable_socks )
+              close_socket( sock )
               next
             end
 
@@ -158,35 +155,25 @@ module Girl
         end
 
         writable_socks.each do | sock |
+          if sock.closed?
+            next
+          end
+
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-            check_timeout( sock, e, readable_socks, writable_socks )
             next
           rescue Exception => e
-            deal_io_exception( sock, e, readable_socks, writable_socks )
+            close_socket( sock )
             next
           end
 
           @timestamps[ sock ] = Time.new
           @writes[ sock ] = @writes[ sock ][ written..-1 ]
-
-          unless @writes[ sock ].empty?
-            next
-          end
-
-          e = @close_after_writes.delete( sock )
-
-          if e
-            sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-            close_socket( sock )
-            next
-          end
         end
       end
     end
 
-    # quit! in Signal.trap :TERM
     def quit!
       @reads.each{ | sock | sock.close }
       @reads.clear
@@ -194,37 +181,10 @@ module Girl
       @roles.clear
       @timestamps.clear
       @twins.clear
-      @close_after_writes.clear
-
       exit
     end
 
     private
-
-    def check_timeout( sock, e, readable_socks, writable_socks )
-      if Time.new - @timestamps[ sock ] >= 5
-        puts "#{ @roles[ sock ] } #{ e.class } timeout"
-        deal_io_exception( sock, e, readable_socks, writable_socks )
-      end
-    end
-
-    def deal_io_exception( sock, e, readable_socks, writable_socks )
-      twin = @twins[ sock ]
-      close_socket( sock )
-      readable_socks.delete( sock )
-      writable_socks.delete( sock )
-
-      if twin
-        if @writes[ twin ] && !@writes[ twin ].empty?
-          @close_after_writes[ twin ] = e
-        else
-          close_socket( twin )
-          writable_socks.delete( twin )
-        end
-
-        readable_socks.delete( twin )
-      end
-    end
 
     def close_socket( sock )
       sock.close
@@ -233,7 +193,6 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
-      @close_after_writes.delete( sock )
     end
 
   end

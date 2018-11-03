@@ -24,11 +24,11 @@ module Girl
       end
 
       @reads = []
+      @delays = []
       @writes = {} # sock => ''
       @roles = {} # :redir / :source / :relay
       @timestamps = {} # sock => r/w.timestamp
       @twins = {} # source <=> relay
-      @close_after_writes = {} # sock => exception
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
 
@@ -54,8 +54,8 @@ module Girl
             now = Time.new
             print "p#{ Process.pid } #{ now } "
 
-            @timestamps.select{ | so, stamp | ( @roles[ so ] == :source ) && ( now - stamp > 600 ) }.each do | so, _ |
-              deal_io_exception( so, EOFError.new, readable_socks, writable_socks )
+            @timestamps.select{ | so, stamp | ( [ :source, :relay ].include?( @roles[ so ] ) ) && ( now - stamp > 600 ) }.each do | so, _ |
+              close_socket( so )
             end
 
             begin
@@ -67,153 +67,138 @@ module Girl
               quit!
             end
 
-            @reads << source
-            @roles[ source ] = :source
-            @writes[ source ] = ''
-            @timestamps[ source ] = now
-
             begin
               # SO_ORIGINAL_DST
               # https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter_ipv4.h
               dst_addr = source.getsockopt( Socket::SOL_IP, 80 )
             rescue Exception => e
               puts "get SO_ORIGINAL_DST #{ e.class }"
-              close_socket( source )
+              source.close
               next
             end
 
             dst_family, dst_port, dst_host = dst_addr.unpack( 'nnN' )
             relay = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
             relay.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-            @reads << relay
-            @roles[ relay ] = :relay
-            @twins[ relay ] = source
-            @twins[ source ] = relay
 
             begin
               relay.connect_nonblock( @relayd_sockaddr )
             rescue IO::WaitWritable, Errno::EINTR
             rescue Exception => e
-              deal_io_exception( relay, e, readable_socks, writable_socks )
+              puts "connect relayd #{ e.class }"
+              relay.close
               next
             end
 
+            @reads << source
+            @roles[ source ] = :source
+            @writes[ source ] = ''
+            @timestamps[ source ] = now
+            @twins[ source ] = relay
+
+            @reads << relay
+            @roles[ relay ] = :relay
             @writes[ relay ] = @hex.swap( @hex.mix( dst_host, dst_port ) )
             @timestamps[ relay ] = now
+            @twins[ relay ] = source
           when :source
+            relay = @twins[ sock ]
+
+            if relay.closed?
+              close_socket( sock )
+              next
+            end
+
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e # WaitWritable for SSL renegotiation
-              check_timeout( sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, e, readable_socks, writable_socks )
+              close_socket( sock )
               next
             end
 
             now = Time.new
             @timestamps[ sock ] = now
-
-            relay = @twins[ sock ]
             @writes[ relay ] << @hex.swap( data )
             @timestamps[ relay ] = now
+
+            if @writes[ relay ].size >= 4194304
+              @delays << @reads.delete( sock )
+            end
           when :relay
+            source = @twins[ sock ]
+
+            if source.closed?
+              close_socket( sock )
+              next
+            end
+
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e  # WaitWritable for SSL renegotiation
-              check_timeout( sock, e, readable_socks, writable_socks )
               next
             rescue Exception => e
-              deal_io_exception( sock, e, readable_socks, writable_socks )
+              close_socket( sock )
               next
             end
 
             now = Time.new
             @timestamps[ sock ] = now
-
-            source = @twins[ sock ]
             @writes[ source ] << @hex.swap( data )
             @timestamps[ source ] = now
+
+            if @writes[ source ].size >= 4194304
+              @delays << @reads.delete( sock )
+            end
           end
         end
 
         writable_socks.each do | sock |
+          if sock.closed?
+            next
+          end
+
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e # WaitReadable for SSL renegotiation
-            check_timeout( sock, e, readable_socks, writable_socks )
             next
           rescue Exception => e
-            deal_io_exception( sock, e, readable_socks, writable_socks )
+            close_socket( sock )
             next
           end
 
           @timestamps[ sock ] = Time.new
           @writes[ sock ] = @writes[ sock ][ written..-1 ]
 
-          unless @writes[ sock ].empty?
-            next
-          end
-
-          e = @close_after_writes.delete( sock )
-
-          if e
-            sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) ) unless e.is_a?( EOFError )
-            close_socket( sock )
-            next
+          if @writes[ sock ].empty? && @delays.include?( sock )
+            @reads << @delays.delete( sock )
           end
         end
       end
     end
 
-    # quit! in Signal.trap :TERM
     def quit!
-      @reads.each{ | sock | sock.close }
+      @writes.each{ | sock, _ | sock.close }
       @reads.clear
+      @delays.clear
       @writes.clear
       @roles.clear
       @timestamps.clear
       @twins.clear
-      @close_after_writes.clear
-
       exit
     end
 
     private
 
-    def check_timeout( sock, e, readable_socks, writable_socks )
-      if Time.new - @timestamps[ sock ] >= 5
-        puts "#{ @roles[ sock ] } #{ e.class } timeout"
-        deal_io_exception( sock, e, readable_socks, writable_socks )
-      end
-    end
-
-    def deal_io_exception( sock, e, readable_socks, writable_socks )
-      twin = @twins[ sock ]
-      close_socket( sock )
-      readable_socks.delete( sock )
-      writable_socks.delete( sock )
-
-      if twin
-        if @writes[ twin ] && !@writes[ twin ].empty?
-          @close_after_writes[ twin ] = e
-        else
-          close_socket( twin )
-          writable_socks.delete( twin )
-        end
-
-        readable_socks.delete( twin )
-      end
-    end
-
     def close_socket( sock )
       sock.close
       @reads.delete( sock )
+      @delays.delete( sock )
       @writes.delete( sock )
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
-      @close_after_writes.delete( sock )
     end
 
   end
