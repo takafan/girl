@@ -19,8 +19,9 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {}  # sock => :room / :mirr / :app
-      @timestamps = {} # sock => r/w.timestamp
+      @timestamps = {} # sock => last r/w
       @twins = {} # mirr <=> app
+      @close_after_writes = {} # sock => exception
       @roomd_host = roomd_host
       @roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       @room_title = room_title
@@ -122,6 +123,7 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+              @close_after_writes[ app ] = e
               next
             end
 
@@ -143,6 +145,7 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+              @close_after_writes[ mirr ] = e
               next
             end
 
@@ -164,11 +167,24 @@ module Girl
             next
           rescue Exception => e
             close_socket( sock )
+
+            if @twins[ sock ]
+              @close_after_writes[ @twins[ sock ] ] = e
+            end
+
             next
           end
 
           @timestamps[ sock ] = Time.new
           @writes[ sock ] = @writes[ sock ][ written..-1 ]
+
+          if @writes[ sock ].empty? && @close_after_writes.include?( sock )
+            unless @close_after_writes[ sock ].is_a?( EOFError )
+              sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+            end
+
+            close_socket( sock )
+          end
         end
       end
     end
@@ -180,6 +196,7 @@ module Girl
       @roles.clear
       @timestamps.clear
       @twins.clear
+      @close_after_writes.clear
       exit
     end
 
@@ -192,6 +209,7 @@ module Girl
       @roles.clear
       @timestamps.clear
       @twins.clear
+      @close_after_writes.clear
 
       sock = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
 
@@ -214,6 +232,7 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
+      @close_after_writes.delete( sock )
     end
 
   end

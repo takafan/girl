@@ -23,7 +23,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {} # sock => :room / :p2 / :appd / :app
-      @timestamps = {} # sock => r/w.timestamp
+      @timestamps = {} # sock => last r/w
       @twins = {} # app <=> p2
       @p1_info = p1_info
       @tmp_dir = tmp_dir

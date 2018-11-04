@@ -8,7 +8,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {}  # sock => :room / :p1 / :app
-      @timestamps = {} # sock => r/w.timestamp
+      @timestamps = {} # sock => last r/w
       @twins = {} # p1 <=> app
       @roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       @appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )

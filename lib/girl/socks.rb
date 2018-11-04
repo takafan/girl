@@ -17,8 +17,9 @@ module Girl
       @writes = {} # sock => ''
       @roles = {} # :socks5 / :source / :relay
       @procs = {} # source => :connect / :request / :passing
-      @timestamps = {} # sock => r/w.timestamp
+      @timestamps = {} # source / relay => last r/w
       @twins = {} # source <=> relay
+      @close_after_writes = {} # sock => exception
       @dns = Resolv::DNS.new( nameserver_port: [ [ resolv_host, resolv_port ] ] )
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
@@ -60,6 +61,11 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+
+              if @twins[ sock ]
+                @close_after_writes[  @twins[ sock ] ] = e
+              end
+
               next
             end
 
@@ -142,6 +148,11 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+
+              if @twins[ sock ]
+                @close_after_writes[  @twins[ sock ] ] = e
+              end
+
               next
             end
 
@@ -165,11 +176,24 @@ module Girl
             next
           rescue Exception => e
             close_socket( sock )
+
+            if @twins[ sock ]
+              @close_after_writes[  @twins[ sock ] ] = e
+            end
+
             next
           end
 
           @timestamps[ sock ] = Time.new
           @writes[ sock ] = @writes[ sock ][ written..-1 ]
+
+          if @writes[ sock ].empty? && @close_after_writes.include?( sock )
+            unless @close_after_writes[ sock ].is_a?( EOFError )
+              sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+            end
+
+            close_socket( sock )
+          end
         end
       end
     end
@@ -181,6 +205,7 @@ module Girl
       @roles.clear
       @timestamps.clear
       @twins.clear
+      @close_after_writes.clear
       exit
     end
 
@@ -193,6 +218,7 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
+      @close_after_writes.delete( sock )
     end
 
   end

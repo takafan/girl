@@ -7,8 +7,9 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {} # sock => # :roomd / :appd / :mirrd / :room / :app / :mirr
-      @timestamps = {} # sock => r/w.timestamp
+      @timestamps = {} # sock => last r/w
       @twins = {} # app <=> mirr
+      @close_after_writes = {} # sock => exception
       @pending_apps = {} # app => appd
       @appd_infos = {} # appd => { room: room, mirrd: mirrd, pending_apps: { app: '' }, linked_apps: { app: mirr } }
       @appd_host = appd_host
@@ -173,6 +174,7 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+              @close_after_writes[ mirr ] = e
               next
             end
 
@@ -202,6 +204,7 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+              @close_after_writes[ app ] = e
               next
             end
 
@@ -220,18 +223,31 @@ module Girl
           if sock.closed?
             next
           end
-          
+
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
             next
           rescue Exception => e
             close_socket( sock )
+
+            if @twins[ sock ]
+              @close_after_writes[ @twins[ sock ] ] = e
+            end
+
             next
           end
 
           @timestamps[ sock ] = Time.new
           @writes[ sock ] = @writes[ sock ][ written..-1 ]
+
+          if @writes[ sock ].empty? && @close_after_writes.include?( sock )
+            unless @close_after_writes[ sock ].is_a?( EOFError )
+              sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+            end
+
+            close_socket( sock )
+          end
         end
       end
     end
@@ -245,6 +261,7 @@ module Girl
       @twins.clear
       @pending_apps.clear
       @appd_infos.clear
+      @close_after_writes.clear
       exit
     end
 
@@ -260,6 +277,7 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
+      @close_after_writes.delete( sock )
 
       case role
       when :room

@@ -21,6 +21,7 @@ module Girl
       @roles = {} # :relayd / :relay / :dest
       @timestamps = {} # relay / dest => last r/w
       @twins = {} # relay <=> dest
+      @close_after_writes = {} # sock => exception
       @addrs = {} # sock => addrinfo
       @xeh = Girl::Xeh.new
       @chunk_dir = chunk_dir
@@ -80,6 +81,11 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+
+              if dest
+                @close_after_writes[ dest ] = e
+              end
+
               next
             end
 
@@ -135,6 +141,7 @@ module Girl
               next
             rescue Exception => e
               close_socket( sock )
+              @close_after_writes[ relay ] = e
               next
             end
 
@@ -164,6 +171,11 @@ module Girl
             next
           rescue Exception => e
             close_socket( sock )
+
+            if @twins[ sock ]
+              @close_after_writes[ @twins[ sock ] ] = e
+            end
+
             next
           end
 
@@ -174,7 +186,7 @@ module Girl
             @buffs[ sock ] = data
 
             if data.empty?
-              @writes.delete( sock )
+              complete_write( sock )
             end
           else
             if data.empty?
@@ -187,7 +199,7 @@ module Girl
 
               if @chunks[ sock ][ :files ].empty?
                 if @buffs[ sock ].empty?
-                  @writes.delete( sock )
+                  complete_write( sock )
                 else
                   @writes[ sock ] = :buff
                 end
@@ -219,7 +231,8 @@ module Girl
       @roles.clear
       @timestamps.clear
       @twins.clear
-
+      @close_after_writes.clear
+      
       exit
     end
 
@@ -241,6 +254,18 @@ module Girl
       end
     end
 
+    def complete_write( sock )
+      @writes.delete( sock )
+
+      if @close_after_writes.include?( sock )
+        unless @close_after_writes[ sock ].is_a?( EOFError )
+          sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+        end
+
+        close_socket( sock )
+      end
+    end
+
     def close_socket( sock )
       sock.close
       @chunks[ sock ][ :files ].each do | path |
@@ -258,6 +283,7 @@ module Girl
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )
+      @close_after_writes.delete( sock )
     end
 
   end

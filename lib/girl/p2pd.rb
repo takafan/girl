@@ -7,7 +7,7 @@ module Girl
       @reads = []
       @writes = {} # sock => ''
       @roles = {} # :roomd / :room
-      @timestamps = {} # sock => r/w.timestamp
+      @timestamps = {} # sock => last r/w
       @tmp_dir = tmp_dir
       @room_timeout = room_timeout
       @infos = {} # pending_room => { ip_port: '6.6.6.6:12345', tmp_path: '/tmp/p2pr/6.6.6.6:12345' }
@@ -129,10 +129,6 @@ module Girl
 
           @timestamps[ sock ] = Time.new
           @writes[ sock ] = @writes[ sock ][ written..-1 ]
-
-          unless @writes[ sock ].empty?
-            next
-          end
         end
       end
     end
