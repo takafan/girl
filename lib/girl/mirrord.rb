@@ -269,7 +269,6 @@ module Girl
 
     def close_socket( sock )
       role = @roles[ sock ]
-      twin = @twins[ sock ]
 
       sock.close
       @reads.delete( sock )
@@ -319,13 +318,6 @@ module Girl
         appd_info = @appd_infos[ appd ]
         appd_info[ :pending_apps ].delete( sock )
         appd_info[ :linked_apps ].delete( sock )
-      when :mirr
-        if twin
-          appd = @pending_apps.delete( twin )
-          appd_info = @appd_infos[ appd ]
-          appd_info[ :pending_apps ].delete( twin )
-          appd_info[ :linked_apps ].delete( twin )
-        end
       end
     end
 
