@@ -25,7 +25,6 @@ module Girl
 
       @reads << roomd
       @roles[ roomd ] = :roomd
-      Dir.mkdir( tmp_dir ) unless Dir.exist?( tmp_dir )
     end
 
     def looping

@@ -45,7 +45,6 @@ module Girl
       @reads << room
       @roles[ room ] = :room
       @writes[ room ] = "come#{ p1_host }:#{ p1_port }"
-      Dir.mkdir( tmp_dir ) unless Dir.exist?( tmp_dir )
     end
 
     def looping

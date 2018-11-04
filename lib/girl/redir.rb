@@ -23,10 +23,6 @@ module Girl
         Girl::Hex.class_eval( hex_block )
       end
 
-      unless Dir.exist?( chunk_dir )
-        Dir.mkdir( chunk_dir )
-      end
-
       @reads = [] # socks
       @writes = {} # sock => :buff / :cache
       @buffs = {} # sock => 4M working ram

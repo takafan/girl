@@ -9,10 +9,6 @@ module Girl
         Girl::Xeh.class_eval( xeh_block )
       end
 
-      unless Dir.exist?( chunk_dir )
-        Dir.mkdir( chunk_dir )
-      end
-
       @reads = [] # socks
       @writes = {} # sock => :buff / :cache
       @buffs = {} # sock => 4M working ram
@@ -232,7 +228,7 @@ module Girl
       @timestamps.clear
       @twins.clear
       @close_after_writes.clear
-      
+
       exit
     end
 
