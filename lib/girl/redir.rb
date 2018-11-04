@@ -243,7 +243,7 @@ module Girl
         @writes[ sock ] = :buff
       elsif @buffs[ sock ].size >= 4194304
         chunk_path = File.join( @chunk_dir, "#{ Process.pid }-#{ sock.object_id }.#{ @chunks[ sock ][ :seed ] }" )
-        File.open( chunk_path, 'w' ){ | f | f.print @buffs[ sock ] }
+        IO.binwrite( chunk_path, @buffs[ sock ] )
         @chunks[ sock ][ :files ] << chunk_path
         @chunks[ sock ][ :seed ] += 1
         @writes[ sock ] = :cache
