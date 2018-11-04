@@ -31,7 +31,7 @@ module Girl
       @writes = {} # sock => :buff / :cache
       @buffs = {} # sock => 4M working ram
       @caches = {} # sock => the left data of first chunk
-      @chunks = {} # sock => { seed: 0, files: [ /tmp/relayd/{pid}-{object_id}.0, ... ] }
+      @chunks = {} # sock => { seed: 0, files: [ /tmp/redir/{pid}-{object_id}.0, ... ] }
       @roles = {} # :redir / :source / :relay
       @timestamps = {} # source / relay => last r/w
       @twins = {} # source <=> relay
