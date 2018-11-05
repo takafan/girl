@@ -33,7 +33,7 @@ module Girl
             now = Time.new
 
             @timestamps.select{ | _, stamp | now - stamp > @room_timeout }.each do | so, _ |
-              close_socket( so, writable_socks )
+              close_socket( so )
             end
 
             begin
@@ -59,7 +59,7 @@ module Girl
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable
               next
             rescue Exception => e
-              close_socket( sock, writable_socks )
+              close_socket( sock )
               next
             end
 
@@ -81,7 +81,7 @@ module Girl
                 File.open( tmp_path, 'w' )
               rescue Errno::ENOENT, ArgumentError => e
                 puts "open tmp path #{ e.class }"
-                close_socket( sock, writable_socks )
+                close_socket( sock )
                 next
               end
 
@@ -94,7 +94,7 @@ module Girl
 
               unless p1_info
                 sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-                close_socket( sock, writable_socks )
+                close_socket( sock )
                 next
               end
 
@@ -117,12 +117,16 @@ module Girl
         end
 
         writable_socks.each do | sock |
+          if sock.closed?
+            next
+          end
+
           begin
             written = sock.write_nonblock( @writes[ sock ] )
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable
             next
           rescue Exception => e
-            close_socket( sock, writable_socks )
+            close_socket( sock )
             next
           end
 
@@ -132,20 +136,20 @@ module Girl
       end
     end
 
-    # quit! in Signal.trap :TERM
     def quit!
       @reads.each{ | sock | sock.close }
       @reads.clear
       @writes.clear
       @roles.clear
       @timestamps.clear
+      @infos.clear
 
       exit
     end
 
     private
 
-    def close_socket( sock, writable_socks )
+    def close_socket( sock )
       sock.close
       @reads.delete( sock )
       @writes.delete( sock )
@@ -159,8 +163,6 @@ module Girl
         rescue Errno::ENOENT
         end
       end
-
-      writable_socks.delete( sock )
     end
 
   end

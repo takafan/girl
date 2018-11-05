@@ -12,17 +12,21 @@ require 'resolv'
 module Girl
   class Socks
 
-    def initialize( socks_host, socks_port, resolv_host, resolv_port, relayd_host, relayd_port )
-      @reads = []
-      @writes = {} # sock => ''
+    def initialize( socks_host, socks_port, resolv_host, resolv_port, relayd_host, relayd_port, chunk_dir = '/tmp/socks' )
+      @reads = [] # socks
+      @writes = {} # sock => :buff / :cache
+      @buffs = {} # sock => 4M working ram
+      @caches = {} # sock => the left data of first chunk
+      @chunks = {} # sock => { seed: 0, files: [ /tmp/socks/{pid}-{object_id}.0, ... ] }
       @roles = {} # :socks5 / :source / :relay
-      @procs = {} # source => :connect / :request / :passing
       @timestamps = {} # source / relay => last r/w
       @twins = {} # source <=> relay
-      @close_after_writes = {} # sock => exception
-      @dns = Resolv::DNS.new( nameserver_port: [ [ resolv_host, resolv_port ] ] )
+      @close_after_writes = []
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
+      @procs = {} # source => :connect / :request / :passing
+      @dns = Resolv::DNS.new( nameserver_port: [ [ resolv_host, resolv_port ] ] )
+      @chunk_dir = chunk_dir
 
       socks5 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       socks5.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
@@ -36,12 +40,13 @@ module Girl
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys )
+        readable_socks, writable_socks = IO.select( @reads, @writes.keys )
 
         readable_socks.each do | sock |
           case @roles[ sock ]
           when :socks5
-            print "p#{ Process.pid } #{ Time.new } "
+            now = Time.new
+            print "p#{ Process.pid } #{ now } "
 
             begin
               source, _ = sock.accept_nonblock
@@ -51,21 +56,28 @@ module Girl
 
             @reads << source
             @roles[ source ] = :source
-            @writes[ source ] = ''
-            @timestamps[ source ] = Time.new
+            @buffs[ source ] = ''
+            @chunks[ source ] = { seed: 0, files: [] }
+            @timestamps[ source ] = now
             @procs[ source ] = :connect
           when :source
+            if sock.closed?
+              next
+            end
+
+            relay = @twins[ sock ]
+
+            if relay && relay.closed?
+              close_socket( sock )
+              next
+            end
+
             begin
               data = sock.read_nonblock( 4096 )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
               next
             rescue Exception => e
-              close_socket( sock )
-
-              if @twins[ sock ]
-                @close_after_writes[  @twins[ sock ] ] = e
-              end
-
+              close_by_exception( sock, e )
               next
             end
 
@@ -80,7 +92,7 @@ module Girl
                 next
               end
 
-              @writes[ sock ] << [ 5, 0 ].pack( 'C2' )
+              buffer( sock, [ 5, 0 ].pack( 'C2' ) )
               @procs[ sock ] = :request
             elsif @procs[ sock ] == :request
 
@@ -120,12 +132,15 @@ module Girl
                 next
               end
 
+              @twins[ sock ] = relay
+
               @reads << relay
               @roles[ relay ] = :relay
-              @writes[ relay ] = @hex.swap( @hex.mix( dst_host, dst_port ) )
+              @buffs[ relay ] = ''
+              @chunks[ relay ] = { seed: 0, files: [] }
               @timestamps[ relay ] = now
               @twins[ relay ] = sock
-              @twins[ sock ] = relay
+              buffer( relay, @hex.swap( @hex.mix( dst_host, dst_port ) ) )
 
               # +----+-----+-------+------+----------+----------+
               # |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -134,34 +149,34 @@ module Girl
               # +----+-----+-------+------+----------+----------+
 
               _, sock_port, sock_host = sock.getsockname.unpack( 'nnN' )
-              @writes[ sock ] << [ 5, 0, 0, 1, sock_host, sock_port ].pack( 'C4Nn' )
+              buffer( sock, [ 5, 0, 0, 1, sock_host, sock_port ].pack( 'C4Nn' ) )
               @procs[ sock ] = :passing
             elsif @procs[ sock ] == :passing
-              relay = @twins[ sock ]
-              @writes[ relay ] << @hex.swap( data )
-              @timestamps[ relay ] = now
+              buffer( relay, @hex.swap( data ) )
             end
           when :relay
+            if sock.closed?
+              next
+            end
+
+            source = @twins[ sock ]
+
+            if source.closed?
+              close_socket( sock )
+              next
+            end
+
             begin
-              data = sock.read_nonblock( 4096 )
+              data = @hex.swap( sock.read_nonblock( 4096 ) )
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
               next
             rescue Exception => e
-              close_socket( sock )
-
-              if @twins[ sock ]
-                @close_after_writes[  @twins[ sock ] ] = e
-              end
-
+              close_by_exception( sock, e )
               next
             end
 
-            now = Time.new
-            @timestamps[ sock ] = now
-
-            source = @twins[ sock ]
-            @writes[ source ] << @hex.swap( data )
-            @timestamps[ source ] = now
+            @timestamps[ sock ] = Time.new
+            buffer( source, data )
           end
         end
 
@@ -170,29 +185,53 @@ module Girl
             next
           end
 
-          begin
-            written = sock.write_nonblock( @writes[ sock ] )
-          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-            next
-          rescue Exception => e
-            close_socket( sock )
-
-            if @twins[ sock ]
-              @close_after_writes[  @twins[ sock ] ] = e
+          if @writes[ sock ] == :buff
+            data = @buffs[ sock ]
+          else
+            unless @caches[ sock ]
+              @caches[ sock ] = IO.binread( @chunks[ sock ][ :files ][ 0 ] )
             end
 
+            data = @caches[ sock ]
+          end
+
+          begin
+            written = sock.write_nonblock( data )
+          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e # WaitReadable for SSL renegotiation
+            next
+          rescue Exception => e
+            close_by_exception( sock, e )
             next
           end
 
           @timestamps[ sock ] = Time.new
-          @writes[ sock ] = @writes[ sock ][ written..-1 ]
+          data = data[ written..-1 ]
 
-          if @writes[ sock ].empty? && @close_after_writes.include?( sock )
-            unless @close_after_writes[ sock ].is_a?( EOFError )
-              sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+          if @writes[ sock ] == :buff
+            @buffs[ sock ] = data
+
+            if data.empty?
+              complete_write( sock )
             end
+          else
+            if data.empty?
+              @caches.delete( sock )
 
-            close_socket( sock )
+              begin
+                File.delete( @chunks[ sock ][ :files ].shift )
+              rescue Errno::ENOENT
+              end
+
+              if @chunks[ sock ][ :files ].empty?
+                if @buffs[ sock ].empty?
+                  complete_write( sock )
+                else
+                  @writes[ sock ] = :buff
+                end
+              end
+            else
+              @caches[ sock ] = data
+            end
           end
         end
       end
@@ -200,21 +239,85 @@ module Girl
 
     def quit!
       @reads.each{ | sock | sock.close }
+      @chunks.each do | sock, chunk |
+        chunk[ :files ].each do | path |
+          begin
+            File.delete( path )
+          rescue Errno::ENOENT
+          end
+        end
+      end
+
       @reads.clear
       @writes.clear
+      @buffs.clear
+      @caches.clear
+      @chunks.clear
       @roles.clear
       @timestamps.clear
       @twins.clear
       @close_after_writes.clear
+
       exit
     end
 
     private
 
+    def buffer( sock, data )
+      @buffs[ sock ] << data
+      @timestamps[ sock ] = Time.new
+
+      if @writes[ sock ].nil?
+        @writes[ sock ] = :buff
+      elsif @buffs[ sock ].size >= 4194304
+        chunk_path = File.join( @chunk_dir, "#{ Process.pid }-#{ sock.object_id }.#{ @chunks[ sock ][ :seed ] }" )
+        IO.binwrite( chunk_path, @buffs[ sock ] )
+        @chunks[ sock ][ :files ] << chunk_path
+        @chunks[ sock ][ :seed ] += 1
+        @writes[ sock ] = :cache
+        @buffs[ sock ] = ''
+      end
+    end
+
+    def complete_write( sock )
+      @writes.delete( sock )
+
+      if @close_after_writes.include?( sock )
+        close_socket( sock )
+      end
+    end
+
+    def close_by_exception( sock, e )
+      twin = @twins[ sock ]
+      close_socket( sock )
+
+      if twin
+        unless e.is_a?( EOFError )
+          twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+        end
+
+        if @writes.include?( twin )
+          @close_after_writes << twin
+        else
+          close_socket( twin )
+        end
+      end
+    end
+
     def close_socket( sock )
       sock.close
+      @chunks[ sock ][ :files ].each do | path |
+        begin
+          File.delete( path )
+        rescue Errno::ENOENT
+        end
+      end
+
       @reads.delete( sock )
       @writes.delete( sock )
+      @buffs.delete( sock )
+      @caches.delete( sock )
+      @chunks.delete( sock )
       @roles.delete( sock )
       @timestamps.delete( sock )
       @twins.delete( sock )

@@ -31,7 +31,7 @@ module Girl
       @roles = {} # :redir / :source / :relay
       @timestamps = {} # source / relay => last r/w
       @twins = {} # source <=> relay
-      @close_after_writes = {} # sock => exception
+      @close_after_writes = []
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
       @chunk_dir = chunk_dir
@@ -110,6 +110,10 @@ module Girl
 
             buffer( relay, @hex.swap( @hex.mix( dst_host, dst_port ) ) )
           when :source
+            if sock.closed?
+              next
+            end
+
             relay = @twins[ sock ]
 
             if relay.closed?
@@ -122,14 +126,17 @@ module Girl
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e # WaitWritable for SSL renegotiation
               next
             rescue Exception => e
-              close_socket( sock )
-              @close_after_writes[ relay ] = e
+              close_by_exception( sock, e )
               next
             end
 
             @timestamps[ sock ] = Time.new
             buffer( relay, @hex.swap( data ) )
           when :relay
+            if sock.closed?
+              next
+            end
+
             source = @twins[ sock ]
 
             if source.closed?
@@ -142,8 +149,7 @@ module Girl
             rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e  # WaitWritable for SSL renegotiation
               next
             rescue Exception => e
-              close_socket( sock )
-              @close_after_writes[ source ] = e
+              close_by_exception( sock, e )
               next
             end
 
@@ -172,12 +178,7 @@ module Girl
           rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e # WaitReadable for SSL renegotiation
             next
           rescue Exception => e
-            close_socket( sock )
-
-            if @twins[ sock ]
-              @close_after_writes[ @twins[ sock ] ] = e
-            end
-
+            close_by_exception( sock, e )
             next
           end
 
@@ -260,11 +261,24 @@ module Girl
       @writes.delete( sock )
 
       if @close_after_writes.include?( sock )
-        unless @close_after_writes[ sock ].is_a?( EOFError )
-          sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+        close_socket( sock )
+      end
+    end
+
+    def close_by_exception( sock, e )
+      twin = @twins[ sock ]
+      close_socket( sock )
+
+      if twin
+        unless e.is_a?( EOFError )
+          twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
         end
 
-        close_socket( sock )
+        if @writes.include?( twin )
+          @close_after_writes << twin
+        else
+          close_socket( twin )
+        end
       end
     end
 
