@@ -296,7 +296,7 @@ module Girl
       twin = @twins[ sock ]
       close_socket( sock )
 
-      if twin
+      if twin && !twin.closed?
         unless e.is_a?( EOFError )
           twin.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
         end
