@@ -44,7 +44,7 @@ module Girl
             now = Time.new
             print "p#{ Process.pid } #{ now } "
 
-            @timestamps.select{ | _, stamp | now - stamp > 600 }.each do | so, _ |
+            @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | so, _ |
               close_socket( so )
             end
 

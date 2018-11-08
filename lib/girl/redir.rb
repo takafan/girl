@@ -4,9 +4,9 @@
 #
 # 1. Girl::Relayd.new( 8080 ).looping # @server
 #
-# 2. Girl::Redir.new( 1919, 'your.server.ip', 8080 ).looping # @home
+# 2. Girl::Redir.new( 1919, '{ your.server.ip }', 8080 ).looping # @home
 #
-# 3. dig www.google.com @127.0.0.1 -p1818 # dig with girl/resolv, got 216.58.217.196
+# 3. dig +short www.google.com @127.0.0.1 -p1818 # dig with girl/resolv, got 216.58.217.196
 #
 # 4. iptables -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
 #
@@ -58,7 +58,7 @@ module Girl
             now = Time.new
             print "p#{ Process.pid } #{ now } "
 
-            @timestamps.select{ | _, stamp | now - stamp > 600 }.each do | so, _ |
+            @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | so, _ |
               close_socket( so )
             end
 

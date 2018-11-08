@@ -2,7 +2,7 @@
 # usage
 # =====
 #
-# 1. Girl::Socks.new( '0.0.0.0', 1080, '127.0.0.1', 1818, 'your.server.ip', 8080 ).looping # @gateway
+# 1. Girl::Socks.new( '0.0.0.0', 1080, '127.0.0.1', 1818, '{ your.server.ip }', 8080 ).looping # @gateway
 #
 # 2. ALL_PROXY=socks5://192.168.1.59:1080 brew update # @mac
 #
@@ -47,6 +47,10 @@ module Girl
           when :socks5
             now = Time.new
             print "p#{ Process.pid } #{ now } "
+
+            @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | so, _ |
+              close_socket( so )
+            end
 
             begin
               source, _ = sock.accept_nonblock

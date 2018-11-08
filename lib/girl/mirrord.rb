@@ -48,7 +48,7 @@ module Girl
                   close_socket( so )
                 end
               else
-                if now - stamp > 600
+                if now - stamp > 86400
                   close_socket( so )
                 end
               end
