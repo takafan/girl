@@ -8,10 +8,6 @@ module Girl
       sock4.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       sock4.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
 
-      sock6 = Socket.new( Socket::AF_INET6, Socket::SOCK_DGRAM, 0 )
-      sock6.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      sock6.bind( Socket.sockaddr_in( port, '::0' ) )
-
       puts "Binding on #{ port }"
 
       pub_socks = {} # nameserver => sock
@@ -20,10 +16,19 @@ module Girl
         pub_socks[ Socket.sockaddr_in( 53, ip ) ] = Addrinfo.udp( ip, 53 ).ipv6? ? sock6 : sock4
       end
 
-      @reads = [ sock4, sock6 ]
+      @reads = [ sock4 ]
       @pub_socks = pub_socks
       @ids = {}
       @reconn = 0
+
+      begin
+        sock6 = Socket.new( Socket::AF_INET6, Socket::SOCK_DGRAM, 0 )
+        sock6.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        sock6.bind( Socket.sockaddr_in( port, '::0' ) )
+        @reads << sock6
+      rescue Errno::EAFNOSUPPORT => e
+        puts e.class
+      end
     end
 
     def looping
@@ -84,7 +89,6 @@ module Girl
       data
     end
 
-    # quit! in Signal.trap :TERM
     def quit!
       @reads.each{ | sock | sock.close }
       @reads.clear
