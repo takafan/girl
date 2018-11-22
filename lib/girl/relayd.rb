@@ -27,7 +27,7 @@ module Girl
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       relayd.bind( Socket.pack_sockaddr_in( port, '0.0.0.0' ) )
-      relayd.listen( 128 ) # cat /proc/sys/net/ipv4/tcp_max_syn_backlog
+      relayd.listen( 1024 )
       puts "p#{ Process.pid } listening on #{ port }"
 
       @reads << relayd
