@@ -29,7 +29,13 @@ module Girl
       @tmp_dir = tmp_dir
       @connect_p1_after_write = true
       @tmp_path = ''
-      p1_host, p1_port = p1_info[ 0, p1_info.index( '-' ) ].split( ':' )
+      hidx = p1_info.index( '-' )
+
+      if hidx
+        p1_info = p1_info[ 0, hidx ]
+      end
+
+      p1_host, p1_port = p1_info.split( ':' )
       @p1_sockaddr = Socket.sockaddr_in( p1_port, p1_host )
       @rep2p = 0
       @usr = Girl::Usr.new
