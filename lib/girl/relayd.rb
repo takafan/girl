@@ -27,7 +27,7 @@ module Girl
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       relayd.bind( Socket.pack_sockaddr_in( port, '0.0.0.0' ) )
-      relayd.listen( 1024 )
+      relayd.listen( 511 )
       puts "p#{ Process.pid } listening on #{ port }"
 
       @reads << relayd

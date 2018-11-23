@@ -1,3 +1,3 @@
 module Girl
-  VERSION = '0.32.5'
+  VERSION = '0.32.6'
 end

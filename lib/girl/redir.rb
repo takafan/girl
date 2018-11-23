@@ -41,7 +41,7 @@ module Girl
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       redir.bind( Socket.pack_sockaddr_in( redir_port, '0.0.0.0' ) )
-      redir.listen( 1024 )
+      redir.listen( 511 )
       puts "p#{ Process.pid } listening on #{ redir_port }"
 
       @reads << redir
