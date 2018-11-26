@@ -14,43 +14,83 @@ module Girl
   class Resolv
 
     def initialize( port, nameservers = [], resolvd_host = nil, resolvd_port = nil, custom_domains = [] )
-      sock4 = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      sock4.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      sock4.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
-
-      puts "Binding on #{ port }"
-
       pub_socks = {} # nameserver => sock
       rvd_socks = {} # resolvd => sock
+      pub_addrs = []
+      rvd_addrs = []
+      pub_addr6s = []
+      rvd_addr6s = []
 
       if nameservers.empty?
         nameservers = %w[ 114.114.114.114 114.114.115.115 ]
       end
 
       nameservers.each do | ip |
-        pub_socks[ Socket.sockaddr_in( 53, ip ) ] = Addrinfo.udp( ip, 53 ).ipv6? ? sock6 : sock4
+        addr = Socket.sockaddr_in( 53, ip )
+
+        if Addrinfo.udp( ip, 53 ).ipv6?
+          pub_addr6s << addr
+        else
+          pub_addrs << addr
+        end
       end
 
       if resolvd_host && resolvd_port
-        rvd_socks[ Socket.sockaddr_in( resolvd_port, resolvd_host ) ] = Addrinfo.udp( resolvd_host, resolvd_port ).ipv6? ? sock6 : sock4
+        addr = Socket.sockaddr_in( resolvd_port, resolvd_host )
+
+        if Addrinfo.udp( resolvd_host, resolvd_port ).ipv6?
+          rvd_addr6s << addr
+        else
+          rvd_addrs << addr
+        end
       end
 
-      @reads = [ sock4 ]
+      @reads = []
+
+      begin
+        sock4 = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+        sock4.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        sock4.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
+        puts "Binding on 0.0.0.0 #{ port }"
+
+        @reads << sock4
+
+        pub_addrs.each do | addr |
+          pub_socks[ addr ] = sock4
+        end
+
+        rvd_addrs.each do | addr |
+          rvd_socks[ addr ] = sock4
+        end
+      rescue Errno::EAFNOSUPPORT => e
+        puts "AF_INET #{ e.class }"
+      end
+
+      begin
+        sock6 = Socket.new( Socket::AF_INET6, Socket::SOCK_DGRAM, 0 )
+        sock6.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        sock6.bind( Socket.sockaddr_in( port, '::0' ) )
+        puts "Binding on ::0 #{ port }"
+
+        @reads << sock6
+
+        pub_addr6s.each do | addr |
+          pub_socks[ addr ] = sock6
+        end
+
+        rvd_addr6s.each do | addr |
+          rvd_socks[ addr ] = sock6
+        end
+      rescue Errno::EAFNOSUPPORT => e
+        puts "AF_INET6 #{ e.class }"
+      end
+
       @pub_socks = pub_socks
       @rvd_socks = rvd_socks
       @custom_qnames = custom_domains.map{ |dom| dom.split( '.' ).map{ | sub | [ sub.size ].pack( 'C' ) + sub }.join }
       @ids = {}
       @caches = {}
       @reconn = 0
-
-      begin
-        sock6 = Socket.new( Socket::AF_INET6, Socket::SOCK_DGRAM, 0 )
-        sock6.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        sock6.bind( Socket.sockaddr_in( port, '::0' ) )
-        @reads << sock6
-      rescue Errno::EAFNOSUPPORT => e
-        puts e.class
-      end
     end
 
     def looping
