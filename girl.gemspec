@@ -11,7 +11,7 @@ Gem::Specification.new do |spec|
 
   spec.summary       = %q{妹子}
   spec.description   = %q{a 江南style traffic relay}
-  spec.homepage      = 'http://lastcomm.com/'
+  spec.homepage      = 'https://github.com/takafan/girl'
   spec.license       = 'MIT'
 
   spec.files         = %w[
@@ -34,4 +34,5 @@ lib/girl/xeh.rb
   ]
 
   spec.require_paths = ['lib']
+  spec.add_runtime_dependency "nio4r", "~> 2.3"
 end
