@@ -34,6 +34,7 @@ module Girl
 
       @reads << relayd
       @roles[ relayd ] = :relayd
+      @clean_stamp = Time.new # daily clean job, retire clients that idled 1 day
       @selector.register( relayd, :r )
     end
 
@@ -48,8 +49,12 @@ module Girl
               now = Time.new
               print "p#{ Process.pid } #{ now } "
 
-              @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
-                close_mon( mo )
+              if now - @clean_stamp > 86400
+                @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
+                  close_mon( mo )
+                end
+
+                @clean_stamp = now
               end
 
               begin
@@ -66,8 +71,8 @@ module Girl
               @buffs[ relay ] = ''
               @chunks[ relay ] = { seed: 0, files: [] }
               @addrs[ relay ] = addr
-              @selector.register( relay, :r )
-              @timestamps[ mon ] = now
+              relay_mon = @selector.register( relay, :r )
+              @timestamps[ relay_mon ] = now
             when :relay
               if sock.closed?
                 next
@@ -242,7 +247,6 @@ module Girl
 
     def buffer( mon, data )
       sock = mon.io
-
       @buffs[ sock ] << data
 
       if @writes[ sock ].nil?

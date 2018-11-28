@@ -35,7 +35,7 @@ module Girl
       @hex = Girl::Hex.new
       @chunk_dir = chunk_dir
       @selector = NIO::Selector.new
-      @timestamps = {} # source_mon / relay_mon => last r/w
+      @timestamps = {} # relay_mon / dest_mon => last r/w
       @twins = {} # source_mon <=> relay_mon
 
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
@@ -48,6 +48,7 @@ module Girl
 
       @reads << redir
       @roles[ redir ] = :redir
+      @clean_stamp = Time.new # daily clean job, retire clients that idled 1 day
       @selector.register( redir, :r )
     end
 
@@ -62,8 +63,12 @@ module Girl
               now = Time.new
               print "p#{ Process.pid } #{ now } "
 
-              @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
-                close_mon( mo )
+              if now - @clean_stamp > 86400
+                @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
+                  close_mon( mo )
+                end
+
+                @clean_stamp = now
               end
 
               begin
@@ -251,7 +256,6 @@ module Girl
 
     def buffer( mon, data )
       sock = mon.io
-
       @buffs[ sock ] << data
 
       if @writes[ sock ].nil?
