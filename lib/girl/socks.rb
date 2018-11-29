@@ -6,6 +6,7 @@
 #
 # 2. ALL_PROXY=socks5://192.168.1.59:1080 brew update # @mac
 #
+require 'girl/hex'
 require 'nio'
 require 'socket'
 require 'resolv'
@@ -29,6 +30,7 @@ module Girl
       @selector = NIO::Selector.new
       @timestamps = {} # relay_mon / dest_mon => last r/w
       @twins = {} # source_mon <=> relay_mon
+      @swaps = [] # mons
 
       socks5 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       socks5.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
@@ -157,7 +159,8 @@ module Girl
                 @twins[ twin ] = mon
                 @twins[ mon ] = twin
 
-                buffer( twin, @hex.swap( @hex.mix( dst_host, dst_port ) ) )
+                buffer( twin, @hex.mix( dst_host, dst_port ) )
+                @swaps << twin
 
                 # +----+-----+-------+------+----------+----------+
                 # |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -169,7 +172,11 @@ module Girl
                 buffer( mon, [ 5, 0, 0, 1, sock_host, sock_port ].pack( 'C4Nn' ) )
                 @procs[ sock ] = :passing
               elsif @procs[ sock ] == :passing
-                buffer( twin, @hex.swap( data ) )
+                if @swaps.delete( twin )
+                  data = "#{ [ data.size ].pack( 'n' ) }#{ @hex.swap( data ) }"
+                end
+
+                buffer( twin, data )
               end
             when :relay
               if sock.closed?
@@ -184,7 +191,7 @@ module Girl
               end
 
               begin
-                data = @hex.swap( sock.read_nonblock( 4096 ) )
+                data = sock.read_nonblock( 4096 )
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
                 next
               rescue Exception => e
@@ -276,6 +283,7 @@ module Girl
       @selector.close
       @timestamps.clear
       @twins.clear
+      @swaps.clear
 
       exit
     end
@@ -354,6 +362,7 @@ module Girl
       @selector.deregister( sock )
       @timestamps.delete( mon )
       @twins.delete( mon )
+      @swaps.delete( mon )
     end
 
   end

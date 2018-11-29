@@ -31,15 +31,15 @@ module Girl
       @chunks = {} # sock => { seed: 0, files: [ /tmp/redir/{pid}-{object_id}.0, ... ] }
       @roles = {} # :redir / :source / :relay
       @close_after_writes = []
+      @chunk_dir = chunk_dir
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
-      @chunk_dir = chunk_dir
       @selector = NIO::Selector.new
       @timestamps = {} # relay_mon / dest_mon => last r/w
       @twins = {} # source_mon <=> relay_mon
+      @swaps = [] # mons
 
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       redir.bind( Socket.pack_sockaddr_in( redir_port, '0.0.0.0' ) )
@@ -119,7 +119,8 @@ module Girl
               @timestamps[ relay_mon ] = now
               @twins[ relay_mon ] = source_mon
 
-              buffer( relay_mon, @hex.swap( @hex.mix( dst_host, dst_port ) ) )
+              buffer( relay_mon, @hex.mix( dst_host, dst_port ) )
+              @swaps << relay_mon
             when :source
               if sock.closed?
                 next
@@ -142,7 +143,12 @@ module Girl
               end
 
               @timestamps[ mon ] = Time.new
-              buffer( twin, @hex.swap( data ) )
+
+              if @swaps.delete( twin )
+                data = "#{ [ data.size ].pack( 'n' ) }#{ @hex.swap( data ) }"
+              end
+
+              buffer( twin, data )
             when :relay
               if sock.closed?
                 next
@@ -156,7 +162,7 @@ module Girl
               end
 
               begin
-                data = @hex.swap( sock.read_nonblock( 4096 ) )
+                data = sock.read_nonblock( 4096 )
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e  # WaitWritable for SSL renegotiation
                 next
               rescue Exception => e
@@ -248,6 +254,7 @@ module Girl
       @selector.close
       @timestamps.clear
       @twins.clear
+      @swaps.clear
 
       exit
     end
@@ -326,6 +333,7 @@ module Girl
       @selector.deregister( sock )
       @timestamps.delete( mon )
       @twins.delete( mon )
+      @swaps.delete( sock )
     end
 
   end

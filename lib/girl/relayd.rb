@@ -17,12 +17,13 @@ module Girl
       @chunks = {} # sock => { seed: 0, files: [ /tmp/relayd/{pid}-{object_id}.0, ... ] }
       @roles = {} # :relayd / :relay / :dest
       @close_after_writes = []
+      @chunk_dir = chunk_dir
       @addrs = {} # sock => addrinfo
       @xeh = Girl::Xeh.new
-      @chunk_dir = chunk_dir
       @selector = NIO::Selector.new
       @timestamps = {} # relay_mon / dest_mon => last r/w
       @twins = {} # relay_mon <=> dest_mon
+      @swaps = {} # relay_mon => nil or length
 
       relayd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relayd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
@@ -73,6 +74,7 @@ module Girl
               @addrs[ relay ] = addr
               relay_mon = @selector.register( relay, :r )
               @timestamps[ relay_mon ] = now
+              @swaps[ relay_mon ] = nil
             when :relay
               if sock.closed?
                 next
@@ -86,7 +88,7 @@ module Girl
               end
 
               begin
-                data = @xeh.swap( sock.read_nonblock( 4096 ) )
+                data = sock.read_nonblock( 4096 )
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e # WaitWritable for SSL renegotiation
                 next
               rescue Exception => e
@@ -133,6 +135,23 @@ module Girl
                 end
               end
 
+              if @swaps.include?( mon )
+                len = @swaps[ mon ]
+
+                unless len
+                  len = data[ 0, 2 ].unpack( 'n' ).first
+                  data = data[ 2..-1 ]
+                end
+
+                if data.size >= len
+                  data = "#{ @xeh.swap( data[ 0, len ] ) }#{ data[ len..-1 ] }"
+                  @swaps.delete( mon )
+                else
+                  data = @xeh.swap( data )
+                  @swaps[ mon ] = len - data.size
+                end
+              end
+
               buffer( twin, data )
             when :dest
               if sock.closed?
@@ -156,7 +175,7 @@ module Girl
               end
 
               @timestamps[ mon ] = Time.new
-              buffer( twin, @xeh.swap( data ) )
+              buffer( twin, data )
             end
           end
 
@@ -236,9 +255,11 @@ module Girl
       @chunks.clear
       @roles.clear
       @close_after_writes.clear
+      @addrs.clear
       @selector.close
       @timestamps.clear
       @twins.clear
+      @swaps.clear
 
       exit
     end
@@ -314,9 +335,11 @@ module Girl
       @chunks.delete( sock )
       @roles.delete( sock )
       @close_after_writes.delete( sock )
+      @addrs.delete( sock )
       @selector.deregister( sock )
       @timestamps.delete( mon )
       @twins.delete( mon )
+      @swaps.delete( mon )
     end
 
   end
