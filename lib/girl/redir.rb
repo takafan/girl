@@ -333,7 +333,7 @@ module Girl
       @selector.deregister( sock )
       @timestamps.delete( mon )
       @twins.delete( mon )
-      @swaps.delete( sock )
+      @swaps.delete( mon )
     end
 
   end

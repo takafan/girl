@@ -139,6 +139,13 @@ module Girl
                 len = @swaps[ mon ]
 
                 unless len
+                  if data.size < 2
+                    puts "strange char? #{ data.inspect }"
+                    sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+                    close_mon( mon )
+                    next
+                  end
+
                   len = data[ 0, 2 ].unpack( 'n' ).first
                   data = data[ 2..-1 ]
                 end
