@@ -15,12 +15,10 @@ module Girl
   class Socks
 
     def initialize( socks_host, socks_port, resolv_host, resolv_port, relayd_host, relayd_port, chunk_dir = '/tmp/socks' )
-      @reads = [] # socks
       @writes = {} # sock => :buff / :cache
       @buffs = {} # sock => 4M working ram
       @caches = {} # sock => the left data of first chunk
       @chunks = {} # sock => { seed: 0, files: [ /tmp/socks/{pid}-{object_id}.0, ... ] }
-      @roles = {} # :socks5 / :source / :relay
       @close_after_writes = []
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
@@ -28,6 +26,7 @@ module Girl
       @dns = Resolv::DNS.new( nameserver_port: [ [ resolv_host, resolv_port ] ] )
       @chunk_dir = chunk_dir
       @selector = NIO::Selector.new
+      @roles = {} # mon => :socks5 / :source / :relay
       @timestamps = {} # relay_mon / dest_mon => last r/w
       @twins = {} # source_mon <=> relay_mon
       @swaps = [] # mons
@@ -38,10 +37,9 @@ module Girl
       socks5.listen( 511 )
       puts "p#{ Process.pid } listening on #{ socks_host }:#{ socks_port } #{ @selector.backend }"
 
-      @reads << socks5
-      @roles[ socks5 ] = :socks5
+      mon = @selector.register( socks5, :r )
+      @roles[ mon ] = :socks5
       @clean_stamp = Time.new # daily clean job, retire clients that idled 1 day
-      @selector.register( socks5, :r )
     end
 
     def looping
@@ -50,7 +48,7 @@ module Girl
           sock = mon.io
 
           if mon.readable?
-            case @roles[ sock ]
+            case @roles[ mon ]
             when :socks5
               now = Time.new
               print "p#{ Process.pid } #{ now } "
@@ -69,13 +67,12 @@ module Girl
                 next
               end
 
-              @reads << source
-              @roles[ source ] = :source
               @buffs[ source ] = ''
               @chunks[ source ] = { seed: 0, files: [] }
               @procs[ source ] = :connect
 
               source_mon = @selector.register( source, :r )
+              @roles[ source_mon ] = :source
               @timestamps[ source_mon ] = now
             when :source
               if sock.closed?
@@ -149,12 +146,11 @@ module Girl
                   next
                 end
 
-                @reads << relay
-                @roles[ relay ] = :relay
                 @buffs[ relay ] = ''
                 @chunks[ relay ] = { seed: 0, files: [] }
 
                 twin = @selector.register( relay, :r )
+                @roles[ twin ] = :relay
                 @timestamps[ twin ] = now
                 @twins[ twin ] = mon
                 @twins[ mon ] = twin
@@ -263,7 +259,7 @@ module Girl
     end
 
     def quit!
-      @reads.each{ | sock | sock.close }
+      @roles.each{ | mon, _ | mon.io.close }
       @chunks.each do | sock, chunk |
         chunk[ :files ].each do | path |
           begin
@@ -273,18 +269,16 @@ module Girl
         end
       end
 
-      @reads.clear
       @writes.clear
       @buffs.clear
       @caches.clear
       @chunks.clear
-      @roles.clear
       @close_after_writes.clear
-      @selector.close
+      @roles.clear
       @timestamps.clear
       @twins.clear
       @swaps.clear
-
+      @selector.close
       exit
     end
 
@@ -306,7 +300,6 @@ module Girl
       end
 
       mon.add_interest( :w )
-      @timestamps[ mon ] = Time.new
     end
 
     def complete_write( mon )
@@ -352,14 +345,13 @@ module Girl
         end
       end
 
-      @reads.delete( sock )
       @writes.delete( sock )
       @buffs.delete( sock )
       @caches.delete( sock )
       @chunks.delete( sock )
-      @roles.delete( sock )
       @close_after_writes.delete( sock )
       @selector.deregister( sock )
+      @roles.delete( mon )
       @timestamps.delete( mon )
       @twins.delete( mon )
       @swaps.delete( mon )

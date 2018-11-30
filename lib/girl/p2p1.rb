@@ -1,210 +1,276 @@
 require 'girl/usr'
+require 'nio'
 require 'socket'
 
 module Girl
   class P2p1
 
     def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil )
-      @reads = []
       @writes = {} # sock => ''
-      @roles = {}  # sock => :room / :p1 / :app
-      @timestamps = {} # sock => last r/w
-      @twins = {} # p1 <=> app
       @roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       @appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
       @appd_host = appd_host
       @appd_port = appd_port
-      @timeout = timeout
       @room_title = room_title
       @reconn = 0
       @usr = Girl::Usr.new
+      @selector = NIO::Selector.new
+      @roles = {}  # mon => :room / :p1 / :app
+      @timestamps = {} # mon => last r/w
+      @twins = {} # p1_mon <=> app_mon
+      @swaps = {} # p1_mon => nil or length
+      @timeout = timeout
 
       connect_roomd
     end
 
     def looping
       loop do
-        readable_socks, writable_socks = IO.select( @reads, @writes.select{ | _, buff | !buff.empty? }.keys, [], @timeout )
+        size = @selector.select( @timeout ) do | mon |
+          sock = mon.io
 
-        unless readable_socks
-          puts "flash #{ Time.new }"
-          connect_roomd
-          next
-        end
-
-        readable_socks.each do | sock |
-          case @roles[ sock ]
-          when :room
-            begin
-              data = sock.read_nonblock( 4096 )
-              @reconn = 0
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              next
-            rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
-              if e.is_a?( EOFError )
-                @reconn = 0
-              elsif @reconn > 100
-                raise e
-              else
-                @reconn += 1
-              end
-
-              sleep 5
-              puts "#{ e.class }, reconn #{ @reconn }"
-              connect_roomd
-              break
-            end
-
-            if @roles.find{ | _, role | role == :p1 }
-              next
-            end
-
-            now = Time.new
-            @timestamps[ sock ] = now
-            p2_ip, p2_port = data.split( ':' )
-
-            p1 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-            p1.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-            begin
-              p1.bind( sock.local_address ) # use the hole
-            rescue Errno::EADDRINUSE => e
-              puts "bind #{ e.class }, flash a room"
-              connect_roomd
-              break
-            end
-
-            @reads << p1
-            @roles[ p1 ] = :p1
-            @writes[ p1 ] = ''
-            @timestamps[ p1 ] = now
-
-            begin
-              p1.connect_nonblock( Socket.sockaddr_in( p2_port, p2_ip ) )
-            rescue IO::WaitWritable, Errno::EINTR
-            rescue Exception => e
-              puts "p2p #{ p2_ip }:#{ p2_port } #{ e.class }, flash a room"
-              connect_roomd
-              break
-            end
-          when :p1
-            begin
-              data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
-              next
-            rescue Exception => e
-              puts "r #{ @roles[ sock ] } #{ e.class }, flash a room"
-              connect_roomd
-              break
-            end
-
-            now = Time.new
-            @timestamps[ sock ] = now
-            app = @twins[ sock ]
-
-            unless app
-              app = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-              @reads << app
-              @roles[ app ] = :app
-              @writes[ app ] = ''
-              @timestamps[ app ] = now
-              @twins[ app ] = sock
-              @twins[ sock ] = app
-
+          if mon.readable?
+            case @roles[ mon ]
+            when :room
               begin
-                app.connect_nonblock( @appd_sockaddr )
-              rescue IO::WaitWritable, Errno::EINTR
-              rescue Exception => e
-                puts "c appd #{ @appd_host }:#{ @appd_port } #{ e.class }, flash a room"
+                data = sock.read_nonblock( 4096 )
+                @reconn = 0
+              rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+                next
+              rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
+                if e.is_a?( EOFError )
+                  @reconn = 0
+                elsif @reconn > 100
+                  raise e
+                else
+                  @reconn += 1
+                end
+
+                sleep 5
+                puts "#{ e.class }, reconn #{ @reconn }"
                 connect_roomd
                 break
               end
 
-              if data[ 0 ] == '!' # here comes a new app!
-                data = data[ 1..-1 ]
-                if data.empty?
-                  next
+              if @roles.find{ | _, role | role == :p1 }
+                puts 'already paired, ignore'
+                next
+              end
+
+              now = Time.new
+              @timestamps[ mon ] = now
+              p2_ip, p2_port = data.split( ':' )
+
+              p1 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+              p1.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+
+              begin
+                p1.bind( sock.local_address ) # use the hole
+              rescue Errno::EADDRINUSE => e
+                puts "bind #{ e.class }, flash a room"
+                connect_roomd
+                break
+              end
+
+              begin
+                p1.connect_nonblock( Socket.sockaddr_in( p2_port, p2_ip ) )
+              rescue IO::WaitWritable, Errno::EINTR
+              rescue Exception => e
+                puts "p2p #{ p2_ip }:#{ p2_port } #{ e.class }, flash a room"
+                connect_roomd
+                break
+              end
+
+              @writes[ p1 ] = ''
+              p1_mon = @selector.register( p1, :r )
+              @roles[ p1_mon ] = :p1
+              @timestamps[ p1_mon ] = now
+              @swaps[ p1_mon ] = nil
+            when :p1
+              if sock.closed?
+                next
+              end
+
+              twin = @twins[ mon ]
+
+              if twin && twin.io.closed?
+                connect_roomd
+                next
+              end
+
+              begin
+                data = sock.read_nonblock( 4096 )
+              rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+                next
+              rescue Exception => e
+                puts "read #{ @roles[ mon ] } #{ e.class }, flash a room"
+                connect_roomd
+                break
+              end
+
+              now = Time.new
+              @timestamps[ mon ] = now
+
+              unless twin
+                app = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+
+                begin
+                  app.connect_nonblock( @appd_sockaddr )
+                rescue IO::WaitWritable, Errno::EINTR
+                rescue Exception => e
+                  puts "connect appd #{ @appd_host }:#{ @appd_port } #{ e.class }, flash a room"
+                  connect_roomd
+                  break
+                end
+
+                @writes[ app ] = ''
+                twin = @selector.register( app, :r )
+                @roles[ twin ] = :app
+                @timestamps[ twin ] = now
+                @twins[ twin ] = mon
+                @twins[ mon ] = twin
+
+                if data[ 0 ] == '!' # here comes a new app!
+                  data = data[ 1..-1 ]
+
+                  if data.empty?
+                    next
+                  end
                 end
               end
+
+              if @swaps.include?( mon )
+                len = @swaps[ mon ]
+
+                unless len
+                  if data.size < 2
+                    puts "lonely char? #{ data.inspect }"
+                    sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+                    connect_roomd
+                    next
+                  end
+
+                  len = data[ 0, 2 ].unpack( 'n' ).first
+                  data = data[ 2..-1 ]
+                end
+
+                if data.size >= len
+                  data = "#{ @usr.swap( data[ 0, len ] ) }#{ data[ len..-1 ] }"
+                  @swaps.delete( mon )
+                else
+                  data = @usr.swap( data )
+                  @swaps[ mon ] = len - data.size
+                end
+              end
+
+              buffer( twin, data )
+            when :app
+              if sock.closed?
+                next
+              end
+
+              twin = @twins[ mon ]
+
+              if twin.io.closed?
+                connect_roomd
+                next
+              end
+
+              begin
+                data = sock.read_nonblock( 4096 )
+              rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+                next
+              rescue Exception => e
+                puts "read #{ @roles[ mon ] } #{ e.class }, flash a room"
+                connect_roomd
+                break
+              end
+
+              @timestamps[ mon ] = Time.new
+              buffer( twin, data )
+            end
+          end
+
+          if mon.writable?
+            if sock.closed?
+              next
             end
 
-            @writes[ app ] << @usr.swap( data )
-            @timestamps[ app ] = now
-          when :app
+            data = @writes[ sock ]
+
             begin
-              data = sock.read_nonblock( 4096 )
-            rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+              written = sock.write_nonblock( data )
+            rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
               next
             rescue Exception => e
-              puts "r #{ @roles[ sock ] } #{ e.class }, flash a room"
+              puts "write #{ @roles[ mon ] } #{ e.class }, flash a room"
               connect_roomd
               break
             end
 
-            now = Time.new
-            @timestamps[ sock ] = now
+            @timestamps[ mon ] = Time.new
+            @writes[ sock ] = data[ written..-1 ]
 
-            p1 = @twins[ sock ]
-            @writes[ p1 ] << @usr.swap( data )
-            @timestamps[ p1 ] = now
+            unless @writes[ sock ].empty?
+              next
+            end
+
+            mon.remove_interest( :w )
           end
         end
 
-        writable_socks.each do | sock |
-          begin
-            written = sock.write_nonblock( @writes[ sock ] )
-          rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-            next
-          rescue Exception => e
-            puts "w #{ @roles[ sock ] } #{ e.class }, flash a room"
-            connect_roomd
-            break
-          end
-
-          @timestamps[ sock ] = Time.new
-          @writes[ sock ] = @writes[ sock ][ written..-1 ]
-
-          unless @writes[ sock ].empty?
-            next
-          end
+        unless size
+          puts "flash #{ Time.new }"
+          connect_roomd
         end
       end
     end
 
-    # quit! in Signal.trap :TERM
     def quit!
-      @reads.each{ | sock | sock.close }
-      @reads.clear
-      @writes.clear
-      @roles.clear
-      @timestamps.clear
-      @twins.clear
-
+      cleanup
+      @selector.close
       exit
     end
 
     private
 
-    def connect_roomd
-      @reads.each{ | sock | sock.close }
-      @reads.clear
+    def buffer( mon, data )
+      @writes[ mon.io ] << data
+      mon.add_interest( :w )
+    end
+
+    def cleanup
+      @roles.each do | mon, _ |
+        sock = mon.io
+        sock.close
+        @selector.deregister( sock )
+      end
+
       @writes.clear
       @roles.clear
       @timestamps.clear
       @twins.clear
+      @swaps.clear
+    end
 
+    def connect_roomd
+      cleanup
       sock = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
 
       begin
         sock.connect_nonblock( @roomd_sockaddr )
       rescue IO::WaitWritable, Errno::EINTR
-        @reads << sock
-        @roles[ sock ] = :room
+      end
 
-        if @room_title
-          @writes[ sock ] = "room#{ @room_title }".unpack( "C*" ).map{ |c| c.chr }.join
-        end
+      @writes[ sock ] = ''
+      mon = @selector.register( sock, :r )
+      @roles[ mon ] = :room
+      @timestamps[ mon ] = Time.new
+
+      if @room_title
+        data = "room#{ @room_title }".unpack( "C*" ).map{ | c | c.chr }.join
+        buffer( mon, data )
       end
     end
   end
