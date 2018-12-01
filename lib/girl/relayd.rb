@@ -5,7 +5,7 @@ require 'socket'
 module Girl
   class Relayd
 
-    def initialize( port, xeh_block = nil, chunk_dir = '/tmp/relayd' )
+    def initialize( port, xeh_block = nil, chunk_dir = '/tmp/relayd', managed_sock = nil )
       if xeh_block
         Girl::Xeh.class_eval( xeh_block )
       end
@@ -30,16 +30,14 @@ module Girl
       relayd.bind( Socket.pack_sockaddr_in( port, '0.0.0.0' ) )
       relayd.listen( 511 )
       puts "p#{ Process.pid } listening on #{ port } #{ @selector.backend }"
-      mon = @selector.register( relayd, :r )
-      @roles[ mon ] = :relayd
+      relayd_mon = @selector.register( relayd, :r )
+      @roles[ relayd_mon ] = :relayd
 
-      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      managed.bind( Socket.pack_sockaddr_in( port, '127.0.0.1' ) )
-      puts "managed bound on #{ port } #{ @selector.backend }"
-      mon = @selector.register( managed, :r )
-      @roles[ mon ] = :managed
+      if managed_sock
+        puts "p#{ Process.pid } reg managed on #{ managed_sock.local_address.ip_unpack.last }"
+        mon = @selector.register( managed_sock, :r )
+        @roles[ mon ] = :managed
+      end
     end
 
     def looping
@@ -184,8 +182,8 @@ module Girl
               data = data.strip
 
               if data == 't'
-                puts 'check timeout'
                 now = Time.new
+                puts "p#{ Process.pid } check timeout #{ now }"
 
                 @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
                   close_mon( mo )

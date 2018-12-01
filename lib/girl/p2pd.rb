@@ -4,7 +4,7 @@ require 'socket'
 module Girl
   class P2pd
 
-    def initialize( roomd_port = 6262, tmp_dir = '/tmp/p2pd', timeout = 3600 )
+    def initialize( roomd_port = 6262, tmp_dir = '/tmp/p2pd', timeout = 3600, managed_sock = nil )
       @writes = {} # sock => ''
       @tmp_dir = tmp_dir
       @timeout = timeout
@@ -18,16 +18,14 @@ module Girl
       roomd.bind( Socket.pack_sockaddr_in( roomd_port, '0.0.0.0' ) )
       roomd.listen( 127 )
       puts "roomd listening on #{ roomd_port } #{ @selector.backend }"
-      mon = @selector.register( roomd, :r )
-      @roles[ mon ] = :roomd
+      roomd_mon = @selector.register( roomd, :r )
+      @roles[ roomd_mon ] = :roomd
 
-      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      managed.bind( Socket.pack_sockaddr_in( roomd_port, '127.0.0.1' ) )
-      puts "managed bound on #{ roomd_port } #{ @selector.backend }"
-      mon = @selector.register( managed, :r )
-      @roles[ mon ] = :managed
+      if managed_sock
+        puts "p#{ Process.pid } reg managed on #{ managed_sock.local_address.ip_unpack.last }"
+        mon = @selector.register( managed_sock, :r )
+        @roles[ mon ] = :managed
+      end
     end
 
     def looping
@@ -124,8 +122,8 @@ module Girl
               data = data.strip
 
               if data == 't'
-                puts 'check timeout'
                 now = Time.new
+                puts "p#{ Process.pid } check timeout #{ now }"
 
                 @timestamps.select{ | _, stamp | now - stamp > @timeout }.each do | mo, _ |
                   close_mon( mo )

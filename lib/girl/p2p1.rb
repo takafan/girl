@@ -5,7 +5,7 @@ require 'socket'
 module Girl
   class P2p1
 
-    def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil, managed_port = 1717 )
+    def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil, managed_sock = nil )
       @writes = {} # sock => ''
       @roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       @appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
@@ -23,13 +23,11 @@ module Girl
 
       connect_roomd
 
-      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      managed.bind( Socket.pack_sockaddr_in( managed_port, '127.0.0.1' ) )
-      puts "managed bound on #{ managed_port } #{ @selector.backend }"
-      mon = @selector.register( managed, :r )
-      @roles[ mon ] = :managed
+      if managed_sock
+        puts "p#{ Process.pid } reg managed on #{ managed_sock.local_address.ip_unpack.last }"
+        mon = @selector.register( managed_sock, :r )
+        @roles[ mon ] = :managed
+      end
     end
 
     def looping
@@ -201,8 +199,8 @@ module Girl
               data = data.strip
 
               if data == 't'
-                puts 'check timeout'
                 now = Time.new
+                puts "p#{ Process.pid } check timeout #{ now }"
 
                 unless @timestamps.find{ | _, stamp | now - stamp < @timeout }
                   puts "flash #{ now }"
@@ -283,8 +281,7 @@ module Girl
       @timestamps[ mon ] = Time.new
 
       if @room_title
-        data = "room#{ @room_title }".unpack( "C*" ).map{ | c | c.chr }.join
-        buffer( mon, data )
+        buffer( mon, "room#{ @room_title }".unpack( "C*" ).map{ | c | c.chr }.join )
       end
     end
   end

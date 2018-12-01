@@ -19,7 +19,7 @@ require 'socket'
 module Girl
   class Redir
 
-    def initialize( redir_port, relayd_host, relayd_port, hex_block = nil, chunk_dir = '/tmp/redir' )
+    def initialize( redir_port, relayd_host, relayd_port, hex_block = nil, chunk_dir = '/tmp/redir', managed_sock = nil )
       if hex_block
         Girl::Hex.class_eval( hex_block )
       end
@@ -44,16 +44,14 @@ module Girl
       redir.bind( Socket.pack_sockaddr_in( redir_port, '0.0.0.0' ) )
       redir.listen( 511 )
       puts "p#{ Process.pid } listening on #{ redir_port } #{ @selector.backend }"
-      mon = @selector.register( redir, :r )
-      @roles[ mon ] = :redir
+      redir_mon = @selector.register( redir, :r )
+      @roles[ redir_mon ] = :redir
 
-      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      managed.bind( Socket.pack_sockaddr_in( redir_port, '127.0.0.1' ) )
-      puts "managed bound on #{ redir_port } #{ @selector.backend }"
-      mon = @selector.register( managed, :r )
-      @roles[ mon ] = :managed
+      if managed_sock
+        puts "p#{ Process.pid } reg managed on #{ managed_sock.local_address.ip_unpack.last }"
+        mon = @selector.register( managed_sock, :r )
+        @roles[ mon ] = :managed
+      end
     end
 
     def looping
@@ -172,8 +170,8 @@ module Girl
               data = data.strip
 
               if data == 't'
-                puts 'check timeout'
                 now = Time.new
+                puts "p#{ Process.pid } check timeout #{ now }"
 
                 @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
                   close_mon( mo )

@@ -14,7 +14,7 @@ require 'resolv'
 module Girl
   class Socks
 
-    def initialize( socks_host, socks_port, resolv_host, resolv_port, relayd_host, relayd_port, chunk_dir = '/tmp/socks' )
+    def initialize( socks_host, socks_port, resolv_host, resolv_port, relayd_host, relayd_port, chunk_dir = '/tmp/socks', managed_sock = nil )
       @writes = {} # sock => :buff / :cache
       @buffs = {} # sock => 4M working ram
       @caches = {} # sock => the left data of first chunk
@@ -36,16 +36,14 @@ module Girl
       socks5.bind( Socket.pack_sockaddr_in( socks_port, socks_host ) )
       socks5.listen( 511 )
       puts "p#{ Process.pid } listening on #{ socks_host }:#{ socks_port } #{ @selector.backend }"
-      mon = @selector.register( socks5, :r )
-      @roles[ mon ] = :socks5
+      socks5_mon = @selector.register( socks5, :r )
+      @roles[ socks5_mon ] = :socks5
 
-      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      managed.bind( Socket.pack_sockaddr_in( socks_port, '127.0.0.1' ) )
-      puts "managed bound on #{ socks_port } #{ @selector.backend }"
-      mon = @selector.register( managed, :r )
-      @roles[ mon ] = :managed
+      if managed_sock
+        puts "p#{ Process.pid } reg managed on #{ managed_sock.local_address.ip_unpack.last }"
+        mon = @selector.register( managed_sock, :r )
+        @roles[ mon ] = :managed
+      end
     end
 
     def looping
@@ -200,8 +198,8 @@ module Girl
               data = data.strip
 
               if data == 't'
-                puts 'check timeout'
                 now = Time.new
+                puts "p#{ Process.pid } check timeout #{ now }"
 
                 @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
                   close_mon( mo )
