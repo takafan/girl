@@ -24,7 +24,7 @@ module Girl
         sock4 = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         sock4.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         sock4.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
-        puts "Binding on 0.0.0.0 #{ port }"
+        puts "bound on #{ port } AF_INET"
 
         @reads << sock4
 
@@ -39,7 +39,7 @@ module Girl
         sock6 = Socket.new( Socket::AF_INET6, Socket::SOCK_DGRAM, 0 )
         sock6.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         sock6.bind( Socket.sockaddr_in( port, '::0' ) )
-        puts "Binding on ::0 #{ port }"
+        puts "bound on #{ port } AF_INET6"
 
         @reads << sock6
 
@@ -58,7 +58,6 @@ module Girl
     def looping
       loop do
         readable_socks, _ = IO.select( @reads )
-
         readable_socks.each do | sock |
           data, addrinfo, rflags, *controls = sock.recvmsg
           sender = addrinfo.to_sockaddr
@@ -115,10 +114,6 @@ module Girl
 
     def quit!
       @reads.each{ | sock | sock.close }
-      @reads.clear
-      @pub_socks.clear
-      @ids.clear
-
       exit
     end
 

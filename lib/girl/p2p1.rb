@@ -5,7 +5,7 @@ require 'socket'
 module Girl
   class P2p1
 
-    def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil )
+    def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil, managed_port = 1717 )
       @writes = {} # sock => ''
       @roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       @appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
@@ -15,18 +15,26 @@ module Girl
       @reconn = 0
       @usr = Girl::Usr.new
       @selector = NIO::Selector.new
-      @roles = {}  # mon => :room / :p1 / :app
+      @roles = {}  # mon => :room / :p1 / :app / :managed
       @timestamps = {} # mon => last r/w
       @twins = {} # p1_mon <=> app_mon
       @swaps = {} # p1_mon => nil or length
       @timeout = timeout
 
       connect_roomd
+
+      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      managed.bind( Socket.pack_sockaddr_in( managed_port, '127.0.0.1' ) )
+      puts "managed bound on #{ managed_port } #{ @selector.backend }"
+      mon = @selector.register( managed, :r )
+      @roles[ mon ] = :managed
     end
 
     def looping
       loop do
-        size = @selector.select( @timeout ) do | mon |
+        @selector.select do | mon |
           sock = mon.io
 
           if mon.readable?
@@ -188,6 +196,21 @@ module Girl
 
               @timestamps[ mon ] = Time.new
               buffer( twin, data )
+            when :managed
+              data, addrinfo, rflags, *controls = sock.recvmsg
+              data = data.strip
+
+              if data == 't'
+                puts 'check timeout'
+                now = Time.new
+
+                unless @timestamps.find{ | _, stamp | now - stamp < @timeout }
+                  puts "flash #{ now }"
+                  connect_roomd
+                end
+              else
+                puts "unknown manage code"
+              end
             end
           end
 
@@ -218,17 +241,11 @@ module Girl
             mon.remove_interest( :w )
           end
         end
-
-        unless size
-          puts "flash #{ Time.new }"
-          connect_roomd
-        end
       end
     end
 
     def quit!
-      cleanup
-      @selector.close
+      @roles.each{ | mon, _ | mon.io.close }
       exit
     end
 
@@ -239,7 +256,7 @@ module Girl
       mon.add_interest( :w )
     end
 
-    def cleanup
+    def connect_roomd
       @roles.each do | mon, _ |
         sock = mon.io
         sock.close
@@ -251,10 +268,7 @@ module Girl
       @timestamps.clear
       @twins.clear
       @swaps.clear
-    end
 
-    def connect_roomd
-      cleanup
       sock = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
 

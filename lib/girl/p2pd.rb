@@ -4,23 +4,30 @@ require 'socket'
 module Girl
   class P2pd
 
-    def initialize( roomd_port = 6262, tmp_dir = '/tmp/p2pd', room_timeout = 3600 )
+    def initialize( roomd_port = 6262, tmp_dir = '/tmp/p2pd', timeout = 3600 )
       @writes = {} # sock => ''
       @tmp_dir = tmp_dir
-      @room_timeout = room_timeout
+      @timeout = timeout
       @selector = NIO::Selector.new
-      @roles = {} # mon => :roomd / :room
+      @roles = {} # mon => :roomd / :room / :managed
       @infos = {} # room_mon => { ip_port: '6.6.6.6:12345', tmp_path: '/tmp/p2pd/6.6.6.6:12345' }
-      @timestamps = {} # room_mon => last r/w
+      @timestamps = {} # mon => last r/w
 
       roomd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       roomd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       roomd.bind( Socket.pack_sockaddr_in( roomd_port, '0.0.0.0' ) )
       roomd.listen( 127 )
       puts "roomd listening on #{ roomd_port } #{ @selector.backend }"
-
       mon = @selector.register( roomd, :r )
       @roles[ mon ] = :roomd
+
+      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      managed.bind( Socket.pack_sockaddr_in( roomd_port, '127.0.0.1' ) )
+      puts "managed bound on #{ roomd_port } #{ @selector.backend }"
+      mon = @selector.register( managed, :r )
+      @roles[ mon ] = :managed
     end
 
     def looping
@@ -31,12 +38,6 @@ module Girl
           if mon.readable?
             case @roles[ mon ]
             when :roomd
-              now = Time.new
-
-              @timestamps.select{ | _, stamp | now - stamp > @room_timeout }.each do | mo, _ |
-                close_mon( mo )
-              end
-
               begin
                 room, addr = sock.accept_nonblock
               rescue IO::WaitReadable, Errno::EINTR
@@ -55,7 +56,7 @@ module Girl
                 ip_port: ip_port,
                 tmp_path: tmp_path
               }
-              @timestamps[ room_mon ] = now
+              @timestamps[ room_mon ] = Time.new
             when :room
               begin
                 data = sock.read_nonblock( 4096 )
@@ -118,6 +119,20 @@ module Girl
               else
                 puts 'ghost?'
               end
+            when :managed
+              data, addrinfo, rflags, *controls = sock.recvmsg
+              data = data.strip
+
+              if data == 't'
+                puts 'check timeout'
+                now = Time.new
+
+                @timestamps.select{ | _, stamp | now - stamp > @timeout }.each do | mo, _ |
+                  close_mon( mo )
+                end
+              else
+                puts "unknown manage code"
+              end
             end
           end
 
@@ -159,11 +174,6 @@ module Girl
         end
       end
 
-      @writes.clear
-      @roles.clear
-      @infos.clear
-      @timestamps.clear
-      @selector.close
       exit
     end
 

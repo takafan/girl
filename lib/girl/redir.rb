@@ -33,8 +33,8 @@ module Girl
       @relayd_sockaddr = Socket.sockaddr_in( relayd_port, relayd_host )
       @hex = Girl::Hex.new
       @selector = NIO::Selector.new
-      @roles = {} # mon => :redir / :source / :relay
-      @timestamps = {} # relay_mon / dest_mon => last r/w
+      @roles = {} # mon => :redir / :source / :relay / :managed
+      @timestamps = {} # mon => last r/w
       @twins = {} # source_mon <=> relay_mon
       @swaps = [] # mons
 
@@ -44,10 +44,16 @@ module Girl
       redir.bind( Socket.pack_sockaddr_in( redir_port, '0.0.0.0' ) )
       redir.listen( 511 )
       puts "p#{ Process.pid } listening on #{ redir_port } #{ @selector.backend }"
-
       mon = @selector.register( redir, :r )
       @roles[ mon ] = :redir
-      @clean_stamp = Time.new # daily clean job, retire clients that idled 1 day
+
+      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      managed.bind( Socket.pack_sockaddr_in( redir_port, '127.0.0.1' ) )
+      puts "managed bound on #{ redir_port } #{ @selector.backend }"
+      mon = @selector.register( managed, :r )
+      @roles[ mon ] = :managed
     end
 
     def looping
@@ -61,14 +67,6 @@ module Girl
               now = Time.new
               print "p#{ Process.pid } #{ now } "
 
-              if now - @clean_stamp > 86400
-                @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
-                  close_mon( mo )
-                end
-
-                @clean_stamp = now
-              end
-
               begin
                 source, _ = sock.accept_nonblock
               rescue IO::WaitReadable, Errno::EINTR
@@ -81,7 +79,6 @@ module Girl
               source.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
               begin
-                # SO_ORIGINAL_DST
                 # https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter_ipv4.h
                 dst_addr = source.getsockopt( Socket::SOL_IP, 80 )
               rescue Exception => e
@@ -170,6 +167,20 @@ module Girl
 
               @timestamps[ mon ] = Time.new
               buffer( twin, data )
+            when :managed
+              data, addrinfo, rflags, *controls = sock.recvmsg
+              data = data.strip
+
+              if data == 't'
+                puts 'check timeout'
+                now = Time.new
+
+                @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
+                  close_mon( mo )
+                end
+              else
+                puts "unknown manage code"
+              end
             end
           end
 
@@ -242,16 +253,6 @@ module Girl
         end
       end
 
-      @writes.clear
-      @buffs.clear
-      @caches.clear
-      @chunks.clear
-      @close_after_writes.clear
-      @roles.clear
-      @timestamps.clear
-      @twins.clear
-      @swaps.clear
-      @selector.close
       exit
     end
 

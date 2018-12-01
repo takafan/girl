@@ -19,8 +19,8 @@ module Girl
       @addrs = {} # sock => addrinfo
       @xeh = Girl::Xeh.new
       @selector = NIO::Selector.new
-      @roles = {} # mon => :relayd / :relay / :dest
-      @timestamps = {} # relay_mon / dest_mon => last r/w
+      @roles = {} # mon => :relayd / :relay / :dest / :managed
+      @timestamps = {} # mon => last r/w
       @twins = {} # relay_mon <=> dest_mon
       @swaps = {} # relay_mon => nil or length
 
@@ -30,10 +30,16 @@ module Girl
       relayd.bind( Socket.pack_sockaddr_in( port, '0.0.0.0' ) )
       relayd.listen( 511 )
       puts "p#{ Process.pid } listening on #{ port } #{ @selector.backend }"
-
       mon = @selector.register( relayd, :r )
       @roles[ mon ] = :relayd
-      @clean_stamp = Time.new # daily clean job, retire clients that idled 1 day
+
+      managed = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      managed.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      managed.bind( Socket.pack_sockaddr_in( port, '127.0.0.1' ) )
+      puts "managed bound on #{ port } #{ @selector.backend }"
+      mon = @selector.register( managed, :r )
+      @roles[ mon ] = :managed
     end
 
     def looping
@@ -46,14 +52,6 @@ module Girl
             when :relayd
               now = Time.new
               print "p#{ Process.pid } #{ now } "
-
-              if now - @clean_stamp > 86400
-                @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
-                  close_mon( mo )
-                end
-
-                @clean_stamp = now
-              end
 
               begin
                 relay, addr = sock.accept_nonblock
@@ -181,6 +179,20 @@ module Girl
 
               @timestamps[ mon ] = Time.new
               buffer( twin, data )
+            when :managed
+              data, addrinfo, rflags, *controls = sock.recvmsg
+              data = data.strip
+
+              if data == 't'
+                puts 'check timeout'
+                now = Time.new
+
+                @timestamps.select{ | _, stamp | now - stamp > 86400 }.each do | mo, _ |
+                  close_mon( mo )
+                end
+              else
+                puts "unknown manage code"
+              end
             end
           end
 
@@ -253,17 +265,6 @@ module Girl
         end
       end
 
-      @writes.clear
-      @buffs.clear
-      @caches.clear
-      @chunks.clear
-      @close_after_writes.clear
-      @addrs.clear
-      @roles.clear
-      @timestamps.clear
-      @twins.clear
-      @swaps.clear
-      @selector.close
       exit
     end
 

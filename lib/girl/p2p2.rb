@@ -200,11 +200,6 @@ module Girl
 
     def quit!
       @roles.each{ | mon, _ | mon.io.close }
-      @writes.clear
-      @roles.clear
-      @twins.clear
-      @swaps.clear
-      @selector.close
       exit
     end
 
