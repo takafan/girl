@@ -251,10 +251,11 @@ module Girl
     private
 
     def connect_roomd
-      @roles.each do | mon, _ |
+      @roles.select{ | _, role | role != :managed  }.each do | mon, _ |
         sock = mon.io
         sock.close
         @selector.deregister( sock )
+        @roles.delete( mon )
       end
 
       @chunks.each do | sock, chunk |
@@ -271,7 +272,6 @@ module Girl
       @caches.clear
       @chunks.clear
       @close_after_writes.clear
-      @roles.clear
       @timestamps.clear
       @twins.clear
 

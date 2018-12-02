@@ -39,6 +39,8 @@ module Girl
           if mon.readable?
             case @roles[ mon ]
             when :room
+              now = Time.new
+
               begin
                 data = sock.read_nonblock( 4096 )
                 @reconn = 0
@@ -54,7 +56,7 @@ module Girl
                 end
 
                 sleep 5
-                puts "#{ e.class }, reconn #{ @reconn }"
+                puts "#{ e.class }, reconn #{ @reconn } #{ now }"
                 connect_roomd
                 break
               end
@@ -64,7 +66,6 @@ module Girl
                 next
               end
 
-              now = Time.new
               @timestamps[ mon ] = now
               p2_ip, p2_port = data.split( ':' )
 
@@ -262,14 +263,14 @@ module Girl
     end
 
     def connect_roomd
-      @roles.each do | mon, _ |
+      @roles.select{ | _, role | role != :managed  }.each do | mon, _ |
         sock = mon.io
         sock.close
         @selector.deregister( sock )
+        @roles.delete( mon )
       end
 
       @writes.clear
-      @roles.clear
       @timestamps.clear
       @twins.clear
       @swaps.clear
