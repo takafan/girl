@@ -19,6 +19,7 @@ module Girl
       @timestamps = {} # mon => last r/w
       @twins = {} # p1_mon <=> app_mon
       @swaps = {} # p1_mon => nil or length
+      @swaps2 = [] # p1_mons
       @timeout = timeout
 
       connect_roomd
@@ -92,6 +93,7 @@ module Girl
               @roles[ p1_mon ] = :p1
               @timestamps[ p1_mon ] = now
               @swaps[ p1_mon ] = nil
+              @swaps2 << p1_mon
             when :p1
               if sock.closed?
                 next
@@ -193,6 +195,11 @@ module Girl
               end
 
               @timestamps[ mon ] = Time.new
+
+              if @swaps2.delete( twin )
+                data = "#{ [ data.size ].pack( 'n' ) }#{ @usr.swap( data ) }"
+              end
+
               buffer( twin, data )
             when :managed
               data, addrinfo, rflags, *controls = sock.recvmsg
@@ -266,6 +273,7 @@ module Girl
       @timestamps.clear
       @twins.clear
       @swaps.clear
+      @swaps2.clear
 
       sock = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )

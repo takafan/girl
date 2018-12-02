@@ -34,7 +34,8 @@ module Girl
       @selector = NIO::Selector.new
       @roles = {} # mon => :room / :p2 / :appd / :app
       @twins = {} # p2_mon <=> app_mon
-      @swaps = [] # mons
+      @swaps = [] # p2_mons
+      @swaps2 = {} # p2_mon => nil or length
 
       room = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       room.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
@@ -116,6 +117,8 @@ module Girl
                 @writes.delete( sock )
                 @selector.deregister( sock )
                 @roles.delete( mon )
+                @swaps.delete( mon )
+                @swaps2.delete( mon )
                 sleep 1
                 p2p
                 break
@@ -126,6 +129,27 @@ module Girl
                 end
 
                 e.is_a?( EOFError ) ? exit : raise( e )
+              end
+
+              if @swaps2.include?( mon )
+                len = @swaps2[ mon ]
+
+                unless len
+                  if data.size < 2
+                    raise "lonely char? #{ data.inspect }"
+                  end
+
+                  len = data[ 0, 2 ].unpack( 'n' ).first
+                  data = data[ 2..-1 ]
+                end
+
+                if data.size >= len
+                  data = "#{ @usr.swap( data[ 0, len ] ) }#{ data[ len..-1 ] }"
+                  @swaps2.delete( mon )
+                else
+                  data = @usr.swap( data )
+                  @swaps2[ mon ] = len - data.size
+                end
               end
 
               buffer( @twins[ mon ], data )
@@ -225,6 +249,7 @@ module Girl
       p2_mon = @selector.register( p2, :r )
       @roles[ p2_mon ] = :p2
       @swaps << p2_mon
+      @swaps2[ p2_mon ] = nil
     end
 
   end
