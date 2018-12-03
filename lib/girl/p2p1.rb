@@ -47,7 +47,7 @@ module Girl
               rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
                 puts "#{ now } read #{ @roles[ mon ] } #{ e.class }"
 
-                if e.is_a?( EOFError )
+                if [ EOFError, Errno::ECONNREFUSED ].include?( e.class )
                   connect_roomd
                 else
                   sock.close
