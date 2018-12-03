@@ -90,7 +90,6 @@ module Girl
       @custom_qnames = custom_domains.map{ |dom| dom.split( '.' ).map{ | sub | [ sub.size ].pack( 'C' ) + sub }.join }
       @ids = {}
       @caches = {}
-      @reconn = 0
     end
 
     def looping
@@ -122,22 +121,15 @@ module Girl
 
             if cache
               now = Time.new
+
               if expire > now
                 cache[ 0, 2 ] = id
                 cache[ ttl_ix, 4 ] = [ ( expire - now ).to_i ].pack( 'N' )
 
                 begin
                   sock.sendmsg( cache, 0, sender )
-                  @reconn = 0
                 rescue Errno::ENETUNREACH => e
-                  if @reconn > 100
-                    raise e
-                  end
-
-                  sleep 5
-                  @reconn += 1
-                  puts "#{ e.class }, retry send cache #{ @reconn }"
-                  retry
+                  puts "#{ now } send cache #{ e.class }"
                 end
 
                 next
@@ -154,32 +146,16 @@ module Girl
 
                 begin
                   alias_sock.sendmsg( data, 0, sockaddr )
-                  @reconn = 0
                 rescue Errno::ENETUNREACH => e
-                  if @reconn > 100
-                    raise e
-                  end
-
-                  sleep 5
-                  @reconn += 1
-                  puts "#{ e.class }, retry sendmsg to rvd #{ @reconn }"
-                  retry
+                  puts "#{ Time.new } send rvd #{ e.class }"
                 end
               end
             else
               @pub_socks.each do | sockaddr, alias_sock |
                 begin
                   alias_sock.sendmsg( data, 0, sockaddr )
-                  @reconn = 0
                 rescue Errno::ENETUNREACH => e
-                  if @reconn > 100
-                    raise e
-                  end
-
-                  sleep 5
-                  @reconn += 1
-                  puts "#{ e.class }, retry sendmsg to pub #{ @reconn }"
-                  retry
+                  puts "#{ Time.new } send pub #{ e.class }"
                 end
               end
             end
@@ -200,16 +176,8 @@ module Girl
 
             begin
               alias_sock.sendmsg( data, 0, src )
-              @reconn = 0
             rescue Errno::ENETUNREACH => e
-              if @reconn > 100
-                raise e
-              end
-
-              sleep 5
-              @reconn += 1
-              puts "#{ e.class }, retry sendmsg to src #{ @reconn }"
-              retry
+              puts "#{ Time.new } send client #{ e.class }"
             end
 
             next if ancount == 0 && nscount == 0

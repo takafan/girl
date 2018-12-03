@@ -28,7 +28,6 @@ module Girl
       @appd_host = appd_host
       @appd_port = appd_port
       @appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
-      @reconn = 0
       @chunk_dir = chunk_dir
       @selector = NIO::Selector.new
       @roles = {}  # mon => :room / :mirr / :app / :managed
@@ -53,27 +52,24 @@ module Girl
           if mon.readable?
             case @roles[ mon ]
             when :room
+              now = Time.new
+
               begin
                 data = sock.read_nonblock( 4096 )
-                @reconn = 0
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
                 next
               rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
+                puts "#{ now } read #{ @roles[ mon ] } #{ e.class }"
+
                 if e.is_a?( EOFError )
-                  @reconn = 0
-                elsif @reconn > 100
-                  raise e
+                  connect_roomd
                 else
-                  @reconn += 1
+                  sock.close
                 end
 
-                sleep 5
-                puts "#{ e.class }, reconn #{ @reconn }"
-                connect_roomd
                 break
               end
 
-              now = Time.new
               @timestamps[ mon ] = now
 
               data.split( ';' ).map{ | s | s.to_i }.each do | mirrd_port |
@@ -280,6 +276,10 @@ module Girl
       begin
         sock.connect_nonblock( @roomd_sockaddr )
       rescue IO::WaitWritable, Errno::EINTR
+      rescue Errno::ENETUNREACH => e
+        puts "#{ Time.new } connect roomd #{ e.class }"
+        sock.close
+        return
       end
 
       @buffs[ sock ] = ''

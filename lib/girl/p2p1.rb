@@ -12,7 +12,6 @@ module Girl
       @appd_host = appd_host
       @appd_port = appd_port
       @room_title = room_title
-      @reconn = 0
       @usr = Girl::Usr.new
       @selector = NIO::Selector.new
       @roles = {}  # mon => :room / :p1 / :app / :managed
@@ -43,21 +42,17 @@ module Girl
 
               begin
                 data = sock.read_nonblock( 4096 )
-                @reconn = 0
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
                 next
               rescue EOFError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ETIMEDOUT => e
+                puts "#{ now } read #{ @roles[ mon ] } #{ e.class }"
+
                 if e.is_a?( EOFError )
-                  @reconn = 0
-                elsif @reconn > 100
-                  raise e
+                  connect_roomd
                 else
-                  @reconn += 1
+                  sock.close
                 end
 
-                sleep 5
-                puts "#{ e.class }, reconn #{ @reconn } #{ now }"
-                connect_roomd
                 break
               end
 
@@ -75,7 +70,7 @@ module Girl
               begin
                 p1.bind( sock.local_address ) # use the hole
               rescue Errno::EADDRINUSE => e
-                puts "bind #{ e.class }, flash a room"
+                puts "bind #{ e.class }"
                 connect_roomd
                 break
               end
@@ -84,7 +79,7 @@ module Girl
                 p1.connect_nonblock( Socket.sockaddr_in( p2_port, p2_ip ) )
               rescue IO::WaitWritable, Errno::EINTR
               rescue Exception => e
-                puts "p2p #{ p2_ip }:#{ p2_port } #{ e.class }, flash a room"
+                puts "p2p #{ p2_ip }:#{ p2_port } #{ e.class }"
                 connect_roomd
                 break
               end
@@ -104,7 +99,7 @@ module Girl
 
               if twin && twin.io.closed?
                 connect_roomd
-                next
+                break
               end
 
               begin
@@ -112,7 +107,7 @@ module Girl
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
                 next
               rescue Exception => e
-                puts "read #{ @roles[ mon ] } #{ e.class }, flash a room"
+                puts "read #{ @roles[ mon ] } #{ e.class }"
                 connect_roomd
                 break
               end
@@ -127,7 +122,7 @@ module Girl
                   app.connect_nonblock( @appd_sockaddr )
                 rescue IO::WaitWritable, Errno::EINTR
                 rescue Exception => e
-                  puts "connect appd #{ @appd_host }:#{ @appd_port } #{ e.class }, flash a room"
+                  puts "connect appd #{ @appd_host }:#{ @appd_port } #{ e.class }"
                   connect_roomd
                   break
                 end
@@ -156,7 +151,7 @@ module Girl
                     puts "lonely char? #{ data.inspect }"
                     sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
                     connect_roomd
-                    next
+                    break
                   end
 
                   len = data[ 0, 2 ].unpack( 'n' ).first
@@ -182,7 +177,7 @@ module Girl
 
               if twin.io.closed?
                 connect_roomd
-                next
+                break
               end
 
               begin
@@ -190,7 +185,7 @@ module Girl
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
                 next
               rescue Exception => e
-                puts "read #{ @roles[ mon ] } #{ e.class }, flash a room"
+                puts "read #{ @roles[ mon ] } #{ e.class }"
                 connect_roomd
                 break
               end
@@ -213,6 +208,7 @@ module Girl
                 unless @timestamps.find{ | _, stamp | now - stamp < @timeout }
                   puts "flash #{ now }"
                   connect_roomd
+                  break
                 end
               else
                 puts "unknown manage code"
@@ -232,7 +228,7 @@ module Girl
             rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
               next
             rescue Exception => e
-              puts "write #{ @roles[ mon ] } #{ e.class }, flash a room"
+              puts "write #{ @roles[ mon ] } #{ e.class }"
               connect_roomd
               break
             end
@@ -282,6 +278,10 @@ module Girl
       begin
         sock.connect_nonblock( @roomd_sockaddr )
       rescue IO::WaitWritable, Errno::EINTR
+      rescue Errno::ENETUNREACH => e
+        puts "#{ Time.new } connect roomd #{ e.class }"
+        sock.close
+        return
       end
 
       @writes[ sock ] = ''
@@ -293,5 +293,6 @@ module Girl
         buffer( mon, "room#{ @room_title }".unpack( "C*" ).map{ | c | c.chr }.join )
       end
     end
+
   end
 end
