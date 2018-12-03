@@ -401,8 +401,15 @@ module Girl
       @roles.delete( mon )
       @timestamps.delete( mon )
       @twins.delete( mon )
-      @appd_infos.delete( mon )
       @pending_app_mons.delete( mon )
+      info = @appd_infos.delete( mon )
+
+      if info
+        begin
+          File.delete( info[ :tmp_path ] )
+        rescue Errno::ENOENT
+        end
+      end
     end
 
   end
