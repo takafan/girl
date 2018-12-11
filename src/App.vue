@@ -17,11 +17,19 @@
         <div class="interval">
           <span class="output" v-html="colour_actives.redir" v-on:click="show_service( 'redir' )"></span>
         </div>
-        <div v-if="editing == 'redir'" class="top-interval mw512">
+        <div v-if="editing == 'redir'" class="top-interval mw550">
           <div v-if="expire_info" v-html="expire_info"></div>
           <div class="top-interval right">
             <span>
+              <Checkbox v-model="enableds.redir" @on-change="check_redir" :disabled="is_locked">开机自动启动</Checkbox>
+            </span>
+            <span>
+              &nbsp;&nbsp;
               <Button @click="editing = null">取消</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'status', 'redir' )" :loading="loadings[ 'status@redir' ]" :disabled="is_locked">刷新</Button>
             </span>
             <span v-if="runnings.redir">
               &nbsp;&nbsp;
@@ -35,6 +43,10 @@
               &nbsp;&nbsp;
               <Button @click="systemctl( 'restart', 'redir' )" :loading="loadings[ 'restart@redir' ]" :disabled="is_locked">重启</Button>
             </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="tail( 'redir' )" :disabled="is_locked">日志</Button>
+            </span>
           </div>
         </div>
       </Col>
@@ -47,10 +59,18 @@
         <div class="interval">
           <span class="output" v-html="colour_actives.resolv" v-on:click="show_service( 'resolv' )"></span>
         </div>
-        <div v-if="editing == 'resolv'" class="top-interval mw512">
+        <div v-if="editing == 'resolv'" class="top-interval mw550">
           <div class="right">
             <span>
+              <Checkbox v-model="enableds.resolv" @on-change="check_resolv" :disabled="is_locked">开机自动启动</Checkbox>
+            </span>
+            <span>
+              &nbsp;&nbsp;
               <Button @click="editing = null">取消</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'status', 'resolv' )" :loading="loadings[ 'status@resolv' ]" :disabled="is_locked">刷新</Button>
             </span>
             <span v-if="runnings.resolv">
               &nbsp;&nbsp;
@@ -64,6 +84,10 @@
               &nbsp;&nbsp;
               <Button @click="systemctl( 'restart', 'resolv' )" :loading="loadings[ 'restart@resolv' ]" :disabled="is_locked">重启</Button>
             </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="tail( 'resolv' )" :disabled="is_locked">日志</Button>
+            </span>
           </div>
         </div>
       </Col>
@@ -76,7 +100,7 @@
         <div class="interval">
           <span class="output" v-html="colour_actives.hostapd" v-on:click="show_service( 'hostapd' )"></span>
         </div>
-        <div v-if="editing == 'hostapd'" class="top-interval mw512">
+        <div v-if="editing == 'hostapd'" class="top-interval mw550">
           <div class="right">
             <span>
               <Checkbox v-model="enableds.hostapd" @on-change="check_hostapd" :disabled="is_locked">开机自动启动</Checkbox>
@@ -84,6 +108,10 @@
             <span>
               &nbsp;&nbsp;
               <Button @click="editing = null">取消</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'status', 'hostapd' )" :loading="loadings[ 'status@hostapd' ]" :disabled="is_locked">刷新</Button>
             </span>
             <span v-if="runnings.hostapd">
               &nbsp;&nbsp;
@@ -97,9 +125,15 @@
               &nbsp;&nbsp;
               <Button @click="systemctl( 'restart', 'hostapd' )" :loading="loadings[ 'restart@hostapd' ]" :disabled="is_locked">重启</Button>
             </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="tail( 'hostapd' )" :disabled="is_locked">日志</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="station()" :disabled="is_locked">客户端</Button>
+            </span>
           </div>
-          <div class="top-interval">已连接的客户端：</div>
-          <div class="top-interval output-area" v-html="connections_info" v-if="connections_info"></div>
         </div>
       </Col>
       <Col span="1">&nbsp;</Col>
@@ -111,14 +145,26 @@
         <div class="interval">
           <span class="output" v-html="colour_actives.dhcpcd" v-on:click="show_service( 'dhcpcd' )"></span>
         </div>
-        <div v-if="editing == 'dhcpcd'" class="top-interval mw512">
+        <div v-if="editing == 'dhcpcd'" class="top-interval mw550">
           <div class="right">
             <span>
               <Button @click="editing = null">取消</Button>
             </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'status', 'dhcpcd' )" :loading="loadings[ 'status@dhcpcd' ]" :disabled="is_locked">刷新</Button>
+            </span>
             <span v-if="runnings.dhcpcd">
               &nbsp;&nbsp;
               <Button @click="systemctl( 'restart', 'dhcpcd' )" :loading="loadings[ 'restart@dhcpcd' ]" :disabled="is_locked">重启</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="tail( 'dhcpcd' )" :disabled="is_locked">日志</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="ip()" :disabled="is_locked">ip</Button>
             </span>
           </div>
         </div>
@@ -132,14 +178,22 @@
         <div class="interval">
           <span class="output" v-html="colour_actives.dnsmasq" v-on:click="show_service( 'dnsmasq' )"></span>
         </div>
-        <div v-if="editing == 'dnsmasq'" class="top-interval mw512">
+        <div v-if="editing == 'dnsmasq'" class="top-interval mw550">
           <div class="right">
             <span>
               <Button @click="editing = null">取消</Button>
             </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'status', 'dnsmasq' )" :loading="loadings[ 'status@dnsmasq' ]" :disabled="is_locked">刷新</Button>
+            </span>
             <span v-if="runnings.dnsmasq">
               &nbsp;&nbsp;
               <Button @click="systemctl( 'restart', 'dnsmasq' )" :loading="loadings[ 'restart@dnsmasq' ]" :disabled="is_locked">重启</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="tail( 'dnsmasq' )" :disabled="is_locked">日志</Button>
             </span>
           </div>
         </div>
@@ -153,7 +207,7 @@
         <div class="interval">
           <span class="output" v-html="colour_actives.p2p1_sshd" v-on:click="show_service( 'p2p1_sshd' )"></span>
         </div>
-        <div v-if="editing == 'p2p1_sshd'" class="top-interval mw512">
+        <div v-if="editing == 'p2p1_sshd'" class="top-interval mw550">
           <div class="right">
             <span>
               <Checkbox v-model="enableds.p2p1_sshd" @on-change="check_p2p1_sshd" :disabled="is_locked">开机自动启动</Checkbox>
@@ -161,6 +215,10 @@
             <span>
               &nbsp;&nbsp;
               <Button @click="editing = null">取消</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="systemctl( 'status', 'p2p1_sshd' )" :loading="loadings[ 'status@p2p1_sshd' ]" :disabled="is_locked">刷新</Button>
             </span>
             <span v-if="runnings.p2p1_sshd">
               &nbsp;&nbsp;
@@ -173,6 +231,10 @@
             <span v-if="runnings.p2p1_sshd">
               &nbsp;&nbsp;
               <Button @click="systemctl( 'restart', 'p2p1_sshd' )" :loading="loadings[ 'restart@p2p1_sshd' ]" :disabled="is_locked">重启</Button>
+            </span>
+            <span>
+              &nbsp;&nbsp;
+              <Button @click="tail( 'p2p1_sshd' )" :disabled="is_locked">日志</Button>
             </span>
           </div>
           <div class="top-interval">
@@ -187,7 +249,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'girl.relayd' ] }}</div>
-        <div v-if="editing == 'girl.relayd'" class="interval mw512">
+        <div v-if="editing == 'girl.relayd'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'girl.relayd' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -198,9 +260,9 @@
         <div v-else>
           <div v-html="texts[ 'girl.relayd' ] ? texts[ 'girl.relayd' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'girl.relayd'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'girl.relayd'" class="mw512 right">
+          <div v-if="saved == 'girl.relayd'" class="mw550 right">
             <div> 配置生效需要重启{{ translates.redir }}，确认重启服务吗？ </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -216,7 +278,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'girl.resolvd' ] }}</div>
-        <div v-if="editing == 'girl.resolvd'" class="interval mw512">
+        <div v-if="editing == 'girl.resolvd'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'girl.resolvd' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -227,9 +289,9 @@
         <div v-else>
           <div v-html="texts[ 'girl.resolvd' ] ? texts[ 'girl.resolvd' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'girl.resolvd'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'girl.resolvd'" class="mw512 right">
+          <div v-if="saved == 'girl.resolvd'" class="mw550 right">
             <div> 配置生效需要重启{{ translates.resolv }}，确认重启服务吗？ </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -245,7 +307,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'nameservers.txt' ] }}</div>
-        <div v-if="editing == 'nameservers.txt'" class="interval mw512">
+        <div v-if="editing == 'nameservers.txt'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'nameservers.txt' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -256,9 +318,9 @@
         <div v-else>
           <div v-html="texts[ 'nameservers.txt' ] ? texts[ 'nameservers.txt' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'nameservers.txt'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'nameservers.txt'" class="mw512 right">
+          <div v-if="saved == 'nameservers.txt'" class="mw550 right">
             <div> 配置生效需要重启{{ translates.resolv }}，确认重启服务吗？ </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -274,7 +336,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'girl.custom.txt' ] }}</div>
-        <div v-if="editing == 'girl.custom.txt'" class="interval mw512">
+        <div v-if="editing == 'girl.custom.txt'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'girl.custom.txt' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -293,9 +355,9 @@
         <div v-else>
           <div v-html="texts[ 'girl.custom.txt' ] ? texts[ 'girl.custom.txt' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'girl.custom.txt'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'girl.custom.txt'" class="mw512 right">
+          <div v-if="saved == 'girl.custom.txt'" class="mw550 right">
             <div> 域名生效需要重启{{ translates.resolv }}，ip生效需要重启{{ translates.redir }}，选择要重启的服务： </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -313,7 +375,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'hostapd.conf' ] }}</div>
-        <div v-if="editing == 'hostapd.conf'" class="interval mw512">
+        <div v-if="editing == 'hostapd.conf'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'hostapd.conf' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -322,17 +384,16 @@
           </div>
           <div class="top-interval">
             设置wifi名称，更改 ssid 行。<br />
-            设置信道，更改 channel 行。<br />
-            设置wifi密码，更改 wpa_passphrase 行。<br />
+            设置wifi密码，wpa=2，更改 wpa_passphrase 行。<br />
             设置是否隐藏，更改 ignore_broadcast_ssid 行。取值：0显示，1隐藏。
           </div>
         </div>
         <div v-else>
           <div v-html="texts[ 'hostapd.conf' ] ? texts[ 'hostapd.conf' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'hostapd.conf'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'hostapd.conf'" class="mw512 right">
+          <div v-if="saved == 'hostapd.conf'" class="mw550 right">
             <div> 配置生效需要重启{{ translates.hostapd }}，确认重启服务吗？ </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -348,7 +409,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'dhcpcd.conf' ] }}</div>
-        <div v-if="editing == 'dhcpcd.conf'" class="interval mw512">
+        <div v-if="editing == 'dhcpcd.conf'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'dhcpcd.conf' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -359,9 +420,9 @@
         <div v-else>
           <div v-html="texts[ 'dhcpcd.conf' ] ? texts[ 'dhcpcd.conf' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'dhcpcd.conf'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'dhcpcd.conf'" class="mw512 right">
+          <div v-if="saved == 'dhcpcd.conf'" class="mw550 right">
             <div> 配置生效需要重启{{ translates.dhcpcd }}，确认重启服务吗？ </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -377,7 +438,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'dnsmasq.d/wlan0.conf' ] }}</div>
-        <div v-if="editing == 'dnsmasq.d/wlan0.conf'" class="interval mw512">
+        <div v-if="editing == 'dnsmasq.d/wlan0.conf'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'dnsmasq.d/wlan0.conf' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -388,9 +449,9 @@
         <div v-else>
           <div v-html="texts[ 'dnsmasq.d/wlan0.conf' ] ? texts[ 'dnsmasq.d/wlan0.conf' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'dnsmasq.d/wlan0.conf'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'dnsmasq.d/wlan0.conf'" class="mw512 right">
+          <div v-if="saved == 'dnsmasq.d/wlan0.conf'" class="mw550 right">
             <div> 配置生效需要重启{{ translates.dnsmasq }}，确认重启服务吗？ </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -406,7 +467,7 @@
       <Col span="1">&nbsp;</Col>
       <Col span="22">
         <div class="title bold">{{ translates[ 'girl.p2pd' ] }}</div>
-        <div v-if="editing == 'girl.p2pd'" class="interval mw512">
+        <div v-if="editing == 'girl.p2pd'" class="interval mw550">
           <Input type="textarea" :rows="10" v-model="texts[ 'girl.p2pd' ]" autofocus></Input>
           <div class="right top-interval">
             <Button @click="editing = null">取消</Button>
@@ -417,9 +478,9 @@
         <div v-else>
           <div v-html="texts[ 'girl.p2pd' ] ? texts[ 'girl.p2pd' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
             v-on:click="editing = 'girl.p2pd'"
-            class="output mh200 output-area interval mw512"
+            class="output mh200 output-area interval mw550"
           />
-          <div v-if="saved == 'girl.p2pd'" class="mw512 right">
+          <div v-if="saved == 'girl.p2pd'" class="mw550 right">
             <div> 配置生效需要重启{{ translates.p2p1_sshd }}，确认重启服务吗？ </div>
             <div class="top-interval">
               <Button @click="saved = null">取消</Button>
@@ -441,17 +502,6 @@
       </Col>
       <Col span="1">&nbsp;</Col>
     </Row>
-
-    <Modal v-model="poppings.exception" width="60" :styles="{ top: '20px', marginBottom: '20px' }">
-      <div slot="header" style="color:#f60; text-align:center;">
-        <Icon type="ios-information-circle"></Icon>
-        <span>{{ exception.title }}</span>
-      </div>
-      <div v-html="exception.message.replace( new RegExp( /\n/, 'g' ), '<br />' )"></div>
-      <div slot="footer">
-        <Button @click="poppings.exception = false">关闭</Button>
-      </div>
-    </Modal>
 
   </div>
 </template>
