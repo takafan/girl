@@ -13,6 +13,16 @@ export default {
       this.systemctl( command, 'p2p1_sshd' )
     },
 
+    check_redir: function( checked ) {
+      let command = checked ? 'enable' : 'disable'
+      this.systemctl( command, 'redir' )
+    },
+
+    check_resolv: function( checked ) {
+      let command = checked ? 'enable' : 'disable'
+      this.systemctl( command, 'resolv' )
+    },
+
     colour_in: function( text ) {
       return text.replace('active (running)',
         '<span class="running">active (running)</span>' ).replace( 'active (exited)',
@@ -21,17 +31,21 @@ export default {
         '<span class="failed">failed</span>' )
     },
 
+    ip: function() {
+      window.open( this.http_host + '/api/ip', '_blank' )
+    },
+
     load: function () {
       axios.post( this.http_host + '/api/load' ).then( res => {
         let data = res.data
         let enableds = {}
         let colour_actives = {}
         let runnings = {}
-        let poppings = { exception: false }
+        let poppings = {}
         let loadings = {}
 
         Object.entries( data.loadeds ).forEach( pair => {
-          enableds[ pair[ 0 ] ] = pair[ 1 ].includes( 'enabled' )
+          enableds[ pair[ 0 ] ] = pair[ 1 ].includes( 'enabled;' )
         })
 
         Object.entries( data.actives ).forEach( pair => {
@@ -66,20 +80,12 @@ export default {
       axios.post( this.http_host + '/api/save_text', { file: file, text: this.texts[ file ] } ).then( res => {
         this.loadings[ 'save@' + file ] = false
         let data = res.data
-        if ( data.success ) {
-          this.editing = null
-          this.saved = file
-          this.$Notice.success( { title: this.translates[ file ] + ' 已更新' } )
-        }
+        this.editing = null
+        this.saved = file
+        this.$Notice.success( { title: this.translates[ file ] + ' 已更新' } )
       }).catch( err => {
         this.$Modal.error( { content: err.message } )
       })
-    },
-
-    set_exception: function( title, message ) {
-      this.exception.title = title
-      this.exception.message = message
-      this.poppings.exception = true
     },
 
     show_service: function( service ) {
@@ -99,25 +105,14 @@ export default {
         let im = this.texts[ 'girl.im' ].split( "\n" )[ 0 ].split( ':' )[ 0 ]
         axios.get( 'http://' + host + ':3000/girld/expire_info?im=' + im ).then( res => {
           let data = res.data
-          if ( data.success ) {
-            let expire_info = '本月in: ' + data.input + ' out: ' + data.output
-            if ( data.expire_time ) {
-              let expire_time = new Date( data.expire_time * 1000 )
-              expire_info += '&nbsp;&nbsp;' + '到期：' + expire_time.getFullYear() + '-' + ( expire_time.getMonth() + 1 ) + '-' + expire_time.getDate()
-            }
-            this.expire_info = expire_info
+          let expire_info = '本月in: ' + data.input + ' out: ' + data.output
+          if ( data.expire_time ) {
+            let expire_time = new Date( data.expire_time * 1000 )
+            expire_info += '&nbsp;&nbsp;' + '到期：' + expire_time.getFullYear() + '-' + ( expire_time.getMonth() + 1 ) + '-' + expire_time.getDate()
           }
+          this.expire_info = expire_info
         }).catch( err => {
           console.log( err )
-        })
-      } else if ( service == 'hostapd' ) {
-        axios.post( this.http_host + '/api/dump_wlan0_station' ).then( res => {
-          let data = res.data
-          if ( data.success ) {
-            this.connections_info = data.info.replace( /\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;' ).replace( /\n/g, '<br />' )
-          }
-        }).catch( err => {
-          this.$Modal.error( { content: err.message } )
         })
       }
     },
@@ -125,24 +120,29 @@ export default {
     systemctl: function( command, service ) {
       this.loadings[ command + '@' + service ] = true
       axios.post( this.http_host + '/api/systemctl', { command: command, service: service } ).then( res => {
-        this.loadings[ command + '@' + service ] = false
-        let data = res.data
-        if ( data.success ) {
+        axios.post( this.http_host + '/api/systemctl', { command: 'status', service: service } ).then( res2 => {
+          this.loadings[ command + '@' + service ] = false
+          let data = res2.data
           this.colour_actives[ service ] = this.colour_in( data.active )
-          if ( [ 'start', 'stop', 'restart' ].includes( command ) ) {
-            this.runnings[ service ] = data.active.includes( 'running' )
-          } else if ( [ 'disable', 'enable' ].includes( command ) ) {
-            this.enableds[ service ] = data.loaded.includes( 'enabled;' )
+          this.runnings[ service ] = data.active.includes( 'running' )
+          this.enableds[ service ] = data.loaded.includes( 'enabled;' )
+          if ( command != 'status' ) {
+            this.editing = null
           }
-          this.editing = null
           this.saved = null
           this.$Notice.success( { title: this.translates[ service ] + ' 已' + this.translates[ command ] } )
-        } else {
-          this.set_exception( this.translates[ service ] + ' ' + this.translates[ command ] + '失败', data.msg )
-        }
+        })
       }).catch( err => {
         this.$Modal.error( { content: err.message } )
       })
+    },
+
+    station: function() {
+      window.open( this.http_host + '/api/station', '_blank' )
+    },
+
+    tail: function( service ) {
+      window.open( this.http_host + '/api/tail?service=' + service, '_blank' )
     }
   },
   mounted: function () {
@@ -151,13 +151,8 @@ export default {
   data () {
     return {
       colour_actives: {},
-      connections_info: '',
       editing: null,
       enableds: {},
-      exception: {
-        message: '',
-        title: ''
-      },
       expire_info: '',
       http_host: process.env.VUE_APP_HOST ? ( 'http://' + process.env.VUE_APP_HOST ) : '',
       is_locked: false,
@@ -176,6 +171,7 @@ export default {
         p2p1_sshd: 'p2p',
         restart: '重启',
         start: '启动',
+        status: '刷新',
         stop: '停止',
         redir: '妹子网关',
         resolv: '妹子dns',
