@@ -1,7 +1,7 @@
 post '/api/save_text' do
   check_lock
 
-  data = Oj.load( request.body.read )
+  data = JSON.parse( request.body.read, symbolize_names: true )
 
   file = data[ :file ]
   text = data[ :text ]

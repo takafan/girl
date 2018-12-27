@@ -1,8 +1,6 @@
+require 'json'
 require 'net/http'
-require 'oj'
 require 'sinatra'
-
-Oj.default_options = { mode: :compat, symbol_keys: true }
 
 set :public_folder, '/srv/girl/dist'
 set :server, 'webrick'

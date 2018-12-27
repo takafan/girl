@@ -3,14 +3,14 @@ def check_lock
 end
 
 def errmsg( msg = nil, contents = {} )
-  Oj.dump({
+  JSON.generate({
     success: false,
     msg: msg
   }.merge( contents ))
 end
 
 def success( contents = {} )
-  Oj.dump({
+  JSON.generate({
     success: true
   }.merge( contents ))
 end
