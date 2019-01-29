@@ -5,7 +5,7 @@ require 'socket'
 module Girl
   class Relayd
 
-    def initialize( port, xeh_block = nil, chunk_dir = '/tmp/relayd', managed_sock = nil )
+    def initialize( port = 8080, xeh_block = nil, chunk_dir = '/tmp/relayd', managed_sock = nil )
       if xeh_block
         Girl::Xeh.class_eval( xeh_block )
       end

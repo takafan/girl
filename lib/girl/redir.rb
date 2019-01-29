@@ -19,7 +19,7 @@ require 'socket'
 module Girl
   class Redir
 
-    def initialize( redir_port, relayd_host, relayd_port, hex_block = nil, chunk_dir = '/tmp/redir', managed_sock = nil )
+    def initialize( redir_port = 1818, relayd_host, relayd_port, hex_block = nil, chunk_dir = '/tmp/redir', managed_sock = nil )
       if hex_block
         Girl::Hex.class_eval( hex_block )
       end

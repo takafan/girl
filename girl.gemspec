@@ -18,19 +18,16 @@ Gem::Specification.new do |spec|
 girl.gemspec
 lib/girl.rb
 lib/girl/hex.rb
-lib/girl/mirror.rb
-lib/girl/mirrord.rb
 lib/girl/p2p1.rb
 lib/girl/p2p2.rb
 lib/girl/p2pd.rb
-lib/girl/redir.rb
-lib/girl/relayd.rb
 lib/girl/resolv.rb
 lib/girl/resolvd.rb
 lib/girl/socks.rb
+lib/girl/tun.rb
+lib/girl/tund.rb
 lib/girl/usr.rb
 lib/girl/version.rb
-lib/girl/xeh.rb
   ]
 
   spec.require_paths = ['lib']

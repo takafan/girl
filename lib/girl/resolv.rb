@@ -4,16 +4,16 @@
 #
 # 1. Girl::Resolvd.new( 7070 ).looping # @server
 #
-# 2. Girl::Resolv.new( 1818, [ '114.114.114.114' ], 'your.server.ip', 7070, [ 'google.com' ] ).looping # @home
+# 2. Girl::Resolv.new( 1717, [ '114.114.114.114' ], 'your.server.ip', 7070, [ 'google.com' ] ).looping # @home
 #
-# 3. dig google.com @127.0.0.1 -p1818
+# 3. dig google.com @127.0.0.1 -p1717
 #
 require 'socket'
 
 module Girl
   class Resolv
 
-    def initialize( port, nameservers = [], resolvd_host = nil, resolvd_port = nil, custom_domains = [] )
+    def initialize( port = 1717, nameservers = [], resolvd_host = nil, resolvd_port = nil, custom_domains = [] )
       pub_socks = {} # nameserver => sock
       rvd_socks = {} # resolvd => sock
       pub_addrs = []

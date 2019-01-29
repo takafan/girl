@@ -3,7 +3,7 @@ require 'socket'
 module Girl
   class Resolvd
 
-    def initialize( port, nameservers = [] )
+    def initialize( port = 7070, nameservers = [] )
       pub_socks = {} # nameserver => sock
       pub_addrs = []
       pub_addr6s = []
@@ -52,7 +52,6 @@ module Girl
 
       @pub_socks = pub_socks
       @ids = {}
-      @reconn = 0
     end
 
     def looping
@@ -83,16 +82,9 @@ module Girl
             @pub_socks.each do | sockaddr, alias_sock |
               begin
                 alias_sock.sendmsg( data, 0, sockaddr )
-                @reconn = 0
               rescue Errno::ENETUNREACH => e
-                if @reconn > 100
-                  raise e
-                end
-
-                sleep 5
-                @reconn += 1
-                puts "#{ e.class }, retry sendmsg to pub #{ @reconn }"
-                retry
+                puts e.class
+                next
               end
             end
 
