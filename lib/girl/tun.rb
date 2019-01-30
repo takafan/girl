@@ -380,6 +380,10 @@ module Girl
 
               data = data[ 4..-1 ]
 
+              if pack_id == 1
+                data = @hex.swap( data )
+              end
+
               # 连号放写缓存，跳号放碎片缓存
               if pack_id - info[ :rcur ] == 1
                 while source_info[ :pieces ].include?( pack_id + 1 )

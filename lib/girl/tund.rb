@@ -265,6 +265,11 @@ module Girl
               end
 
               pack_id = info[ :pcur ] + 1
+
+              if pack_id == 1
+                data = @hex.swap( data )
+              end
+              
               data = "#{ [ 4 + data.bytesize ].pack( 'n' ) }#{ [ pack_id ].pack( 'N' ) }#{ data }"
               tund_info = @infos[ info[ :tund ] ]
 
