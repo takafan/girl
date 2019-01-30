@@ -251,18 +251,14 @@ module Girl
             when :resend
               # 重传
               data, addrinfo, rflags, *controls = sock.recvmsg
-              sents = []
+              now = Time.new
 
               @memories.each do | tun, mems |
                 tun_info = @infos[ tun ]
-                mems.each do | pack_id, mem |
-                  now = Time.new
-                  mem_data, mem_at, times = mem
 
-                  # 不足1秒跳过
-                  if now - mem_at < 1
-                    break
-                  end
+                # 一秒重传
+                mems.select{ | pack_id, mem | now - mem[ 1 ] >= 1 }.each do | pack_id, mem |
+                  mem_data, mem_at, times = mem
 
                   # 重传超过x次关闭通道
                   if times >= @resend_times
@@ -271,7 +267,6 @@ module Girl
                     break
                   end
 
-                  # 一秒重传
                   begin
                     tun.sendmsg( mem_data, 0, tun_info[ :tund_addr ] )
                   rescue Errno::ENETUNREACH => e
@@ -286,14 +281,8 @@ module Girl
                     write_buff2( tun_info, pack_ctlmsg( ctlmsg ) )
                   end
 
-                  sents << [ tun, pack_id, mem_data, now, times + 1 ]
+                  @memories[ tun ][ pack_id ] = [ mem_data, now, times + 1 ]
                 end
-              end
-
-              # 把重发的包换到最尾
-              sents.each do | tun, pack_id, mem_data, mem_at, times |
-                @memories[ tun ].delete( pack_id )
-                @memories[ tun ][ pack_id ] = [ mem_data, mem_at, times ]
               end
             when :source
               # 读source，放进tun的写缓存
@@ -531,7 +520,13 @@ module Girl
 
       if data.empty?
         if info[ :chunks ].any?
-          data = info[ :cache ] = IO.binread( File.join( info[ :chunk_dir ], info[ :chunks ].shift ) )
+          path = File.join( info[ :chunk_dir ], info[ :chunks ].shift )
+          data = info[ :cache ] = IO.binread( path )
+
+          begin
+            File.delete( path )
+          rescue Errno::ENOENT
+          end
         else
           data = info[ :wbuff ]
         end

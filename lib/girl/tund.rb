@@ -133,7 +133,7 @@ module Girl
               # roomd收到申请，创建一个dest与目的地建立连接，创建一个tund等tun连过来
               data, addrinfo, rflags, *controls = sock.recvmsg
               now = Time.new
-              puts "#{ addrinfo.ip_unpack.first } #{ now } p#{ Process.pid }"
+              puts "#{ addrinfo.ip_unpack.first } #{ now } #{ @infos.size } p#{ Process.pid }"
 
               unless data[ 0, 5 ].unpack( 'NC' ) == [ 0, 1 ]
                 puts "roomd got unknown ctlmsg #{ data.inspect }"
@@ -208,19 +208,14 @@ module Girl
             when :resend
               # 重传
               data, addrinfo, rflags, *controls = sock.recvmsg
-              sents = []
+              now = Time.new
 
               @memories.each do | tund, mems |
                 tund_info = @infos[ tund ]
 
-                mems.each do | pack_id, mem |
-                  now = Time.new
+                # 一秒重传
+                mems.select{ | pack_id, mem | now - mem[ 1 ] >= 1 }.each do | pack_id, mem |
                   mem_data, mem_at, times = mem
-
-                  # 不足1秒跳过
-                  if now - mem_at < 1
-                    break
-                  end
 
                   # 重传超过x次关闭通道
                   if times >= @resend_times
@@ -229,7 +224,6 @@ module Girl
                     break
                   end
 
-                  # 一秒重传
                   begin
                     tund.sendmsg( mem_data, 0, tund_info[ :tun_addr ] )
                   rescue Errno::ENETUNREACH => e
@@ -244,14 +238,8 @@ module Girl
                     write_buff2( tund_info, pack_ctlmsg( ctlmsg ) )
                   end
 
-                  sents << [ tund, pack_id, mem_data, now, times + 1 ]
+                  @memories[ tund ][ pack_id ] = [ mem_data, now, times + 1 ]
                 end
-              end
-
-              # 把重发的包换到最尾
-              sents.each do | tund, pack_id, mem_data, mem_at, times |
-                @memories[ tund ].delete( pack_id )
-                @memories[ tund ][ pack_id ] = [ mem_data, mem_at, times ]
               end
             when :dest
               # 读dest，放进tund的写缓存
@@ -269,7 +257,7 @@ module Girl
               if pack_id == 1
                 data = @hex.swap( data )
               end
-              
+
               data = "#{ [ 4 + data.bytesize ].pack( 'n' ) }#{ [ pack_id ].pack( 'N' ) }#{ data }"
               tund_info = @infos[ info[ :tund ] ]
 
@@ -486,7 +474,13 @@ module Girl
 
       if data.empty?
         if info[ :chunks ].any?
-          data = info[ :cache ] = IO.binread( File.join( info[ :chunk_dir ], info[ :chunks ].shift ) )
+          path = File.join( info[ :chunk_dir ], info[ :chunks ].shift )
+          data = info[ :cache ] = IO.binread( path )
+
+          begin
+            File.delete( path )
+          rescue Errno::ENOENT
+          end
         else
           data = info[ :wbuff ]
         end
