@@ -204,7 +204,6 @@ module Girl
               end
 
               tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-              tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
               tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
               tund_port  = tund.local_address.ip_unpack.last
               ctl2 = [ 2, tund_port ].pack( 'Cn' )

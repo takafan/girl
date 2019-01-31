@@ -256,7 +256,6 @@ module Girl
 
               ctl1 = "#{ [ 1 ].pack( 'C' ) }#{ @hex.mix( option.data ) }"
               tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-              tun.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
               tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
               source_mon = @selector.register( source, :r )
