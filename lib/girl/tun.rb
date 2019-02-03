@@ -20,9 +20,9 @@ require 'socket'
 #                     7 source close1 -> C: 1 eof / 2 rst -> N: last_pack_id
 #                     8 dest close2
 #
-# 重发：
+# 重传：
 #
-# 一秒未收到确认，重发。
+# 一秒未收到确认，重传。
 #
 # 关闭事件：
 #
@@ -59,7 +59,7 @@ module Girl
     PACK_SIZE = 1460
     CHUNK_SIZE = PACK_SIZE * 1000
 
-    def initialize( roomd_ip, roomd_port = 9090, redir_port = 1919, source_chunk_dir = '/tmp', tun_chunk_dir = '/tmp', resend_times = 20, hex_block = nil)
+    def initialize( roomd_ip, roomd_port = 9090, redir_port = 1919, source_chunk_dir = '/tmp', tun_chunk_dir = '/tmp', resend_limit = 20, hex_block = nil)
       if hex_block
         Girl::Hex.class_eval( hex_block )
       end
@@ -137,7 +137,7 @@ module Girl
       @roomd_addr = Socket.sockaddr_in( roomd_port, roomd_ip )
       @source_chunk_dir = source_chunk_dir
       @tun_chunk_dir = tun_chunk_dir
-      @resend_times = resend_times
+      @resend_limit = resend_limit
       @hex = Girl::Hex.new
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
@@ -178,7 +178,7 @@ module Girl
                 end
 
                 # 超过重传次数关闭通道
-                if times > @resend_times
+                if times > @resend_limit
                   puts 'resend too many times'
                   close_tun( sock )
                   next

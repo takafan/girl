@@ -8,7 +8,7 @@ module Girl
     PACK_SIZE = 1460
     CHUNK_SIZE = PACK_SIZE * 1000
 
-    def initialize( roomd_port = 9090, dest_chunk_dir = '/tmp', tund_chunk_dir = '/tmp', resend_times = 20 )
+    def initialize( roomd_port = 9090, dest_chunk_dir = '/tmp', tund_chunk_dir = '/tmp', resend_limit = 20 )
       # infos 存取sock信息，根据角色，sock => {}
       #
       # {
@@ -79,7 +79,7 @@ module Girl
       @selector = NIO::Selector.new
       @dest_chunk_dir = dest_chunk_dir
       @tund_chunk_dir = tund_chunk_dir
-      @resend_times = resend_times
+      @resend_limit = resend_limit
       @hex = Girl::Hex.new
       @roomd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       @roomd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
@@ -118,7 +118,7 @@ module Girl
                 end
 
                 # 超过重传次数关闭通道
-                if times > @resend_times
+                if times > @resend_limit
                   puts 'resend too many times'
                   close_tund( sock )
                   next
