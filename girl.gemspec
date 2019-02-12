@@ -23,7 +23,6 @@ lib/girl/p2p2.rb
 lib/girl/p2pd.rb
 lib/girl/resolv.rb
 lib/girl/resolvd.rb
-lib/girl/socks.rb
 lib/girl/tun.rb
 lib/girl/tund.rb
 lib/girl/usr.rb

@@ -3,221 +3,126 @@ require 'nio'
 require 'socket'
 
 ##
+# Girl::Tun
+#
+# tcp流量正常的到达目的地。
+#
 # 走向：
 #
+# tun > roomd
 # source > tun > tund > dest
 # dest > tund > tun > source
 #
-# 流量打包成udp，包结构：
+# 流量打包成udp，在tun-tund之间传输，包结构：
 #
-# N: 1+ pack id -> traffic
-#    0  ctl msg -> C: 1 apply for a tunnel -> nnN: dst_family dst_port dst_ip
-#                     2 tund port -> n: port
-#                     3 hello
-#                     4 confirm a pack -> N: pack_id
-#                     5 dest close1 -> C: 1 eof / 2 rst -> N: last_pack_id
-#                     6 source close2
-#                     7 source close1 -> C: 1 eof / 2 rst -> N: last_pack_id
-#                     8 dest close2
+# N: 1+ pcur    -> nn: source_id/dest_id   -> traffic
+#    0  ctl msg -> C: 1 heartbeat
+#                     2 a new source       -> nn: source_id -> nnN: dst_family dst_port dst_ip
+#                     3 paired             -> nn: source_id -> nn: dest_id
+#                     4 confirm a pack     -> Nnn: pack_id
+#                     5 dest fin           -> C: :eof/:rst -> Nnn: last_pack_id
+#                     6 source fin         -> C: :eof/:rst -> Nnn: last_pack_id
+#                     7 tund fin
+#                     8 tun fin
 #
-# 重传：
+# infos，存取sock信息，根据角色，sock => {}：
 #
-# 一秒未收到确认，重传。
+# {
+#   role: :tun,
+#   mon: mon,
+#   wbuff: '',
+#   cache: '',
+#   filename: '',
+#   chunk_dir: '',
+#   chunks: [],
+#   chunk_seed: 0,
+#   ctls: [],
+#   memories: { pack_id => [ '', now, 0 ] },
+#   tund_addr: tund_addr,
+#   sources: { source_id => [ source, dest_id ] },
+#   pairs: { dest_id => source },
+#   source_fins: { pack_id => 1 }
+# }
 #
-# 关闭事件：
+# {
+#   role: :source,
+#   mon: mon,
+#   wbuff: '',
+#   cache: '',
+#   filename: '',
+#   chunk_dir: '',
+#   chunks: [],
+#   chunk_seed: 0,
+#   id: '',
+#   pcur: 0,
+#   dest_pcur: 0,
+#   pieces: { 2 => '', 4 => '' },
+#   dest_fin: [ 1, 1024 ]
+# }
 #
-# dest exception
-# > close dest, buff [ 5.. ] on tund
-# > [ 5.. ] arrived at tun, set :dest_eof1/:dest_rst1 on source
-# > all packs written to source
-# > set SO_LINGER 1, 0 if :dest_rst1
-# > close source, set :source_close2 and buff [ 6 ] on tun
-# > close tun
-# > [ 6 ] arrived at tund, set :source_close2 on tund
-# > close tund
-#
-# source exception
-# > close source, buff [ 7.. ] on tun
-# > [ 7.. ] arrived at tund, set :source_eof1/:source_rst1 on dest
-# > all packs written to dest
-# > set SO_LINGER 1, 0 if :source_rst1
-# > close dest, set :dest_close2 and buff [ 8 ] on tund
-# > close tund
-# > [ 8 ] arrived at tun, set :dest_close2 on tun
-# > close tun
-#
-# 特殊情况：
-#
-# 1. tun收到[ 5.. ]，但source已关闭，忽略。
-# 2. source收到关闭事件时，已经被打了:dest_eof1，改打:source_close2在tun上，传[ 6 ]。
-# 3. tund收到[ 7.. ]，但dest已关闭，忽略。
-# 4. dest收到关闭事件时，已经被打了:source_eof1，改打:dest_close2在tund上，传[ 8 ]。
+# role            角色，:redir / :source / :tun
+# mon             NIO::Monitor
+# wbuff           写前缓存
+# cache           块缓存
+# filename        [ Process.pid, sock.object_id ].join( '-' )
+# chunk_dir       块目录
+# chunks          块文件名，wbuff每超过1.4M落一个块
+# chunk_seed      块序号
+# ctls            ctl缓存。写的时候，先取ctl，ctls为空，取cache，cache为空，取一个chunk放进cache，chunks为空，取wbuff。
+# memories        写后缓存
+# tund_addr       另一头地址
+# sources         根据source_id，取source和dest_id
+# pairs           根据dest_id，取source
+# source_fins     source读到异常后，记关闭标记在tun身上，紧跟最后一个流量包，发送“source已关闭”。
+# id              [ Process.pid, source.object_id ].pack( 'nn' )
+# pcur            打包光标
+# dest_pcur       写前光标
+# pieces          跳号缓存
+# dest_fin        远端传来“dest已关闭”，记在source身上，传完所有流量后关闭source。
 #
 module Girl
-  class Tun
-    # 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 4(id) = 1460
-    PACK_SIZE = 1460
-    CHUNK_SIZE = PACK_SIZE * 1000
+  PACK_SIZE = 1456 # 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(pack id) = 1456
+  CHUNK_SIZE = PACK_SIZE * 1000
+  MEMORIES_LIMIT = 10_000 # 写后缓存上限
+  RESEND_LIMIT = 20 # 重传次数上限
 
-    def initialize( roomd_ip, roomd_port = 9090, redir_port = 1919, source_chunk_dir = '/tmp', tun_chunk_dir = '/tmp', resend_limit = 20, hex_block = nil)
+  class Tun
+    def initialize( tund_ip, roomd_port = 9090, redir_port = 1919, source_chunk_dir = '/tmp', tun_chunk_dir = '/tmp', hex_block = nil )
       if hex_block
         Girl::Hex.class_eval( hex_block )
       end
 
-      # infos 存取sock信息，根据角色，sock => {}
-      #
-      # {
-      #   id: '',
-      #   role: :source,
-      #   mon: mon,
-      #   close_by: :dest_eof1,
-      #   wbuff: '',
-      #   cache: '',
-      #   chunk_dir: '',
-      #   chunks: [],
-      #   chunk_seed: 0,
-      #   pieces: { 2 => '', 4 => '' },
-      #   last_from_dest: 1024,
-      #   pcur: 0,
-      #   tun: tun
-      # }
-      #
-      # {
-      #   id: '',
-      #   role: :tun,
-      #   mon: mon,
-      #   close_by: :source_eof2,
-      #   wbuff: '',
-      #   cache: '',
-      #   chunk_dir: '',
-      #   chunks: [],
-      #   chunk_seed: 0,
-      #   ctl1: '',
-      #   mems_size: 0,
-      #   resends: [],
-      #   rcur: 0,
-      #   wmems: { 2 => [ '', now, 0 ], 3 => [ '', now, 0 ], 7 => [ '', now, 0 ] },
-      #   err_from_source: 1,
-      #   last_from_source: 1024,
-      #   source: source,
-      #   tund_addr: addrinfo
-      # }
-      #
-      # id               用于文件缓存文件名，跨进程唯一
-      # role             角色，:redir / :source / :tun
-      # mon              NIO::Monitor
-      # close_by         关闭标记，流量传完后关闭sock
-      # wbuff            写缓存
-      # cache            写的时候：先取cache，cache为空，取一个chunk放进cache，chunks也为空，取wbuff。
-      # chunk_dir        文件缓存目录
-      # chunks           文件缓存，wbuff每超过1.4M落一个文件，文件名加进chunks。
-      # chunk_seed       文件自增序号
-      # pieces           跳号缓存
-      # last_from_dest   对面dest的最后一个包序号
-      # pcur             打包光标，打包source流量，最后一个进tun写缓存的包号。
-      # tun              对应的tun
-      # ctl1             ctl msg 1
-      # mems_size        写后计数
-      # resends          重传缓存
-      # rcur             读光标，读tund流量，最后一个进source写缓存的包号。（跳号包放pieces）
-      # wmems            写后缓存
-      # err_from_source  1 eof / 2 rst
-      # last_from_source source读到异常时的打包光标
-      # source           对应的source
-      # tund_addr        另一头地址
-      @infos = {}
-      # 写后缓存
-      # {
-      #   [ sock, pack_id ] => [ '', Time.new, 0 ]
-      # }
-      @memories = {}
-      @mutex = Mutex.new
-      @selector = NIO::Selector.new
-      @roomd_ip = roomd_ip
-      @roomd_addr = Socket.sockaddr_in( roomd_port, roomd_ip )
-      @source_chunk_dir = source_chunk_dir
-      @tun_chunk_dir = tun_chunk_dir
-      @resend_limit = resend_limit
-      @hex = Girl::Hex.new
+      selector = NIO::Selector.new
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       redir.bind( Socket.pack_sockaddr_in( redir_port, '0.0.0.0' ) )
       redir.listen( 511 )
-      puts "redir listening on #{ redir_port } roomd #{ roomd_ip } #{ roomd_port }"
-
-      redir_mon = @selector.register( redir, :r )
-      @infos[ redir ] = {
-        id: [ Process.pid, redir.object_id ].join( '-' ),
+      redir_info = {
         role: :redir,
-        mon: redir_mon
+        mon: selector.register( redir, :r )
       }
+
+      @tund_ip = tund_ip
+      @roomd_addr = Socket.sockaddr_in( roomd_port, tund_ip )
+      @source_chunk_dir = source_chunk_dir
+      @tun_chunk_dir = tun_chunk_dir
+      @hex = Girl::Hex.new
+      @mutex = Mutex.new
+      @selector = selector
+      @infos = {
+        redir => redir_info
+      }
+
+      apply_tunnel
     end
 
     def looping
       puts 'looping'
-
-      # 一秒重传
-      Thread.new do
-        loop do
-          memory = @memories.first
-
-          if memory
-            now = Time.new
-            key, mem = memory
-            data, mem_at, times = mem
-
-            if now - mem_at > 1
-              sock, pack_id = key
-
-              @mutex.synchronize do
-                @memories.delete( key )
-
-                if sock.closed?
-                  next
-                end
-
-                # 超过重传次数关闭通道
-                if times > @resend_limit
-                  puts 'resend too many times'
-                  close_tun( sock )
-                  next
-                end
-
-                info = @infos[ sock ]
-                pack_id = data[ 0, 4 ].unpack( 'N' ).first
-
-                begin
-                  sock.sendmsg( data, 0, info[ :tund_addr ] )
-                rescue Errno::ENETUNREACH, IOError => e
-                  puts "resend #{ e.class }"
-                  close_tun( sock )
-                  next
-                end
-
-                @memories[ [ sock, pack_id ] ] = [ data, now, times + 1 ]
-
-                # 如果是最后一个包，发送close1
-                if info[ :last_from_source ] && ( pack_id == info[ :last_from_source ] )
-                  pack = [ 0, 7, info[ :err_from_source ], pack_id ].pack( 'NCCN' )
-
-                  begin
-                    sock.sendmsg( pack, 0, info[ :tund_addr ] )
-                  rescue Errno::ENETUNREACH, IOError => e
-                    puts "resend #{ e.class }"
-                    close_tun( sock )
-                    next
-                  end
-                end
-              end
-
-              next
-            end
-          end
-
-          sleep 0.01
-        end
-      end
+      # 心跳
+      loop_heartbeat
+      # 重传
+      loop_resend
 
       loop do
         @selector.select do | mon |
@@ -233,17 +138,12 @@ module Girl
           if mon.readable?
             case info[ :role ]
             when :redir
-              # 接受一个source，创建一个对应的tun
               begin
                 source, addrinfo = sock.accept_nonblock
               rescue IO::WaitReadable, Errno::EINTR => e
                 puts "accept source #{ e.class }"
                 next
               end
-
-              now = Time.new
-              puts "#{ addrinfo.ip_unpack.first } #{ now } p#{ Process.pid }"
-              source.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
               begin
                 # /usr/include/linux/netfilter_ipv4.h
@@ -254,151 +154,143 @@ module Girl
                 next
               end
 
-              ctl1 = "#{ [ 1 ].pack( 'C' ) }#{ @hex.mix( option.data ) }"
-              tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-              tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-
-              source_mon = @selector.register( source, :r )
-              tun_mon = @selector.register( tun, :rw )
+              source.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+              source_id = [ Process.pid, source.object_id ].pack( 'nn' )
 
               @infos[ source ] = {
-                id: [ Process.pid, source.object_id ].join( '-' ),
                 role: :source,
-                mon: source_mon,
-                close_by: nil,
+                mon: @selector.register( source, :r ),
                 wbuff: '',
                 cache: '',
+                filename: [ Process.pid, source.object_id ].join( '-' ),
                 chunk_dir: @source_chunk_dir,
                 chunks: [],
                 chunk_seed: 0,
-                pieces: {},
+                id: source_id,
                 pcur: 0,
-                last_from_dest: nil,
-                tun: tun
+                dest_pcur: 0,
+                pieces: {},
+                dest_fin: nil
               }
 
-              @infos[ tun ] = {
-                id: [ Process.pid, tun.object_id ].join( '-' ),
-                role: :tun,
-                mon: tun_mon,
-                close_by: nil,
-                wbuff: '',
-                cache: '',
-                chunk_dir: @tun_chunk_dir,
-                chunks: [],
-                chunk_seed: 0,
-                ctl1: ctl1,
-                mems_size: 0,
-                resends: [],
-                rcur: 0,
-                err_from_source: nil,
-                last_from_source: nil,
-                source: source,
-                tund_addr: nil
-              }
+              @tun_info[ :sources ][ source_id ] = [ source, nil ]
+              puts "#{ addrinfo.ip_unpack.first } #{ Time.new } p#{ Process.pid } s#{ @tun_info[ :sources ].size }"
+
+              ctl = [ [ 2 ].pack( 'C' ), source_id, option.data ].join
+              add_ctl( ctl )
             when :source
-              # 读source，放进tun的写缓存
               begin
                 data = sock.read_nonblock( PACK_SIZE )
               rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
                 next
               rescue Exception => e
-                close_source( sock, e )
+                err = e.is_a?( EOFError ) ? 1 : 2
+                close_source( sock, err )
                 next
               end
 
-              pack_id = info[ :pcur ] + 1
+              pcur = info[ :pcur ] + 1
 
-              if pack_id == 1
+              # ssh的第一段流量是明文版本号，https的第一段流量含明文域名，所以，混淆第一段流量。
+              # 覆盖swap方法自定义混淆。
+              if pcur == 1
                 data = @hex.swap( data )
               end
 
-              # 流量长度，包号，流量
-              data = [ [ data.bytesize, pack_id ].pack( 'nN' ), data ].join
-              tun_info = @infos[ info[ :tun ] ]
-
-              if tun_info[ :tund_addr ]
-                write_buff2( tun_info, data )
-              else
-                # 只缓存，不写
-                write_buff( tun_info, data )
-              end
-
-              info[ :pcur ] = pack_id
+              data = [ [ data.bytesize, pcur ].pack( 'nN' ), info[ :id ], data ].join
+              add_buff( @tun_info, data )
+              info[ :pcur ] = pcur
             when :tun
-              # 读tun，放进source的写缓存
               data, addrinfo, rflags, *controls = sock.recvmsg
-              source_info = @infos[ info[ :source ] ]
-              pack_id = data[ 0, 4 ].unpack( 'N' ).first
+              dest_pcur = data[ 0, 4 ].unpack( 'N' ).first
 
-              if pack_id == 0
+              if dest_pcur == 0
                 ctl_num = data[ 4 ].unpack( 'C' ).first
 
                 case ctl_num
-                when 2
-                  # 2 tund port -> n: port
-                  tund_port = data[ 5, 2 ].unpack( 'n' ).first
-                  tund_addr = Socket.pack_sockaddr_in( tund_port, @roomd_ip )
-                  info[ :tund_addr ] = tund_addr
-
-                  # 发hello给tund，source建好连接却不主动上传流量的场合，这个hello替source打洞。
-                  ctlmsg = [ 3 ].pack( 'C' )
-                  write_buff2( info, pack_ctlmsg( ctlmsg ) )
+                when 3
+                  # 3 paired -> nn: source_id -> nn: dest_id
+                  source_id = data[ 5, 4 ]
+                  dest_id = data[ 9, 4 ]
+                  source_pair = info[ :sources ][ source_id ]
+                  
+                  if source_pair
+                    source = source_pair[ 0 ]
+                    info[ :pairs ][ dest_id ] = source
+                    source_pair[ 1 ] = dest_id
+                  end
                 when 4
-                  # 4 confirm a pack -> N: pack_id
-                  confirm_id = data[ 5, 4 ].unpack( 'N' ).first
-                  @memories.delete( [ sock, confirm_id ] )
-                  info[ :mems_size ] -= 1
-                  info[ :mon ].add_interest( :w )
-                when 5
-                  # 5 dest close1 -> C: 1 eof / 2 rst -> N: last_pack_id
+                  # 4 confirm a pack -> Nnn: pack_id
+                  pack_id = data[ 5, 8 ]
+                  memory = info[ :memories ].delete( pack_id )
 
-                  if info[ :source ].closed?
+                  if memory
+                    info[ :source_fins ].delete( pack_id )
+                    info[ :mon ].add_interest( :w )
+                  end
+                when 5
+                  # 5 dest fin -> C: :eof/:rst -> Nnn: last_pack_id
+                  err = data[ 5 ].unpack( 'C' ).first
+                  last_pack_id = data[ 6, 8 ]
+                  last_dest_pcur = last_pack_id[ 0, 4 ].unpack( 'N' ).first
+                  dest_id = last_pack_id[ 4, 4 ]
+                  source = info[ :pairs ][ dest_id ]
+
+                  if source.nil? || source.closed?
                     next
                   end
 
-                  errno, last_from_dest = data[ 5, 5 ].unpack( 'CN' )
-                  close_by = ( errno == 1 ? :dest_eof1 : :dest_rst1 )
-                  source_info[ :close_by ] = close_by
-                  source_info[ :last_from_dest ] = last_from_dest
+                  source_info = @infos[ source ]
+                  source_info[ :dest_fin ] = [ err, last_dest_pcur ]
                   source_info[ :mon ].add_interest( :w )
-                when 8
-                  # 8 dest close2
-                  info[ :close_by ] = :dest_close2
-                  info[ :mon ].add_interest( :w )
+                when 7
+                  # 7 tund fin
+                  @mutex.synchronize do
+                    close_sock( sock )
+                  end
+
+                  sleep 5
+                  apply_tunnel
                 end
 
                 next
               end
 
-              ctlmsg = [ 4, pack_id ].pack( 'CN' )
-              write_buff2( info, pack_ctlmsg( ctlmsg ) )
+              pack_id = data[ 0, 8 ]
+              ctl = [ [ 4 ].pack( 'C' ), pack_id ].join
+              add_ctl( ctl )
 
-              if info[ :source ].closed?
+              dest_id = pack_id[ 4, 4 ]
+              source = info[ :pairs ][ dest_id ]
+
+              if source.nil? || source.closed?
                 next
               end
 
-              if pack_id <= info[ :rcur ]
+              source_info = @infos[ source ]
+
+              if dest_pcur <= source_info[ :dest_pcur ]
                 next
               end
 
-              data = data[ 4..-1 ]
+              data = data[ 8..-1 ]
 
-              if pack_id == 1
+              # 解混淆
+              if dest_pcur == 1
                 data = @hex.swap( data )
               end
 
-              # 连号放写缓存，跳号放碎片缓存
-              if pack_id - info[ :rcur ] == 1
-                while source_info[ :pieces ].include?( pack_id + 1 )
-                  data << source_info[ :pieces ].delete( pack_id + 1 )
-                  pack_id += 1
+              # 放进source的写前缓存，跳号放碎片缓存
+              if dest_pcur - source_info[ :dest_pcur ] == 1
+                while source_info[ :pieces ].include?( dest_pcur + 1 )
+                  data << source_info[ :pieces ].delete( dest_pcur + 1 )
+                  dest_pcur += 1
                 end
 
-                write_buff2( source_info, data )
-                info[ :rcur ] = pack_id
+                add_buff( source_info, data )
+                source_info[ :dest_pcur ] = dest_pcur
               else
-                source_info[ :pieces ][ pack_id ] = data
+                source_info[ :pieces ][ dest_pcur ] = data
               end
             end
           end
@@ -406,22 +298,21 @@ module Girl
           if mon.writable?
             case info[ :role ]
             when :source
-              data, from = read_buff( info )
+              data, from = get_buff( info )
 
               if data.empty?
-                tun_info = @infos[ info[ :tun ] ]
+                # 有关闭标记，且流量已收全，关闭source
+                if info[ :dest_fin ]
+                  err, last_dest_pcur = info[ :dest_fin ]
 
-                # 有关闭标记，且流量已经收全，关闭source，给tun打关闭标记，告诉对面结束了
-                if info[ :close_by ] && ( info[ :last_from_dest ] == tun_info[ :rcur ] )
-                  if info[ :close_by ] == :dest_rst1
-                    sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+                  if last_dest_pcur == info[ :dest_pcur ]
+                    if err == 2
+                      sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+                    end
+
+                    close_source( sock, err )
+                    next
                   end
-
-                  close_sock( sock )
-                  tun_info[ :close_by ] = :source_close2
-                  ctlmsg = [ 6 ].pack( 'C' )
-                  write_buff2( tun_info, pack_ctlmsg( ctlmsg ) )
-                  next
                 end
 
                 mon.remove_interest( :w )
@@ -433,7 +324,8 @@ module Girl
               rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
                 next
               rescue Exception => e
-                close_source( sock, e )
+                err = e.is_a?( EOFError ) ? 1 : 2
+                close_source( sock, err )
                 next
               end
 
@@ -445,57 +337,27 @@ module Girl
                 info[ :wbuff ] = data
               end
             when :tun
-              # tun的第一次写兴趣，向roomd申请一个tunnel
-              unless info[ :tund_addr ]
-                begin
-                  sock.sendmsg( [ [ 0 ].pack( 'N' ), info[ :ctl1 ] ].join, 0, @roomd_addr )
-                rescue Errno::ENETUNREACH, IOError => e
-                  puts "send to roomd #{ e.class }"
-                  close_tun( sock )
-                  next
-                end
+              # 取ctl，没有则取写缓存，也没有则去掉写兴趣
+              ctl = info[ :ctls ].shift
 
+              if ctl
+                pack = [ [ 0 ].pack( 'N' ), ctl ].join
+                sock.sendmsg( pack, 0, info[ :tund_addr ] )
+                next
+              end
+
+              data, from = get_buff( info )
+
+              if data.empty?
                 mon.remove_interest( :w )
                 next
               end
 
-              # 取写缓存
-              data, from = read_buff( info )
+              len = data[ 0, 2 ].unpack( 'n' ).first
+              pack = data[ 2, ( 8 + len ) ]
+              send_pack( pack )
 
-              if data.empty?
-                # 有关闭标记，关闭tun
-                if info[ :close_by ]
-                  close_sock( sock )
-                else
-                  mon.remove_interest( :w )
-                end
-
-                next
-              end
-
-              len, pack_id = data[ 0, 6 ].unpack( 'nN' )
-              pack = data[ 2, ( 4 + len ) ]
-
-              begin
-                sock.sendmsg( pack, 0, info[ :tund_addr ] )
-              rescue Errno::ENETUNREACH, IOError => e
-                puts "send to tund #{ e.class }"
-                close_tun( sock )
-                next
-              end
-
-              if pack_id > 0
-                @memories[ [ sock, pack_id ] ] = [ pack, Time.new, 0 ]
-                info[ :mems_size ] += 1
-
-                # 如果是最后一个包，发送close1
-                if info[ :last_from_source ] && ( pack_id == info[ :last_from_source ] )
-                  ctlmsg = [ 7, info[ :err_from_source ], pack_id ].pack( 'CCN' )
-                  write_buff2( info, pack_ctlmsg( ctlmsg ) )
-                end
-              end
-
-              data = data[ ( 6 + len )..-1 ]
+              data = data[ ( 10 + len )..-1 ]
 
               if from == :cache
                 info[ :cache ] = data
@@ -506,29 +368,151 @@ module Girl
           end
         end
       end
+    rescue Interrupt => e
+      puts e.class
+      quit!
+    end
+
+    def quit!
+      pack = [ 0, 8 ].pack( 'NC' )
+      @tun.sendmsg( pack, 0, @tun_info[ :tund_addr ] )
+      exit
     end
 
     private
 
-    def write_buff( info, data )
+    def apply_tunnel
+      tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+      tun.sendmsg( @hex.hello, 0, @roomd_addr )
+      rs, ws = IO.select( [ tun ], [], [], 30 )
+
+      unless rs
+        raise 'apply for a tunnel timeout'
+      end
+
+      data, addrinfo, rflags, *controls = rs.first.recvmsg
+      tund_port = data.unpack( 'n' ).first
+      tun_info = {
+        role: :tun,
+        mon: @selector.register( tun, :r ),
+        wbuff: '',
+        cache: '',
+        filename: [ Process.pid, tun.object_id ].join( '-' ),
+        chunk_dir: @tun_chunk_dir,
+        chunks: [],
+        chunk_seed: 0,
+        ctls: [],
+        memories: {},
+        tund_addr: Socket.sockaddr_in( tund_port, @tund_ip ),
+        sources: {},
+        pairs: {},
+        source_fins: {}
+      }
+
+      @tun = tun
+      @tun_info = tun_info
+      @infos[ tun ] = tun_info
+    end
+
+    def loop_heartbeat
+      Thread.new do
+        loop do
+          pack = [ 0, 1 ].pack( 'NC' )
+          @tun.sendmsg( pack, 0, @tun_info[ :tund_addr ] )
+          sleep 59
+        end
+      end
+    end
+
+    def loop_resend
+      Thread.new do
+        loop do
+          now = Time.new
+          idle = true
+
+          @mutex.synchronize do
+            memory = @tun_info[ :memories ].first
+
+            if memory
+              pack_id, mem = memory
+              pack, mem_at, times = mem
+
+              # 超过一秒
+              if now - mem_at > 1
+                @tun_info[ :memories ].delete( pack_id )
+
+                # 重传次数超过上限，强行关闭source
+                if times > RESEND_LIMIT
+                  source_id = pack_id[ 4, 4 ]
+                  source, _ = @tun_info[ :sources ][ source_id ]
+
+                  if source && !source.closed?
+                    puts 'resend too many times'
+                    source.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+                    close_source( source, 2 )
+                  end
+
+                  next
+                end
+
+                send_pack( pack, times + 1 )
+
+                # 有搁置的写前块，加写兴趣
+                if ( @tun_info[ :memories ].size < MEMORIES_LIMIT ) && @tun_info[ :chunks ].any?
+                  @tun_info[ :mon ].add_interest( :w )
+                end
+
+                idle = false
+              end
+            end
+          end
+
+          if idle
+            sleep 0.01
+          end
+        end
+      end
+    end
+
+    def send_pack( pack, tcur = 0 )
+      # 发包
+      @tun.sendmsg( pack, 0, @tun_info[ :tund_addr ] )
+
+      # 记写后缓存
+      pack_id = pack[ 0, 8 ]
+      @tun_info[ :memories ][ pack_id ] = [ pack, Time.new, tcur ]
+
+      # 如果是最后一段流量，重发结束包
+      err = @tun_info[ :source_fins ][ pack_id ]
+
+      if err
+        ctl_pack = [ [ 0, 6, err ].pack( 'NCC' ), pack_id ].join
+        @tun.sendmsg( ctl_pack, 0, @tun_info[ :tund_addr ] )
+      end
+    end
+
+    def add_ctl( ctl )
+      @tun_info[ :ctls ] << ctl
+      @tun_info[ :mon ].add_interest( :w )
+    end
+
+    def add_buff( info, data )
       info[ :wbuff ] << data
 
       if info[ :wbuff ].size >= CHUNK_SIZE
-        filename = [ info[ :id ], info[ :chunk_seed ] ].join( '.' )
+        filename = [ info[ :filename ], info[ :chunk_seed ] ].join( '.' )
         chunk_path = File.join( info[ :chunk_dir ], filename )
         IO.binwrite( chunk_path, info[ :wbuff ] )
         info[ :chunks ] << filename
         info[ :chunk_seed ] += 1
         info[ :wbuff ].clear
       end
-    end
 
-    def write_buff2( info, data )
-      write_buff( info, data )
       info[ :mon ].add_interest( :w )
     end
 
-    def read_buff( info )
+    def get_buff( info )
       # 先取cache
       # cache为空，取一个chunk放进cache
       # chunks也为空，取wbuff
@@ -536,8 +520,9 @@ module Girl
 
       if data.empty?
         if info[ :chunks ].any?
-          # tun写后超过1000，限制内存，暂不读入写前文件
-          if info[ :role ] == :tun && info[ :mems_size ] > 1000
+          # tun写后超过1w，限制内存，暂不读入写前文件
+          if ( info[ :role ] == :tun ) && ( info[ :memories ].size > MEMORIES_LIMIT )
+            puts 'memories over 1w'
             return [ data, from ]
           end
 
@@ -556,40 +541,23 @@ module Girl
       [ data, from ]
     end
 
-    def pack_ctlmsg( data )
-      # 流量长度，包号，流量
-      [ [ data.bytesize, 0 ].pack( 'nN' ), data ].join
-    end
-
-    def close_source( sock, e )
-      info = close_sock( sock )
-      tun_info = @infos[ info[ :tun ] ]
-
-      if info[ :close_by ]
-        ctlmsg = [ 6 ].pack( 'C' )
-      else
-        err = e.is_a?( EOFError ) ? 1 : 2
-        tun_info[ :err_from_source ] = err
-        tun_info[ :last_from_source ] = info[ :pcur ]
-        ctlmsg = [ 7, err, info[ :pcur ] ].pack( 'CCN' )
-      end
-
-      write_buff2( tun_info, pack_ctlmsg( ctlmsg ) )
-    end
-
-    def close_tun( sock )
+    def close_source( sock, err = nil )
       info = close_sock( sock )
 
-      if info && !info[ :source ].closed?
-        info[ :source ].setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
-        close_sock( info[ :source ] )
+      if err && info
+        last_pack_id = [ [ info[ :pcur ] ].pack( 'N' ), info[ :id ] ].join
+        _, dest_id = @tun_info[ :sources ].delete( info[ :id ] )
+        @tun_info[ :pairs ].delete( dest_id )
+        @tun_info[ :source_fins ][ last_pack_id ] = err
+
+        ctl = [ [ 6, err ].pack( 'CC' ), last_pack_id ].join
+        add_ctl( ctl )
       end
     end
 
     def close_sock( sock )
       sock.close
       @selector.deregister( sock )
-      @memories.delete( sock )
       info = @infos.delete( sock )
 
       if info
