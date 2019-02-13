@@ -140,7 +140,7 @@ module Girl
                 chunk_seed: 0,
                 ctls: [],
                 memories: {},
-                tun_addr: addrinfo,
+                tun_addr: nil,
                 dests: {},
                 dest_fins: {},
                 pairs: {}
@@ -176,7 +176,13 @@ module Girl
               end
 
               data = [ [ data.bytesize, pcur ].pack( 'nN' ), info[ :id ], data ].join
-              add_buff( tund_info, data )
+
+              if tund_info[ :tun_addr ]
+                add_buff2( tund_info, data )
+              else
+                add_buff( tund_info, data )
+              end
+
               info[ :pcur ] = pcur
             when :tund
               data, addrinfo, rflags, *controls = sock.recvmsg
@@ -196,6 +202,13 @@ module Girl
                   end
 
                   client_info[ 1 ] = Time.new
+
+                  # 收到第一次心跳再开始传流量，不然撞死
+                  unless info[ :tun_addr ]
+                    puts 'debug set :tun_addr'
+                    info[ :tun_addr ] = addrinfo
+                    info[ :mon ].add_interest( :w )
+                  end
                 when 2
                   # 2 a new source -> nn: source_id -> nnN: dst_family dst_port dst_ip
                   source_id = data[ 5, 4 ]
@@ -302,7 +315,7 @@ module Girl
                   source_pcur += 1
                 end
 
-                add_buff( dest_info, data )
+                add_buff2( dest_info, data )
                 dest_info[ :source_pcur ] = source_pcur
               else
                 dest_info[ :pieces ][ source_pcur ] = data
@@ -509,7 +522,10 @@ module Girl
         info[ :chunk_seed ] += 1
         info[ :wbuff ].clear
       end
+    end
 
+    def add_buff2( info, data )
+      add_buff( info, data )
       info[ :mon ].add_interest( :w )
     end
 
