@@ -189,6 +189,12 @@ module Girl
               source_pcur = data[ 0, 4 ].unpack( 'N' ).first
 
               if source_pcur == 0
+                # tun先出来，tund再开始，不然撞死
+                unless info[ :tun_addr ]
+                  info[ :tun_addr ] = addrinfo
+                  info[ :mon ].add_interest( :w )
+                end
+
                 ctl_num = data[ 4 ].unpack( 'C' ).first
 
                 case ctl_num
@@ -202,13 +208,6 @@ module Girl
                   end
 
                   client_info[ 1 ] = Time.new
-
-                  # 收到第一次心跳再开始传流量，不然撞死
-                  unless info[ :tun_addr ]
-                    puts 'debug set :tun_addr'
-                    info[ :tun_addr ] = addrinfo
-                    info[ :mon ].add_interest( :w )
-                  end
                 when 2
                   # 2 a new source -> nn: source_id -> nnN: dst_family dst_port dst_ip
                   source_id = data[ 5, 4 ]
