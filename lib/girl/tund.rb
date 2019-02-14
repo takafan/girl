@@ -18,12 +18,12 @@ require 'socket'
 #   chunk_dir: '',
 #   chunks: [],
 #   chunk_seed: 0,
-#   ctls: [],
 #   memories: { pack_id => [ '', now, 0 ] },
+#   ctls: [],
+#   ctl5_mems: {},
 #   tun_addr: tun_addr,
 #   dests: { dest_id => [ dest, source_id ] },
 #   pairs: { source_id => dest },
-#   dest_fins: { pack_id => 1 }
 # }
 #
 # {
@@ -51,12 +51,12 @@ require 'socket'
 # chunk_dir     块目录
 # chunks        块文件名，wbuff每超过1.4M落一个块
 # chunk_seed    块序号
-# ctls          ctl缓存。写的时候，先取ctl，ctls为空，取cache，cache为空，取一个chunk放进cache，chunks为空，取wbuff。
 # memories      写后缓存
+# ctls          ctl写前缓存。写的时候，先取ctl，ctls为空，取cache，cache为空，取一个chunk放进cache，chunks为空，取wbuff。
+# ctl5_mems     ctl5写后缓存
 # tun_addr      另一头地址
 # dests         根据dest_id，取dest和source_id
 # pairs         根据source_id，取dest
-# dest_fins     dest读到异常后，记关闭标记在tund身上，紧跟最后一个流量包，发送“dest已关闭”。
 # id            [ Process.pid, dest.object_id ].pack( 'nn' )
 # pcur          打包光标
 # source_pcur   写前光标
@@ -94,8 +94,10 @@ module Girl
 
     def looping
       puts 'looping'
-      # 关闭过期的通道
+
+      # 关闭过期的tunnel
       expire_clients
+
       # 重传
       loop_resend
 
@@ -138,11 +140,11 @@ module Girl
                 chunk_dir: @tund_chunk_dir,
                 chunks: [],
                 chunk_seed: 0,
-                ctls: [],
                 memories: {},
+                ctls: [],
+                ctl5_mems: {},
                 tun_addr: nil,
                 dests: {},
-                dest_fins: {},
                 pairs: {}
               }
 
@@ -151,7 +153,7 @@ module Girl
               sock.sendmsg( pack, 0, addrinfo )
               now = Time.new
               info[ :clients ][ addrinfo.to_sockaddr ] = [ tund, now ]
-              puts "client #{ addrinfo.ip_unpack.inspect } tund #{ tund_port } #{ now } p#{ Process.pid } #{ info[ :clients ].size }"
+              puts "new client #{ addrinfo.ip_unpack.inspect } total #{ info[ :clients ].size } #{ now }"
             when :dest
               begin
                 data = sock.read_nonblock( PACK_SIZE )
@@ -188,13 +190,13 @@ module Girl
               data, addrinfo, rflags, *controls = sock.recvmsg
               source_pcur = data[ 0, 4 ].unpack( 'N' ).first
 
-              if source_pcur == 0
-                # tun先出来，tund再开始，不然撞死
-                unless info[ :tun_addr ]
-                  info[ :tun_addr ] = addrinfo
-                  info[ :mon ].add_interest( :w )
-                end
+              # tun先出来，tund再开始，不然撞死
+              unless info[ :tun_addr ]
+                info[ :tun_addr ] = addrinfo
+                info[ :mon ].add_interest( :w )
+              end
 
+              if source_pcur == 0
                 ctl_num = data[ 4 ].unpack( 'C' ).first
 
                 case ctl_num
@@ -211,6 +213,12 @@ module Girl
                 when 2
                   # 2 a new source -> nn: source_id -> nnN: dst_family dst_port dst_ip
                   source_id = data[ 5, 4 ]
+
+                  if info[ :pairs ].include?( source_id )
+                    puts 'already paired'
+                    next
+                  end
+
                   dst_family, dst_port, dst_host = data[ 9, 8 ].unpack( 'nnN' )
                   dest = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
                   dest.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
@@ -227,7 +235,7 @@ module Girl
                   dest_id = [ Process.pid, dest.object_id ].pack( 'nn' )
                   info[ :dests ][ dest_id ] = [ dest, source_id ]
                   info[ :pairs ][ source_id ] = dest
-                  puts "dest #{ dst_port } #{ dst_host } p#{ Process.pid } #{ info[ :dests ].size }"
+                  puts "tun #{ addrinfo.ip_unpack.inspect } dests #{ info[ :dests ].size } #{ Time.new }"
 
                   @infos[ dest ] = {
                     role: :dest,
@@ -246,34 +254,35 @@ module Girl
                     tund: sock
                   }
 
-                  ctl = [ [ 3 ].pack( 'C' ), source_id, dest_id ].join
-                  add_ctl( info, ctl )
+                  add_ctl2( info, 3, [ source_id, dest_id ].join )
                 when 4
                   # 4 confirm a pack -> Nnn: pack_id
                   pack_id = data[ 5, 8 ]
                   memory = info[ :memories ].delete( pack_id )
-
-                  if memory
-                    info[ :dest_fins ].delete( pack_id )
-                    info[ :mon ].add_interest( :w )
-                  end
                 when 6
                   # 6 source fin -> C: :eof/:rst -> Nnn: last_pack_id
                   err = data[ 5 ].unpack( 'C' ).first
                   last_pack_id = data[ 6, 8 ]
                   last_source_pcur = last_pack_id[ 0, 4 ].unpack( 'N' ).first
                   source_id = last_pack_id[ 4, 4 ]
+                  add_ctl2( info, 8, source_id )
+
                   dest = info[ :pairs ][ source_id ]
 
                   if dest.nil? || dest.closed?
+                    puts 'dest already closed'
                     next
                   end
 
                   dest_info = @infos[ dest ]
                   dest_info[ :source_fin ] = [ err, last_source_pcur ]
                   dest_info[ :mon ].add_interest( :w )
-                when 8
-                  # 8 tun fin
+                when 7
+                  # 7 confirm dest fin
+                  dest_id = data[ 5, 4 ]
+                  info[ :ctl5_mems ].delete( dest_id )
+                when 10
+                  # 10 tun fin
                   @mutex.synchronize do
                     close_sock( sock )
                     @roomd_info[ :clients ].delete( addrinfo.to_sockaddr )
@@ -284,13 +293,13 @@ module Girl
               end
 
               pack_id = data[ 0, 8 ]
-              ctl = [ [ 4 ].pack( 'C' ), pack_id ].join
-              add_ctl( info, ctl )
+              add_ctl2( info, 4, pack_id )
 
               source_id = pack_id[ 4, 4 ]
               dest = info[ :pairs ][ source_id ]
 
               if dest.nil? || dest.closed?
+                puts 'dest already closed'
                 next
               end
 
@@ -337,7 +346,7 @@ module Girl
                       sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
                     end
 
-                    close_dest( sock, err )
+                    close_dest( sock )
                     next
                   end
                 end
@@ -368,8 +377,16 @@ module Girl
               ctl = info[ :ctls ].shift
 
               if ctl
-                pack = [ [ 0 ].pack( 'N' ), ctl ].join
+                ctl_num, ctl_data = ctl
+                pack = [ [ 0, ctl_num ].pack( 'NC' ), ctl_data ].join
                 sock.sendmsg( pack, 0, info[ :tun_addr ] )
+
+                # 其中ctl5（关闭了一个dest）记写后缓存
+                if ctl_num == 5
+                  dest_id = ctl_data[ 5, 4 ]
+                  info[ :ctl5_mems ][ dest_id ] = [ pack, Time.new, 0 ]
+                end
+
                 next
               end
 
@@ -401,7 +418,7 @@ module Girl
     end
 
     def quit!
-      pack = [ 0, 7 ].pack( 'NC' )
+      pack = [ 0, 9 ].pack( 'NC' )
 
       @roomd_info[ :clients ].each do | _, client_info |
         tund, _ = client_info
@@ -444,17 +461,46 @@ module Girl
             @roomd_info[ :clients ].each do | _, client_info |
               tund, _ = client_info
               tund_info = @infos[ tund ]
+
+              # 重传ctls
+              ctl_mem = tund_info[ :ctl5_mems ].first
+
+              if ctl_mem
+                dest_id, mem = ctl_mem
+                pack, mem_at, times = mem
+
+                if now - mem_at > 1
+                  tund_info[ :ctl5_mems ].delete( dest_id )
+                  idle = false
+
+                  if times > RESEND_LIMIT
+                    dest, _ = tund_info[ :dests ][ dest_id ]
+
+                    if dest && !dest.closed?
+                      puts 'ctl5 too many times'
+                      dest.setsockopt( Socket::SOL_SOCKET, Socket::SO_LINGER, [ 1, 0 ].pack( 'ii' ) )
+                      close_dest( dest, 2 )
+                    end
+
+                    next
+                  end
+
+                  puts 'resend ctl5'
+                  tund.sendmsg( pack, 0, tund_info[ :tun_addr ] )
+                  tund_info[ :ctl5_mems ][ dest_id ] = [ pack, Time.new, times + 1 ]
+                end
+              end
+
+              # 重传流量
               memory = tund_info[ :memories ].first
 
               if memory
                 pack_id, mem = memory
                 pack, mem_at, times = mem
 
-                # 超过一秒
                 if now - mem_at > 1
                   tund_info[ :memories ].delete( pack_id )
 
-                  # 重传次数超过上限强行关闭dest
                   if times > RESEND_LIMIT
                     dest_id = pack_id[ 4, 4 ]
                     dest, _ = tund_info[ :dests ][ dest_id ]
@@ -495,18 +541,14 @@ module Girl
       # 记写后缓存
       pack_id = pack[ 0, 8 ]
       tund_info[ :memories ][ pack_id ] = [ pack, Time.new, tcur ]
-
-      # 如果是最后一段流量，重发结束包
-      err = tund_info[ :dest_fins ][ pack_id ]
-
-      if err
-        ctl_pack = [ [ 0, 5, err ].pack( 'NCC' ), pack_id ].join
-        tund.sendmsg( ctl_pack, 0, tund_info[ :tun_addr ] )
-      end
     end
 
-    def add_ctl( info, ctl )
-      info[ :ctls ] << ctl
+    def add_ctl( info, ctl_num, ctl_data )
+      info[ :ctls ] << [ ctl_num, ctl_data ]
+    end
+
+    def add_ctl2( info, ctl_num, ctl_data )
+      add_ctl( info, ctl_num, ctl_data )
       info[ :mon ].add_interest( :w )
     end
 
@@ -528,10 +570,11 @@ module Girl
       info[ :mon ].add_interest( :w )
     end
 
+    # 取写前缓存
+    # 先取cache
+    # cache为空，取一个chunk放进cache
+    # chunks也为空，取wbuff
     def get_buff( info )
-      # 先取cache
-      # cache为空，取一个chunk放进cache
-      # chunks也为空，取wbuff
       data, from = info[ :cache ], :cache
 
       if data.empty?
@@ -558,18 +601,23 @@ module Girl
     end
 
     def close_dest( sock, err = nil )
-      puts "close dest by #{ err }"
       info = close_sock( sock )
 
-      if err && info && !info[ :tund ].closed?
-        last_pack_id = [ [ info[ :pcur ] ].pack( 'N' ), info[ :id ] ].join
+      unless info[ :tund ].closed?
         tund_info = @infos[ info[ :tund ] ]
         _, source_id = tund_info[ :dests ].delete( info[ :id ] )
         tund_info[ :pairs ].delete( source_id )
-        tund_info[ :dest_fins ][ last_pack_id ] = err
 
-        ctl = [ [ 5, err ].pack( 'CC' ), last_pack_id ].join
-        add_ctl( tund_info, ctl )
+        if err && info
+          last_pack_id = [ [ info[ :pcur ] ].pack( 'N' ), info[ :id ] ].join
+          ctl_data = [ [ err ].pack( 'C' ), last_pack_id ].join
+
+          if tund_info[ :tun_addr ]
+            add_ctl2( tund_info, 5, ctl_data )
+          else
+            add_ctl( tund_info, 5, ctl_data )
+          end
+        end
       end
     end
 
