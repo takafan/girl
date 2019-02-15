@@ -457,19 +457,19 @@ module Girl
           now = Time.new
           idle = true
 
-          @mutex.synchronize do
-            @roomd_info[ :clients ].each do | _, client_info |
-              tund, _ = client_info
-              tund_info = @infos[ tund ]
+          @roomd_info[ :clients ].each do | _, client_info |
+            tund, _ = client_info
+            tund_info = @infos[ tund ]
 
-              # 重传ctls
-              ctl_mem = tund_info[ :ctl5_mems ].first
+            # 重传ctls
+            ctl_mem = tund_info[ :ctl5_mems ].first
 
-              if ctl_mem
-                dest_id, mem = ctl_mem
-                pack, mem_at, times = mem
+            if ctl_mem
+              dest_id, mem = ctl_mem
+              pack, mem_at, times = mem
 
-                if now - mem_at > 1
+              if now - mem_at > 1
+                @mutex.synchronize do
                   tund_info[ :ctl5_mems ].delete( dest_id )
                   idle = false
 
@@ -490,16 +490,19 @@ module Girl
                   tund_info[ :ctl5_mems ][ dest_id ] = [ pack, Time.new, times + 1 ]
                 end
               end
+            end
 
-              # 重传流量
-              memory = tund_info[ :memories ].first
+            # 重传流量
+            memory = tund_info[ :memories ].first
 
-              if memory
-                pack_id, mem = memory
-                pack, mem_at, times = mem
+            if memory
+              pack_id, mem = memory
+              pack, mem_at, times = mem
 
-                if now - mem_at > 1
+              if now - mem_at > 1
+                @mutex.synchronize do
                   tund_info[ :memories ].delete( pack_id )
+                  idle = false
 
                   if times > RESEND_LIMIT
                     dest_id = pack_id[ 4, 4 ]
@@ -520,8 +523,6 @@ module Girl
                   if ( tund_info[ :memories ].size < MEMORIES_LIMIT ) && tund_info[ :chunks ].any?
                     tund_info[ :mon ].add_interest( :w )
                   end
-
-                  idle = false
                 end
               end
             end
