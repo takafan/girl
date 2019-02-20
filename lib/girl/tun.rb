@@ -7,6 +7,18 @@ require 'socket'
 #
 # tcp流量正常的到达目的地。
 #
+# usage:
+#
+# 1. Girl::Tund.new( 9090 ).looping # @server
+#
+# 2. Girl::Tun.new( '{ your.server.ip }', 9090, 1919 ).looping # @home
+#
+# 3. dig +short www.google.com @127.0.0.1 -p1717 # dig with girl/resolv, got 216.58.217.196
+#
+# 4. iptables -t nat -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
+#
+# 5. curl https://www.google.com/
+#
 # 走向：
 #
 # tun > roomd
@@ -178,8 +190,6 @@ module Girl
               }
 
               @tun_info[ :sources ][ source_id ] = [ source, nil ]
-              puts "new source #{ addrinfo.ip_unpack.inspect } total #{ @tun_info[ :sources ].size } p#{ Process.pid } #{ Time.new }"
-
               add_ctl( 2, [ source_id, option.data ].join )
             when :source
               begin
@@ -413,6 +423,8 @@ module Girl
 
       data, addrinfo, rflags, *controls = rs.first.recvmsg
       tund_port = data.unpack( 'n' ).first
+      puts "tund #{ tund_port }"
+
       tun_info = {
         role: :tun,
         mon: @selector.register( tun, :r ),
@@ -556,10 +568,10 @@ module Girl
       info[ :mon ].add_interest( :w )
     end
 
-    # 取写前缓存
-    # 先取cache
-    # cache为空，取一个chunk放进cache
-    # chunks也为空，取wbuff
+    # 取写前缓存：
+    # 1. 先取cache
+    # 2. cache为空，取一个chunk放进cache
+    # 3. chunks也为空，取wbuff
     def get_buff( info )
       data, from = info[ :cache ], :cache
 

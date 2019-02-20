@@ -235,7 +235,6 @@ module Girl
                   dest_id = [ Process.pid, dest.object_id ].pack( 'nn' )
                   info[ :dests ][ dest_id ] = [ dest, source_id ]
                   info[ :pairs ][ source_id ] = dest
-                  puts "tun #{ addrinfo.ip_unpack.inspect } dests #{ info[ :dests ].size } #{ Time.new }"
 
                   @infos[ dest ] = {
                     role: :dest,
@@ -571,10 +570,10 @@ module Girl
       info[ :mon ].add_interest( :w )
     end
 
-    # 取写前缓存
-    # 先取cache
-    # cache为空，取一个chunk放进cache
-    # chunks也为空，取wbuff
+    # 取写前缓存：
+    # 1. 先取cache
+    # 2. cache为空，取一个chunk放进cache
+    # 3. chunks也为空，取wbuff
     def get_buff( info )
       data, from = info[ :cache ], :cache
 
