@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.email         = ['qqtakafan@gmail.com']
 
   spec.summary       = %q{妹子}
-  spec.description   = %q{a 江南style traffic relay}
+  spec.description   = %q{while network is evil, here's a patch.}
   spec.homepage      = 'https://github.com/takafan/girl'
   spec.license       = 'MIT'
 
