@@ -4,12 +4,12 @@ require 'socket'
 module Girl
   class P2pd
 
-    def initialize( roomd_port = 6262, tmp_dir = '/tmp/p2pd', timeout = 3600, managed_sock = nil )
+    def initialize( roomd_port = 6262, tmp_dir = '/tmp/p2pd', timeout = 3600 )
       @writes = {} # sock => ''
       @tmp_dir = tmp_dir
       @timeout = timeout
       @selector = NIO::Selector.new
-      @roles = {} # mon => :roomd / :room / :managed
+      @roles = {} # mon => :roomd / :room
       @infos = {} # room_mon => { ip_port: '6.6.6.6:12345', tmp_path: '/tmp/p2pd/6.6.6.6:12345' }
       @timestamps = {} # mon => last r/w
 
@@ -20,12 +20,6 @@ module Girl
       puts "roomd listening on #{ roomd_port } #{ @selector.backend }"
       roomd_mon = @selector.register( roomd, :r )
       @roles[ roomd_mon ] = :roomd
-
-      if managed_sock
-        puts "p#{ Process.pid } reg managed on #{ managed_sock.local_address.ip_unpack.last }"
-        mon = @selector.register( managed_sock, :r )
-        @roles[ mon ] = :managed
-      end
     end
 
     def looping
@@ -116,20 +110,6 @@ module Girl
                 @infos.delete( mon )
               else
                 puts 'ghost?'
-              end
-            when :managed
-              data, addrinfo, rflags, *controls = sock.recvmsg
-              data = data.strip
-
-              if data == 't'
-                now = Time.new
-                puts "p#{ Process.pid } check timeout #{ now }"
-
-                @timestamps.select{ | _, stamp | now - stamp > @timeout }.each do | mo, _ |
-                  close_mon( mo )
-                end
-              else
-                puts "unknown manage code"
               end
             end
           end

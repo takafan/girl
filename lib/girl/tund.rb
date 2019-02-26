@@ -419,12 +419,14 @@ module Girl
     def quit!
       pack = [ 0, 9 ].pack( 'NC' )
 
-      @roomd_info[ :clients ].each do | _, client_info |
-        tund, _ = client_info
+      @mutex.synchronize do
+        @roomd_info[ :clients ].each do | _, client_info |
+          tund, _ = client_info
 
-        unless tund.closed?
-          tund_info = @infos[ tund ]
-          tund.sendmsg( pack, 0, tund_info[ :tun_addr ] )
+          unless tund.closed?
+            tund_info = @infos[ tund ]
+            tund.sendmsg( pack, 0, tund_info[ :tun_addr ] )
+          end
         end
       end
 
@@ -456,19 +458,20 @@ module Girl
           now = Time.new
           idle = true
 
-          @roomd_info[ :clients ].each do | _, client_info |
-            tund, _ = client_info
-            tund_info = @infos[ tund ]
+          # void add a new client during iteration
+          @mutex.synchronize do
+            @roomd_info[ :clients ].each do | _, client_info |
+              tund, _ = client_info
+              tund_info = @infos[ tund ]
 
-            # 重传ctls
-            ctl_mem = tund_info[ :ctl5_mems ].first
+              # 重传ctls
+              ctl_mem = tund_info[ :ctl5_mems ].first
 
-            if ctl_mem
-              dest_id, mem = ctl_mem
-              pack, mem_at, times = mem
+              if ctl_mem
+                dest_id, mem = ctl_mem
+                pack, mem_at, times = mem
 
-              if now - mem_at > 1
-                @mutex.synchronize do
+                if now - mem_at > 1
                   tund_info[ :ctl5_mems ].delete( dest_id )
                   idle = false
 
@@ -489,17 +492,15 @@ module Girl
                   tund_info[ :ctl5_mems ][ dest_id ] = [ pack, Time.new, times + 1 ]
                 end
               end
-            end
 
-            # 重传流量
-            memory = tund_info[ :memories ].first
+              # 重传流量
+              memory = tund_info[ :memories ].first
 
-            if memory
-              pack_id, mem = memory
-              pack, mem_at, times = mem
+              if memory
+                pack_id, mem = memory
+                pack, mem_at, times = mem
 
-              if now - mem_at > 1
-                @mutex.synchronize do
+                if now - mem_at > 1
                   tund_info[ :memories ].delete( pack_id )
                   idle = false
 

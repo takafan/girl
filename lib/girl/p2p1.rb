@@ -1,20 +1,18 @@
-require 'girl/usr'
 require 'nio'
 require 'socket'
 
 module Girl
   class P2p1
 
-    def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil, managed_sock = nil )
+    def initialize( roomd_host, roomd_port, appd_host, appd_port, timeout = 1800, room_title = nil )
       @writes = {} # sock => ''
       @roomd_sockaddr = Socket.sockaddr_in( roomd_port, roomd_host )
       @appd_sockaddr = Socket.sockaddr_in( appd_port, appd_host )
       @appd_host = appd_host
       @appd_port = appd_port
       @room_title = room_title
-      @usr = Girl::Usr.new
       @selector = NIO::Selector.new
-      @roles = {}  # mon => :room / :p1 / :app / :managed
+      @roles = {}  # mon => :room / :p1 / :app
       @timestamps = {} # mon => last r/w
       @twins = {} # p1_mon <=> app_mon
       @swaps = {} # p1_mon => nil or length
@@ -22,12 +20,6 @@ module Girl
       @timeout = timeout
 
       connect_roomd
-
-      if managed_sock
-        puts "p#{ Process.pid } reg managed on #{ managed_sock.local_address.ip_unpack.last }"
-        mon = @selector.register( managed_sock, :r )
-        @roles[ mon ] = :managed
-      end
     end
 
     def looping
@@ -159,10 +151,10 @@ module Girl
                 end
 
                 if data.size >= len
-                  data = "#{ @usr.swap( data[ 0, len ] ) }#{ data[ len..-1 ] }"
+                  data = "#{ swap( data[ 0, len ] ) }#{ data[ len..-1 ] }"
                   @swaps.delete( mon )
                 else
-                  data = @usr.swap( data )
+                  data = swap( data )
                   @swaps[ mon ] = len - data.size
                 end
               end
@@ -193,26 +185,10 @@ module Girl
               @timestamps[ mon ] = Time.new
 
               if @swaps2.delete( twin )
-                data = "#{ [ data.size ].pack( 'n' ) }#{ @usr.swap( data ) }"
+                data = "#{ [ data.size ].pack( 'n' ) }#{ swap( data ) }"
               end
 
               buffer( twin, data )
-            when :managed
-              data, addrinfo, rflags, *controls = sock.recvmsg
-              data = data.strip
-
-              if data == 't'
-                now = Time.new
-                puts "p#{ Process.pid } check timeout #{ now }"
-
-                unless @timestamps.find{ | _, stamp | now - stamp < @timeout }
-                  puts "flash #{ now }"
-                  connect_roomd
-                  break
-                end
-              else
-                puts "unknown manage code"
-              end
             end
           end
 
@@ -259,7 +235,7 @@ module Girl
     end
 
     def connect_roomd
-      @roles.select{ | _, role | role != :managed  }.each do | mon, _ |
+      @roles.each do | mon, _ |
         sock = mon.io
         sock.close
         @selector.deregister( sock )
@@ -292,6 +268,10 @@ module Girl
       if @room_title
         buffer( mon, "room#{ @room_title }".unpack( "C*" ).map{ | c | c.chr }.join )
       end
+    end
+
+    def swap( data )
+      data
     end
 
   end

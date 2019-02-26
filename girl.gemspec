@@ -25,7 +25,6 @@ lib/girl/resolv.rb
 lib/girl/resolvd.rb
 lib/girl/tun.rb
 lib/girl/tund.rb
-lib/girl/usr.rb
 lib/girl/version.rb
   ]
 

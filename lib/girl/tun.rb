@@ -261,10 +261,7 @@ module Girl
                   info[ :ctl6_mems ].delete( source_id )
                 when 9
                   # 9 tund fin
-                  @mutex.synchronize do
-                    close_sock( sock )
-                  end
-
+                  close_sock( sock )
                   sleep 5
                   apply_tunnel
                 end
@@ -464,16 +461,16 @@ module Girl
           now = Time.new
           idle = true
 
-          # 重传ctls
-          [ :ctl2_mems, :ctl6_mems ].each do | ctl_sym |
-            ctl_mem = @tun_info[ ctl_sym ].first
+          @mutex.synchronize do
+            # 重传ctls
+            [ :ctl2_mems, :ctl6_mems ].each do | ctl_sym |
+              ctl_mem = @tun_info[ ctl_sym ].first
 
-            if ctl_mem
-              source_id, mem = ctl_mem
-              pack, mem_at, times = mem
+              if ctl_mem
+                source_id, mem = ctl_mem
+                pack, mem_at, times = mem
 
-              if now - mem_at > 1
-                @mutex.synchronize do
+                if now - mem_at > 1
                   @tun_info[ ctl_sym ].delete( source_id )
                   idle = false
 
@@ -495,17 +492,15 @@ module Girl
                 end
               end
             end
-          end
 
-          # 重传流量
-          memory = @tun_info[ :memories ].first
+            # 重传流量
+            memory = @tun_info[ :memories ].first
 
-          if memory
-            pack_id, mem = memory
-            pack, mem_at, times = mem
+            if memory
+              pack_id, mem = memory
+              pack, mem_at, times = mem
 
-            if now - mem_at > 1
-              @mutex.synchronize do
+              if now - mem_at > 1
                 @tun_info[ :memories ].delete( pack_id )
                 idle = false
 
@@ -528,6 +523,7 @@ module Girl
                 if ( @tun_info[ :memories ].size < MEMORIES_LIMIT ) && @tun_info[ :chunks ].any?
                   @tun_info[ :mon ].add_interest( :w )
                 end
+
               end
             end
           end

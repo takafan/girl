@@ -13,7 +13,6 @@
 #
 # 6. ssh -p45678 libo@127.0.0.1
 #
-require 'girl/usr'
 require 'nio'
 require 'socket'
 
@@ -30,7 +29,6 @@ module Girl
       p1_host, p1_port = p1_info.split( ':' )
       @p1_sockaddr = Socket.sockaddr_in( p1_port, p1_host )
       @rep2p = 0
-      @usr = Girl::Usr.new
       @selector = NIO::Selector.new
       @roles = {} # mon => :room / :p2 / :appd / :app
       @twins = {} # p2_mon <=> app_mon
@@ -144,10 +142,10 @@ module Girl
                 end
 
                 if data.size >= len
-                  data = "#{ @usr.swap( data[ 0, len ] ) }#{ data[ len..-1 ] }"
+                  data = "#{ swap( data[ 0, len ] ) }#{ data[ len..-1 ] }"
                   @swaps2.delete( mon )
                 else
-                  data = @usr.swap( data )
+                  data = swap( data )
                   @swaps2[ mon ] = len - data.size
                 end
               end
@@ -170,7 +168,7 @@ module Girl
               twin = @twins[ mon ]
 
               if @swaps.delete( twin )
-                data = "#{ [ data.size ].pack( 'n' ) }#{ @usr.swap( data ) }"
+                data = "#{ [ data.size ].pack( 'n' ) }#{ swap( data ) }"
               end
 
               buffer( twin, data )
@@ -250,6 +248,10 @@ module Girl
       @roles[ p2_mon ] = :p2
       @swaps << p2_mon
       @swaps2[ p2_mon ] = nil
+    end
+
+    def swap( data )
+      data
     end
 
   end
