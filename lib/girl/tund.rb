@@ -152,7 +152,11 @@ module Girl
               pack = [ tund_port ].pack( 'n' )
               sock.sendmsg( pack, 0, addrinfo )
               now = Time.new
-              info[ :clients ][ addrinfo.to_sockaddr ] = [ tund, now ]
+              
+              @mutex.synchronize do
+                info[ :clients ][ addrinfo.to_sockaddr ] = [ tund, now ]
+              end
+
               puts "new client #{ addrinfo.ip_unpack.inspect } total #{ info[ :clients ].size } #{ now }"
             when :dest
               begin
