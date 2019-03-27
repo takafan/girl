@@ -152,7 +152,7 @@ module Girl
               pack = [ tund_port ].pack( 'n' )
               sock.sendmsg( pack, 0, addrinfo )
               now = Time.new
-              
+
               @mutex.synchronize do
                 info[ :clients ][ addrinfo.to_sockaddr ] = [ tund, now ]
               end
@@ -286,8 +286,9 @@ module Girl
                   info[ :ctl5_mems ].delete( dest_id )
                 when 10
                   # 10 tun fin
+                  close_sock( sock )
+
                   @mutex.synchronize do
-                    close_sock( sock )
                     @roomd_info[ :clients ].delete( addrinfo.to_sockaddr )
                   end
                 end
