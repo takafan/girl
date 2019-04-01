@@ -90,13 +90,14 @@ module Girl
       @infos = {
         roomd => roomd_info
       }
+      @deregs = []
     end
 
     def looping
       puts 'looping'
 
-      # 关闭过期的tunnel
-      expire_clients
+      # 关闭过期的tunnel，释放sock已关闭的monitor
+      loop_cleanup
 
       # 重传
       loop_resend
@@ -286,9 +287,8 @@ module Girl
                   info[ :ctl5_mems ].delete( dest_id )
                 when 10
                   # 10 tun fin
-                  close_sock( sock )
-
                   @mutex.synchronize do
+                    close_sock( sock )
                     @roomd_info[ :clients ].delete( addrinfo.to_sockaddr )
                   end
                 end
@@ -440,7 +440,7 @@ module Girl
 
     private
 
-    def expire_clients
+    def loop_cleanup
       Thread.new do
         loop do
           now = Time.new
@@ -450,6 +450,14 @@ module Girl
               close_sock( client_info[ 0 ] )
               @roomd_info[ :clients ].delete( sockaddr )
             end
+          end
+
+          unless @deregs.empty?
+            @deregs.each do | sock |
+              @selector.deregister( sock )
+            end
+
+            @deregs.clear
           end
 
           sleep 3600
@@ -629,7 +637,7 @@ module Girl
 
     def close_sock( sock )
       sock.close
-      @selector.deregister( sock )
+      @deregs << sock
       info = @infos.delete( sock )
 
       if info

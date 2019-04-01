@@ -129,14 +129,20 @@ module Girl
       @infos = {
         redir => redir_info
       }
+      @deregs = []
 
       apply_tunnel
     end
 
     def looping
       puts 'looping'
+
       # 心跳
       loop_heartbeat
+
+      # 释放sock已关闭的monitor
+      loop_cleanup
+
       # 重传
       loop_resend
 
@@ -455,6 +461,22 @@ module Girl
       end
     end
 
+    def loop_cleanup
+      Thread.new do
+        loop do
+          unless @deregs.empty?
+            @deregs.each do | sock |
+              @selector.deregister( sock )
+            end
+
+            @deregs.clear
+          end
+
+          sleep 3600
+        end
+      end
+    end
+
     def loop_resend
       Thread.new do
         loop do
@@ -607,7 +629,7 @@ module Girl
 
     def close_sock( sock )
       sock.close
-      @selector.deregister( sock )
+      @deregs << sock
       info = @infos.delete( sock )
 
       if info
