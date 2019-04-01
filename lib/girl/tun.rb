@@ -633,6 +633,7 @@ module Girl
       info = @infos.delete( sock )
 
       if info
+        info[ :mon ].remove_interest( :rw )
         info[ :chunks ].each do | filename |
           begin
             File.delete( File.join( info[ :chunk_dir ], filename ) )
