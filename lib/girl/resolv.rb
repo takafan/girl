@@ -100,6 +100,10 @@ module Girl
           data, addrinfo, rflags, *controls = sock.recvmsg
           sender = addrinfo.to_sockaddr
 
+          if @rvd_socks.include?( sender )
+            data = swap( data )
+          end
+
           if data.size <= 12
             puts 'missing header?'
             next
@@ -141,9 +145,9 @@ module Girl
             is_custom = @custom_qnames.any?{ | custom | qname.include?( custom ) }
 
             if is_custom
-              @rvd_socks.each do | sockaddr, alias_sock |
-                data[ 12, qname_len ] = swap( qname )
+              data = swap( data )
 
+              @rvd_socks.each do | sockaddr, alias_sock |
                 begin
                   alias_sock.sendmsg( data, 0, sockaddr )
                 rescue Errno::ENETUNREACH => e
@@ -166,13 +170,7 @@ module Girl
             src, is_custom, alias_sock = @ids.delete( id )
             ancount = data[ 6, 2 ].unpack( 'n' ).first
             nscount = data[ 8, 2 ].unpack( 'n' ).first
-
-            if is_custom
-              qname = swap( data[ 12, qname_len ] )
-              data[ 12, qname_len ] = qname
-            else
-              qname = data[ 12, qname_len ]
-            end
+            qname = data[ 12, qname_len ]
 
             begin
               alias_sock.sendmsg( data, 0, src )

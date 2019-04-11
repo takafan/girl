@@ -61,6 +61,10 @@ module Girl
           data, addrinfo, rflags, *controls = sock.recvmsg
           sender = addrinfo.to_sockaddr
 
+          unless @pub_socks.include?( sender )
+            data = swap( data )
+          end
+
           if data.size <= 12
             puts 'missing header?'
             next
@@ -76,8 +80,7 @@ module Girl
           end
 
           if qr == '0'
-            qname = swap( data[ 12, qname_len ] )
-            data[ 12, qname_len ] = qname
+            qname = data[ 12, qname_len ]
 
             @pub_socks.each do | sockaddr, alias_sock |
               begin
@@ -92,8 +95,7 @@ module Girl
           elsif qr == '1' && @ids.include?( id )
             # relay the fastest response, ignore followings
             src, alias_sock = @ids.delete( id )
-            qname = data[ 12, qname_len ]
-            data[ 12, qname_len ] = swap( qname )
+            data = swap( data )
             alias_sock.sendmsg( data, 0, src )
           end
         end
