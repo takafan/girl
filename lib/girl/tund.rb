@@ -477,6 +477,10 @@ module Girl
               tund, _ = client_info
               tund_info = @infos[ tund ]
 
+              unless tund_info
+                next
+              end
+
               # 重传ctls
               ctl_mem = tund_info[ :ctl5_mems ].first
 
