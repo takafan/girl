@@ -8,6 +8,7 @@
 #
 # 3. dig google.com @127.0.0.1 -p1717
 #
+require 'girl/hex'
 require 'socket'
 
 module Girl
@@ -90,6 +91,7 @@ module Girl
       @custom_qnames = custom_domains.map{ |dom| dom.split( '.' ).map{ | sub | [ sub.size ].pack( 'C' ) + sub }.join }
       @ids = {}
       @caches = {}
+      @hex = Girl::Hex.new
     end
 
     def looping
@@ -101,7 +103,7 @@ module Girl
           sender = addrinfo.to_sockaddr
 
           if @rvd_socks.include?( sender )
-            data = swap( data )
+            data = @hex.decode( data )
           end
 
           if data.size <= 12
@@ -145,7 +147,7 @@ module Girl
             is_custom = @custom_qnames.any?{ | custom | qname.include?( custom ) }
 
             if is_custom
-              data = swap( data )
+              data = @hex.encode( data )
 
               @rvd_socks.each do | sockaddr, alias_sock |
                 begin
@@ -223,11 +225,6 @@ module Girl
           end
         end
       end
-    end
-
-    def swap( data )
-      # overwrite me, you'll be free
-      data
     end
 
     def quit!

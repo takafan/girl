@@ -12,5 +12,13 @@ module Girl
       # overwrite me, you'll be free
       data
     end
+
+    def encode( data )
+      data
+    end
+
+    def decode( data )
+      data
+    end
   end
 end

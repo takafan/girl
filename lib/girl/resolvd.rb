@@ -1,3 +1,4 @@
+require 'girl/hex'
 require 'socket'
 
 module Girl
@@ -52,6 +53,7 @@ module Girl
 
       @pub_socks = pub_socks
       @ids = {}
+      @hex = Girl::Hex.new
     end
 
     def looping
@@ -62,7 +64,7 @@ module Girl
           sender = addrinfo.to_sockaddr
 
           unless @pub_socks.include?( sender )
-            data = swap( data )
+            data = @hex.decode( data )
           end
 
           if data.size <= 12
@@ -95,15 +97,11 @@ module Girl
           elsif qr == '1' && @ids.include?( id )
             # relay the fastest response, ignore followings
             src, alias_sock = @ids.delete( id )
-            data = swap( data )
+            data = @hex.encode( data )
             alias_sock.sendmsg( data, 0, src )
           end
         end
       end
-    end
-
-    def swap( data )
-      data
     end
 
     def quit!
