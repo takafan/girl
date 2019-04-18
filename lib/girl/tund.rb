@@ -179,7 +179,7 @@ module Girl
               pcur = info[ :pcur ] + 1
 
               if pcur == 1
-                data = @hex.swap( data )
+                data = @hex.encode( data )
               end
 
               data = [ [ data.bytesize, pcur ].pack( 'nN' ), info[ :id ], data ].join
@@ -317,7 +317,7 @@ module Girl
 
               # 解混淆
               if source_pcur == 1
-                data = @hex.swap( data )
+                data = @hex.decode( data )
               end
 
               # 放进dest的写前缓存，跳号放碎片缓存

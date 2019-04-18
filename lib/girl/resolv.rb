@@ -15,6 +15,7 @@ module Girl
   class Resolv
 
     def initialize( port = 1717, nameservers = [], resolvd_host = nil, resolvd_port = nil, custom_domains = [] )
+      reads = []
       pub_socks = {} # nameserver => sock
       rvd_socks = {} # resolvd => sock
       pub_addrs = []
@@ -46,15 +47,13 @@ module Girl
         end
       end
 
-      @reads = []
-
       begin
         sock4 = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         sock4.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         sock4.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
         puts "bound on #{ port } AF_INET"
 
-        @reads << sock4
+        reads << sock4
 
         pub_addrs.each do | addr |
           pub_socks[ addr ] = sock4
@@ -73,7 +72,7 @@ module Girl
         sock6.bind( Socket.sockaddr_in( port, '::0' ) )
         puts "bound on #{ port } AF_INET6"
 
-        @reads << sock6
+        reads << sock6
 
         pub_addr6s.each do | addr |
           pub_socks[ addr ] = sock6
@@ -86,6 +85,7 @@ module Girl
         puts "AF_INET6 #{ e.class }"
       end
 
+      @reads = reads
       @pub_socks = pub_socks
       @rvd_socks = rvd_socks
       @custom_qnames = custom_domains.map{ |dom| dom.split( '.' ).map{ | sub | [ sub.size ].pack( 'C' ) + sub }.join }
@@ -97,6 +97,7 @@ module Girl
     def looping
       loop do
         readable_socks, _ = IO.select( @reads )
+        
         readable_socks.each do | sock |
           # https://tools.ietf.org/html/rfc1035#page-26
           data, addrinfo, rflags, *controls = sock.recvmsg

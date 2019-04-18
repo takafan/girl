@@ -8,12 +8,8 @@ module Girl
       :success
     end
 
-    def swap( data )
-      # overwrite me, you'll be free
-      data
-    end
-
     def encode( data )
+      # overwrite me, you'll be free
       data
     end
 

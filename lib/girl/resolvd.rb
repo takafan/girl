@@ -5,6 +5,7 @@ module Girl
   class Resolvd
 
     def initialize( port = 7070, nameservers = [] )
+      reads = []
       pub_socks = {} # nameserver => sock
       pub_addrs = []
       pub_addr6s = []
@@ -19,15 +20,13 @@ module Girl
         end
       end
 
-      @reads = []
-
       begin
         sock4 = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         sock4.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         sock4.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
         puts "bound on #{ port } AF_INET"
 
-        @reads << sock4
+        reads << sock4
 
         pub_addrs.each do | addr |
           pub_socks[ addr ] = sock4
@@ -42,7 +41,7 @@ module Girl
         sock6.bind( Socket.sockaddr_in( port, '::0' ) )
         puts "bound on #{ port } AF_INET6"
 
-        @reads << sock6
+        reads << sock6
 
         pub_addr6s.each do | addr |
           pub_socks[ addr ] = sock6
@@ -51,6 +50,7 @@ module Girl
         puts "AF_INET6 #{ e.class }"
       end
 
+      @reads = reads
       @pub_socks = pub_socks
       @ids = {}
       @hex = Girl::Hex.new
@@ -59,6 +59,7 @@ module Girl
     def looping
       loop do
         readable_socks, _ = IO.select( @reads )
+        
         readable_socks.each do | sock |
           data, addrinfo, rflags, *controls = sock.recvmsg
           sender = addrinfo.to_sockaddr

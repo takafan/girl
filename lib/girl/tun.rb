@@ -211,9 +211,9 @@ module Girl
               pcur = info[ :pcur ] + 1
 
               # ssh的第一段流量是明文版本号，https的第一段流量含明文域名，所以，混淆第一段流量。
-              # 覆盖swap方法自定义混淆。
+              # 覆盖encode方法自定义混淆。
               if pcur == 1
-                data = @hex.swap( data )
+                data = @hex.encode( data )
               end
 
               data = [ [ data.bytesize, pcur ].pack( 'nN' ), info[ :id ], data ].join
@@ -295,7 +295,7 @@ module Girl
 
               # 解混淆
               if dest_pcur == 1
-                data = @hex.swap( data )
+                data = @hex.decode( data )
               end
 
               # 放进source的写前缓存，跳号放碎片缓存
