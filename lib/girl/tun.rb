@@ -454,7 +454,7 @@ module Girl
     def loop_heartbeat
       Thread.new do
         loop do
-          pack = [ 0, 1 ].pack( 'NC' )
+          pack = [ 0, 1, rand( 128 ) ].pack( 'NCC' )
           @tun.sendmsg( pack, 0, @tun_info[ :tund_addr ] )
           sleep 59
         end
