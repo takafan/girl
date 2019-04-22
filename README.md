@@ -45,7 +45,7 @@ dig google.com @127.0.0.1 -p1717
 
 另，有的上级网关屏蔽心跳包，会误打到换了端口的dns查询包，办法是加入随机字符。
 
-diy加密，覆盖下面两个方法即可：
+diy加解密，覆盖下面两个方法即可：
 
 ```ruby
 def encode( data )
@@ -85,7 +85,7 @@ Girl::Tun.new( '{ your.server.ip }', 9090, 1919 ).looping
 ```
 
 ```bash
-dig +short www.google.com @127.0.0.1 -p1818 # got 216.58.217.196
+dig +short www.google.com @127.0.0.1 -p1717 # got 216.58.217.196
 
 iptables -t nat -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
 
