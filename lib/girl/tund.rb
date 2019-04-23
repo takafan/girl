@@ -424,14 +424,12 @@ module Girl
     def quit!
       pack = [ 0, 9 ].pack( 'NC' )
 
-      @mutex.synchronize do
-        @roomd_info[ :clients ].each do | _, client_info |
-          tund, _ = client_info
+      @roomd_info[ :clients ].each do | _, client_info |
+        tund, _ = client_info
 
-          unless tund.closed?
-            tund_info = @infos[ tund ]
-            tund.sendmsg( pack, 0, tund_info[ :tun_addr ] )
-          end
+        unless tund.closed?
+          tund_info = @infos[ tund ]
+          tund.sendmsg( pack, 0, tund_info[ :tun_addr ] )
         end
       end
 
