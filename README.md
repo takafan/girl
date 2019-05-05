@@ -1,13 +1,11 @@
-# girl
-
-while network is evil, here's a patch.
+# girl - while network is evil, here's a patch.
 
 妹子解决2个问题：
 
 1. dns查询得到正确的ip。
 2. tcp流量正常的到达目的地。
 
-妹子分成近端和远端，通常：
+妹子分成近端和远端，近端可以是内网的一台电脑，或者虚拟机、路由器。远端是海外服务器。通常：
 
 ```
 近端 ---------------> 目的地
@@ -23,6 +21,10 @@ while network is evil, here's a patch.
 
 第二根线，流量由近端发给远端，再由远端发给目的地。其中，近端发给远端的那一段，tcp流量被打包成udp，在应用层实现可靠，好处是比tcp快，有加速效果。
 
+任意可以连网的设备，把网关和dns设成近端ip（有线），或者连上近端wifi（无线），起飞。
+
+安装：
+
 ```bash
 gem install girl
 ```
@@ -35,7 +37,7 @@ gem install girl
                cache     `-- hit list --> encode --> resolvd ---> 8.8.8.8
 ```
 
-server:
+远端：
 
 ```ruby
 require 'girl/resolvd'
@@ -43,7 +45,7 @@ require 'girl/resolvd'
 Girl::Resolvd.new( 7070 ).looping
 ```
 
-home:
+近端：
 
 ```ruby
 require 'girl/resolv'
@@ -56,8 +58,6 @@ dig google.com @127.0.0.1 -p1717
 ```
 
 满足：特定域名+53端口，dns查询包将被丢弃，到不了远端。办法是加密，或者换个端口。
-
-另，有的上级网关屏蔽心跳包，会误打到换了端口的dns查询包，办法是加入随机字符。
 
 diy加解密，覆盖下面两个方法即可：
 
@@ -82,7 +82,7 @@ end
                                                           cache
 ```
 
-server:
+远端：
 
 ```ruby
 require 'girl/tund'
@@ -90,7 +90,7 @@ require 'girl/tund'
 Girl::Tund.new( 9090 ).looping
 ```
 
-home:
+近端：
 
 ```ruby
 require 'girl/tun'
@@ -145,7 +145,5 @@ yarn build
 ## 服务器推荐
 
 ping值稳定：cn2 gia。低延迟：中华电信、韩国电信。或者找我“买”一台妹子路由器，就不用管服务器了，同时也是支持我。
-
-任何可以连网的设备，把网关和dns设成妹子，或是连上妹子wifi，起飞。
 
 1000一台，寄到家。邮件咨询： qqtakafan@gmail.com
