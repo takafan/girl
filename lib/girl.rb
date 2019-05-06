@@ -1,8 +1,4 @@
-require 'girl/p2p1'
-require 'girl/p2p2'
-require 'girl/p2pd'
 require 'girl/resolv'
 require 'girl/resolvd'
 require 'girl/tun'
 require 'girl/tund'
-require 'girl/version'

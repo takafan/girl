@@ -17,10 +17,8 @@ Gem::Specification.new do |spec|
   spec.files         = %w[
 girl.gemspec
 lib/girl.rb
+lib/girl/head.rb
 lib/girl/hex.rb
-lib/girl/p2p1.rb
-lib/girl/p2p2.rb
-lib/girl/p2pd.rb
 lib/girl/resolv.rb
 lib/girl/resolvd.rb
 lib/girl/tun.rb

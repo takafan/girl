@@ -1,4 +1,6 @@
+require 'girl/head'
 require 'girl/hex'
+require 'girl/version'
 require 'nio'
 require 'socket'
 
@@ -64,11 +66,6 @@ require 'socket'
 # source_fin    远端传来“source已关闭”，记在dest身上，传完所有流量后关闭dest。
 #
 module Girl
-  PACK_SIZE = 1456 # 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(pack id) = 1456
-  CHUNK_SIZE = PACK_SIZE * 1000
-  MEMORIES_LIMIT = 10_000 # 写后缓存上限
-  RESEND_LIMIT = 20 # 重传次数上限
-
   class Tund
     def initialize( roomd_port = 9090, dest_chunk_dir = '/tmp', tund_chunk_dir = '/tmp' )
       selector = NIO::Selector.new

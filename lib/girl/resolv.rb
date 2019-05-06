@@ -9,6 +9,7 @@
 # 3. dig google.com @127.0.0.1 -p1717
 #
 require 'girl/hex'
+require 'girl/version'
 require 'socket'
 
 module Girl
@@ -97,7 +98,7 @@ module Girl
     def looping
       loop do
         readable_socks, _ = IO.select( @reads )
-        
+
         readable_socks.each do | sock |
           # https://tools.ietf.org/html/rfc1035#page-26
           data, addrinfo, rflags, *controls = sock.recvmsg

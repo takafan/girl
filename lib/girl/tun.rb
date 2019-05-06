@@ -1,4 +1,6 @@
+require 'girl/head'
 require 'girl/hex'
+require 'girl/version'
 require 'nio'
 require 'socket'
 
@@ -97,11 +99,6 @@ require 'socket'
 # dest_fin        远端传来“dest已关闭”，记在source身上，传完所有流量后关闭source。
 #
 module Girl
-  PACK_SIZE = 1456 # 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(pack id) = 1456
-  CHUNK_SIZE = PACK_SIZE * 1000
-  MEMORIES_LIMIT = 10_000 # 写后缓存上限
-  RESEND_LIMIT = 20 # 重传次数上限
-
   class Tun
     def initialize( tund_ip, roomd_port = 9090, redir_port = 1919, source_chunk_dir = '/tmp', tun_chunk_dir = '/tmp', hex_block = nil )
       if hex_block

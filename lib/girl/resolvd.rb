@@ -1,4 +1,5 @@
 require 'girl/hex'
+require 'girl/version'
 require 'socket'
 
 module Girl
@@ -59,7 +60,7 @@ module Girl
     def looping
       loop do
         readable_socks, _ = IO.select( @reads )
-        
+
         readable_socks.each do | sock |
           data, addrinfo, rflags, *controls = sock.recvmsg
           sender = addrinfo.to_sockaddr
