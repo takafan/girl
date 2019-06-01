@@ -64,7 +64,7 @@ module Girl
     end
 
     def quit!
-      pack = [ 0, 9 ].pack( 'NC' ) # tund fin
+      ctlmsg = [ 0, TUND_FIN ].pack( 'NC' )
 
       @roomd_info[ :tunds ].keys.each do | tund |
         if tund.closed?
@@ -77,7 +77,7 @@ module Girl
           next
         end
 
-        send_pack( tund, pack, tund_info[ :tun_addr ] )
+        send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
       end
 
       exit
@@ -233,8 +233,7 @@ module Girl
       @reads << tund
 
       tund_port = tund.local_address.ip_unpack.last
-      pack = [ tund_port ].pack( 'n' )
-      send_pack( sock, pack, client )
+      send_pack( sock, [ tund_port ].pack( 'n' ), client )
       info[ :clients ] << client
       info[ :tunds ][ tund ] = client
       puts "p#{ Process.pid } #{ info[ :tunds ].size } tunds #{ Time.new }"

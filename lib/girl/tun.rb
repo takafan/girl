@@ -93,8 +93,8 @@ module Girl
 
     def quit!
       unless @tun.closed?
-        pack = [ 0, TUN_FIN ].pack( 'NC' )
-        send_pack( @tun, pack, @tun_info[ :tund_addr ] )
+        ctlmsg = [ 0, TUN_FIN ].pack( 'NC' )
+        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
       end
 
       exit
