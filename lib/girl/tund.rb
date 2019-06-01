@@ -21,7 +21,7 @@ module Girl
       @mutex = Mutex.new
       @roles = {} # sock => :roomd / :dest / :tund
       @infos = {}
-      @closings = {} # sock => dest_exception
+      @closings = []
       @reads = []
       @writes = []
 
@@ -103,7 +103,7 @@ module Girl
                 end
 
                 @roomd_info[ :queue ].shift
-                
+
                 unless tund.closed?
                   tund_info = @infos[ tund ]
 
@@ -220,9 +220,10 @@ module Girl
         chunks: [], # 块文件名，wbuff每超过1.4M落一个块
         chunk_seed: 0, # 块序号
         wmems: { # 写后缓存
-          traffic: {},
-          dest_fin: {}
+          traffic: {}, # 流量包 dest_id => traffics
+          dest_fin: {} # dest_id => ctlmsg
         },
+        deleting_wmem_traffics: [], # 待删的流量包键 dest_ids
         tun_addr: nil, # 近端地址
         dests: {}, # dest_id => dest
         src_dst: {}, # source_id => dest_id
@@ -245,17 +246,17 @@ module Girl
         return
       end
 
-      info = @infos[ sock ]
-
       begin
         data = sock.read_nonblock( PACK_SIZE )
       rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
         return
       rescue Exception => e
-        add_closing( sock, e )
-        return
+        sock.close_read
+        @reads.delete( sock )
+        exception = e
       end
 
+      info = @infos[ sock ]
       tund = info[ :tund ]
 
       if tund.closed?
@@ -264,6 +265,13 @@ module Girl
       end
 
       tund_info = @infos[ tund ]
+
+      if exception
+        ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
+        send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
+        return
+      end
+
       pack_id = info[ :pcur ] + 1
 
       if pack_id == 1
@@ -354,6 +362,12 @@ module Girl
 
           if packs
             packs.delete( pack_id )
+
+            # 流量包已被确认光且有删除标记，删除该键
+            if packs.empty? && info[ :deleting_wmem_traffics ].include?( dest_id )
+              info[ :deleting_wmem_traffics ].delete( dest_id )
+              delete_wmem_traffic( info, dest_id )
+            end
           end
         when SOURCE_FIN
           source_id, last_pack_id = data[ 5, 8 ].unpack( 'NN' )
@@ -375,8 +389,21 @@ module Girl
           end
         when CONFIRM_DEST_FIN
           dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          dest = info[ :dests ].delete( dest_id )
+
+          if dest.nil? || dest.closed?
+            return
+          end
+
+          add_closing( dest )
           info[ :wmems ][ :dest_fin ].delete( dest_id )
-          info[ :wmems ][ :traffic ].delete( dest_id )
+
+          # 若流量包已被确认光，删除该键，反之打删除标记
+          if info[ :wmems ][ :traffic ][ dest_id ].empty?
+            delete_wmem_traffic( info, dest_id )
+          else
+            info[ :deleting_wmem_traffics ] << dest_id
+          end
         when TUN_FIN
           add_closing( sock )
         end
@@ -429,8 +456,7 @@ module Girl
       end
 
       if @closings.include?( sock )
-        dest_exception = @closings.delete( sock )
-        close_dest( sock, dest_exception )
+        close_sock( sock )
         return
       end
 
@@ -453,7 +479,7 @@ module Girl
       rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
         return
       rescue Exception => e
-        add_closing( sock, e )
+        add_closing( sock )
         return
       end
 
@@ -476,9 +502,9 @@ module Girl
       if @roomd_info[ :queue ].size > QUEUE_LIMIT
         unless @roomd_info[ :paused_tunds ].include?( sock )
           @roomd_info[ :paused_tunds ] << sock
-          @writes.delete( sock )
         end
 
+        @writes.delete( sock )
         return
       end
 
@@ -567,8 +593,10 @@ module Girl
       end
     end
 
-    def add_closing( sock, dest_exception = nil )
-      @closings[ sock ] = dest_exception
+    def add_closing( sock )
+      unless @closings.include?( sock )
+        @closings << sock
+      end
 
       unless @writes.include?( sock )
         @writes << sock
@@ -591,35 +619,15 @@ module Girl
       @roomd_info[ :clients ].delete( client )
     end
 
-    def close_dest( dest, dest_exception = nil )
-      if dest.closed?
-        return
-      end
-
-      dest_info = close_sock( dest )
-      tund = dest_info[ :tund ]
-
-      if tund.closed?
-        return
-      end
-
-      tund_info = @infos[ tund ]
-      tund_info[ :dests ].delete( dest_info[ :id ] )
-      source_id = tund_info[ :dst_src ].delete( dest_info[ :id ] )
+    def delete_wmem_traffic( tund_info, dest_id )
+      tund_info[ :wmems ][ :traffic ].delete( dest_id )
+      source_id = tund_info[ :dst_src ].delete( dest_id )
       tund_info[ :src_dst ].delete( source_id )
-
-      if dest_exception
-        if tund_info[ :tun_addr ]
-          ctlmsg = [ 0, DEST_FIN, dest_info[ :id ], dest_info[ :pcur ] ].pack( 'NCNN' )
-          send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, dest_info[ :id ] )
-        end
-      else
-        tund_info[ :wmems ][ :traffic ].delete( dest_info[ :id ] )
-      end
     end
 
     def close_sock( sock )
       sock.close
+      @closings.delete( sock )
       @roles.delete( sock )
       @reads.delete( sock )
       @writes.delete( sock )

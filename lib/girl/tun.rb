@@ -48,7 +48,7 @@ module Girl
       @mutex = Mutex.new
       @roles = {} # sock => :redir / :source / :tun
       @infos = {}
-      @closings = {} # sock => source_exception
+      @closings = []
       @reads = []
       @writes = []
 
@@ -138,7 +138,6 @@ module Girl
                     source = @tun_info[ :sources ][ source_id ]
 
                     if source && !source.closed?
-                      source_info = @infos[ source ]
                       puts "resend traffic out of #{ RESEND_LIMIT } #{ now }"
                       add_closing( source )
                     end
@@ -237,14 +236,21 @@ module Girl
         return
       end
 
-      info = @infos[ sock ]
-
       begin
         data = sock.read_nonblock( PACK_SIZE )
       rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
         return
       rescue Exception => e
-        add_closing( sock, e )
+        sock.close_read
+        @reads.delete( sock )
+        exception = e
+      end
+
+      info = @infos[ sock ]
+
+      if exception
+        ctlmsg = [ 0, SOURCE_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
+        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :source_fin, info[ :id ] )
         return
       end
 
@@ -292,6 +298,12 @@ module Girl
 
           if packs
             packs.delete( pack_id )
+
+            # 流量包已被确认光且有删除标记，删除该键
+            if packs.empty? && info[ :deleting_wmem_traffics ].include?( source_id )
+              info[ :deleting_wmem_traffics ].delete( source_id )
+              delete_wmem_traffic( source_id )
+            end
           end
         when DEST_FIN
           dest_id, last_pack_id = data[ 5, 8 ].unpack( 'NN' )
@@ -312,8 +324,21 @@ module Girl
           end
         when CONFIRM_SOURCE_FIN
           source_id = data[ 5, 4 ].unpack( 'N' ).first
+          source = info[ :sources ].delete( source_id )
+
+          if source.nil? || source.closed?
+            return
+          end
+
+          add_closing( source )
           info[ :wmems ][ :source_fin ].delete( source_id )
-          info[ :wmems ][ :traffic ].delete( source_id )
+
+          # 若流量包已被确认光，删除该键，反之打删除标记
+          if info[ :wmems ][ :traffic ][ source_id ].empty?
+            delete_wmem_traffic( source_id )
+          else
+            info[ :deleting_wmem_traffics ] << source_id
+          end
         when TUND_FIN
           puts 'tund fin'
           renew_tun
@@ -366,8 +391,7 @@ module Girl
       end
 
       if @closings.include?( sock )
-        source_exception = @closings.delete( sock )
-        close_source( sock, source_exception )
+        close_sock( sock )
         return
       end
 
@@ -390,7 +414,7 @@ module Girl
       rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
         return
       rescue Exception => e
-        add_closing( sock, e )
+        add_closing( sock )
         return
       end
 
@@ -416,9 +440,9 @@ module Girl
       if info[ :queue ].size > QUEUE_LIMIT
         unless info[ :paused ]
           info[ :paused ] = true
-          @writes.delete( sock )
         end
 
+        @writes.delete( sock )
         return
       end
 
@@ -509,8 +533,10 @@ module Girl
       send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
     end
 
-    def add_closing( sock, source_exception = nil )
-      @closings[ sock ] = source_exception
+    def add_closing( sock )
+      unless @closings.include?( sock )
+        @closings << sock
+      end
 
       unless @writes.include?( sock )
         @writes << sock
@@ -526,31 +552,15 @@ module Girl
       @tun_info[ :sources ].each { | _, source | add_closing( source ) }
     end
 
-    def close_source( source, source_exception = nil )
-      if source.closed?
-        return
-      end
-
-      source_info = close_sock( source )
-
-      if @tun.closed?
-        return
-      end
-
-      @tun_info[ :sources ].delete( source_info[ :id ] )
-      dest_id = @tun_info[ :src_dst ].delete( source_info[ :id ] )
+    def delete_wmem_traffic( source_id )
+      @tun_info[ :wmems ][ :traffic ].delete( source_id )
+      dest_id = @tun_info[ :src_dst ].delete( source_id )
       @tun_info[ :dst_src ].delete( dest_id )
-
-      if source_exception
-        ctlmsg = [ 0, SOURCE_FIN, source_info[ :id ], source_info[ :pcur ] ].pack( 'NCNN' )
-        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :source_fin, source_info[ :id ] )
-      else
-        @tun_info[ :wmems ][ :traffic ].delete( source_info[ :id ] )
-      end
     end
 
     def close_sock( sock )
       sock.close
+      @closings.delete( sock )
       @roles.delete( sock )
       @reads.delete( sock )
       @writes.delete( sock )
@@ -602,10 +612,11 @@ module Girl
         chunks: [], # 块文件名，wbuff每超过1.4M落一个块
         chunk_seed: 0, # 块序号
         wmems: { # 写后缓存
-          traffic: {},
-          a_new_source: {},
-          source_fin: {}
+          traffic: {}, # 流量包 source_id => traffics
+          a_new_source: {}, # source_id => ctlmsg
+          source_fin: {} # source_id => ctlmsg
         },
+        deleting_wmem_traffics: [], # 待删的流量包键 source_ids
         tund_addr: Socket.sockaddr_in( tund_port, @tund_ip ), # 远端地址
         sources: {}, # source_id => source
         dst_src: {}, # source_id => dest_id
