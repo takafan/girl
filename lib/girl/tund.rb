@@ -103,31 +103,34 @@ module Girl
                 end
 
                 @roomd_info[ :queue ].shift
-                tund_info = @infos[ tund ]
+                
+                unless tund.closed?
+                  tund_info = @infos[ tund ]
 
-                if mem_sym == :traffic
-                  dest_id, pack_id = mem_id
-                  packs = tund_info[ :wmems ][ mem_sym ][ dest_id ]
+                  if mem_sym == :traffic
+                    dest_id, pack_id = mem_id
+                    packs = tund_info[ :wmems ][ mem_sym ][ dest_id ]
 
-                  if packs
-                    pack = packs[ pack_id ]
-                  end
-                else
-                  dest_id = mem_id
-                  pack = tund_info[ :wmems ][ mem_sym ][ dest_id ]
-                end
-
-                if pack
-                  if times >= RESEND_LIMIT
-                    dest = tund_info[ :dests ][ dest_id ]
-
-                    if dest && !dest.closed?
-                      dest_info = @infos[ dest ]
-                      puts "resend traffic out of #{ RESEND_LIMIT } #{ Time.new }"
-                      add_closing( dest )
+                    if packs
+                      pack = packs[ pack_id ]
                     end
                   else
-                    resends << [ tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times ]
+                    dest_id = mem_id
+                    pack = tund_info[ :wmems ][ mem_sym ][ dest_id ]
+                  end
+
+                  if pack
+                    if times >= RESEND_LIMIT
+                      dest = tund_info[ :dests ][ dest_id ]
+
+                      if dest && !dest.closed?
+                        dest_info = @infos[ dest ]
+                        puts "resend traffic out of #{ RESEND_LIMIT } #{ Time.new }"
+                        add_closing( dest )
+                      end
+                    else
+                      resends << [ tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times ]
+                    end
                   end
                 end
               end
