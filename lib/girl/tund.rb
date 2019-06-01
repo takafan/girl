@@ -174,7 +174,7 @@ module Girl
           if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :queue ].size < RESUME_BELOW )
             @mutex.synchronize do
               @roomd_info[ :paused_tunds ].each do | tund |
-                unless @writes.include?( tund )
+                if !tund.closed? && !@writes.include?( tund )
                   @writes << tund
                 end
               end
@@ -604,11 +604,7 @@ module Girl
     def close_tund( tund )
       tund_info = close_sock( tund )
       tund_info[ :dests ].each { | _, dest | add_closing( dest ) }
-
-      if @roomd.closed?
-        return
-      end
-
+      @roomd_info[ :paused_tunds ].delete( tund )
       client = @roomd_info[ :tunds ].delete( tund )
       @roomd_info[ :clients ].delete( client )
     end
