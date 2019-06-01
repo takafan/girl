@@ -1,3 +1,7 @@
+require 'girl/hex'
+require 'girl/version'
+require 'socket'
+
 ##
 # usage
 # =====
@@ -8,10 +12,6 @@
 #
 # 3. dig google.com @127.0.0.1 -p1717
 #
-require 'girl/hex'
-require 'girl/version'
-require 'socket'
-
 module Girl
   class Resolv
 

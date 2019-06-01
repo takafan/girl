@@ -27,5 +27,4 @@ lib/girl/version.rb
   ]
 
   spec.require_paths = ['lib']
-  spec.add_runtime_dependency "nio4r", "~> 2.3"
 end
