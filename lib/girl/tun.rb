@@ -429,7 +429,6 @@ module Girl
       end
 
       if @closings.include?( sock )
-        @closings.delete( sock )
         close_tun
         return
       end
@@ -544,10 +543,6 @@ module Girl
     end
 
     def close_tun
-      if @tun.closed?
-        return
-      end
-
       close_sock( @tun )
       @tun_info[ :sources ].each { | _, source | add_closing( source ) }
     end

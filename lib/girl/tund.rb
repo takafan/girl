@@ -493,7 +493,6 @@ module Girl
       end
 
       if @closings.include?( sock )
-        @closings.delete( sock )
         close_tund( sock )
         return
       end
@@ -603,10 +602,6 @@ module Girl
     end
 
     def close_tund( tund )
-      if tund.closed?
-        return
-      end
-
       tund_info = close_sock( tund )
       tund_info[ :dests ].each { | _, dest | add_closing( dest ) }
 
