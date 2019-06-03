@@ -363,12 +363,15 @@ module Girl
         when CONFIRM_DEST_FIN
           dest_id = data[ 5, 4 ].unpack( 'N' ).first
           info[ :wmems ][ :dest_fin ].delete( dest_id )
+          packs = info[ :wmems ][ :traffic ][ dest_id ]
 
           # 若流量包已被确认光，删除该键，反之打删除标记
-          if info[ :wmems ][ :traffic ][ dest_id ].empty?
-            delete_wmem_traffic( info, dest_id )
-          else
-            info[ :deleting_wmem_traffics ] << dest_id
+          if packs
+            if packs.empty?
+              delete_wmem_traffic( info, dest_id )
+            else
+              info[ :deleting_wmem_traffics ] << dest_id
+            end
           end
         when TUN_FIN
           add_closing( sock )

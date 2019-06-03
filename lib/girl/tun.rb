@@ -313,12 +313,15 @@ module Girl
         when CONFIRM_SOURCE_FIN
           source_id = data[ 5, 4 ].unpack( 'N' ).first
           info[ :wmems ][ :source_fin ].delete( source_id )
-
+          packs = info[ :wmems ][ :traffic ][ source_id ]
+          
           # 若流量包已被确认光，删除该键，反之打删除标记
-          if info[ :wmems ][ :traffic ][ source_id ].empty?
-            delete_wmem_traffic( source_id )
-          else
-            info[ :deleting_wmem_traffics ] << source_id
+          if packs
+            if packs.empty?
+              delete_wmem_traffic( source_id )
+            else
+              info[ :deleting_wmem_traffics ] << source_id
+            end
           end
         when TUND_FIN
           puts 'tund fin'
