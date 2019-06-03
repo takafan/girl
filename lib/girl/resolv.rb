@@ -3,6 +3,8 @@ require 'girl/version'
 require 'socket'
 
 ##
+# Girl::Resolv - dns查询得到正确的ip。近端。
+#
 # usage
 # =====
 #

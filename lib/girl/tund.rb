@@ -187,11 +187,6 @@ module Girl
     end
 
     def read_roomd( sock )
-      if sock.closed?
-        puts 'roomd closed before read'
-        return
-      end
-
       info = @infos[ sock ]
       data, addrinfo, rflags, *controls = sock.recvmsg
       result = @hex.check( data, addrinfo )
@@ -240,19 +235,13 @@ module Girl
     end
 
     def read_dest( sock )
-      if sock.closed?
-        puts 'dest closed before read'
-        return
-      end
-
       begin
         data = sock.read_nonblock( PACK_SIZE )
       rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
         return
       rescue Exception => e
-        sock.close_read
-        @reads.delete( sock )
-        exception = e
+        add_closing( sock )
+        return
       end
 
       info = @infos[ sock ]
@@ -263,14 +252,6 @@ module Girl
         return
       end
 
-      tund_info = @infos[ tund ]
-
-      if exception
-        ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
-        send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
-        return
-      end
-
       pack_id = info[ :pcur ] + 1
 
       if pack_id == 1
@@ -278,29 +259,23 @@ module Girl
       end
 
       prefix = [ data.bytesize, info[ :id ], pack_id ].pack( 'nNN' )
-      add_inst = !tund_info[ :tun_addr ].nil? && !@roomd_info[ :paused_tunds ].include?( tund )
+      add_inst = !@roomd_info[ :paused_tunds ].include?( tund )
       add_buff( tund, [ prefix, data ].join, add_inst )
       info[ :pcur ] = pack_id
     end
 
     def read_tund( sock )
-      if sock.closed?
-        puts 'tund closed before read'
-        return
-      end
-
       info = @infos[ sock ]
       data, addrinfo, rflags, *controls = sock.recvmsg
-      client = addrinfo.to_sockaddr
+      tun_addr = addrinfo.to_sockaddr
 
       if info[ :tun_addr ].nil?
-        # tun先出来，tund再开始，不然撞死
-        info[ :tun_addr ] = client
+        info[ :tun_addr ] = tun_addr
 
         unless @writes.include?( sock )
           @writes << sock
         end
-      elsif info[ :tun_addr ] != client
+      elsif info[ :tun_addr ] != tun_addr
         puts "tun addr not match? #{ addrinfo.ip_unpack.inspect }"
         return
       end
@@ -372,7 +347,6 @@ module Girl
           source_id, last_pack_id = data[ 5, 8 ].unpack( 'NN' )
           ctlmsg = [ 0, CONFIRM_SOURCE_FIN, source_id ].pack( 'NCN' )
           send_pack( sock, ctlmsg, info[ :tun_addr ] )
-
           dest_id = info[ :src_dst ][ source_id ]
           dest = info[ :dests ][ dest_id ]
 
@@ -388,13 +362,6 @@ module Girl
           end
         when CONFIRM_DEST_FIN
           dest_id = data[ 5, 4 ].unpack( 'N' ).first
-          dest = info[ :dests ].delete( dest_id )
-
-          if dest.nil? || dest.closed?
-            return
-          end
-
-          add_closing( dest )
           info[ :wmems ][ :dest_fin ].delete( dest_id )
 
           # 若流量包已被确认光，删除该键，反之打删除标记
@@ -449,13 +416,17 @@ module Girl
     end
 
     def write_dest( sock )
-      if sock.closed?
-        puts 'dest closed before write'
-        return
-      end
-
       if @closings.include?( sock )
-        close_sock( sock )
+        info = close_sock( sock )
+        tund = info[ :tund ]
+
+        unless tund.closed?
+          tund_info = @infos[ tund ]
+          tund_info[ :dests ].delete( info[ :id ] )
+          ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
+          send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
+        end
+
         return
       end
 
@@ -487,13 +458,12 @@ module Girl
     end
 
     def write_tund( sock )
-      if sock.closed?
-        puts 'tund closed before write'
-        return
-      end
-
       if @closings.include?( sock )
-        close_tund( sock )
+        info = close_sock( sock )
+        info[ :dests ].each{ | _, dest | add_closing( dest ) }
+        @roomd_info[ :paused_tunds ].delete( sock )
+        client = @roomd_info[ :tunds ].delete( sock )
+        @roomd_info[ :clients ].delete( client )
         return
       end
 
@@ -599,14 +569,6 @@ module Girl
       unless @writes.include?( sock )
         @writes << sock
       end
-    end
-
-    def close_tund( tund )
-      tund_info = close_sock( tund )
-      tund_info[ :dests ].each { | _, dest | add_closing( dest ) }
-      @roomd_info[ :paused_tunds ].delete( tund )
-      client = @roomd_info[ :tunds ].delete( tund )
-      @roomd_info[ :clients ].delete( client )
     end
 
     def delete_wmem_traffic( tund_info, dest_id )

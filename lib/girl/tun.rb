@@ -6,7 +6,8 @@ require 'socket'
 ##
 # Girl::Tun - tcp流量正常的到达目的地。近端。
 #
-# usage:
+# usage
+# =====
 #
 # 1. Girl::Tund.new( 9090 ).looping # 远端
 #
@@ -17,6 +18,9 @@ require 'socket'
 # 4. iptables -t nat -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
 #
 # 5. curl https://www.google.com/
+#
+# 包结构
+# ======
 #
 # 流量打包成udp，在tun-tund之间传输，包结构：
 #
@@ -34,6 +38,13 @@ require 'socket'
 #
 module Girl
   class Tun
+    ##
+    # tund_ip          远端ip
+    # roomd_port       roomd端口，roomd用于配对tun-tund
+    # redir_port       本地端口，同时配置iptables把流量引向这个端口
+    # source_chunk_dir 文件缓存目录，缓存source来不及写的流量
+    # tun_chunk_dir    文件缓存目录，缓存tun来不及写的流量
+    # hex_block        外部传入自定义加解密
     def initialize( tund_ip, roomd_port = 9090, redir_port = 1919, source_chunk_dir = '/tmp', tun_chunk_dir = '/tmp', hex_block = nil )
       if hex_block
         Girl::Hex.class_eval( hex_block )
@@ -187,11 +198,6 @@ module Girl
     end
 
     def read_redir( sock )
-      if sock.closed?
-        puts 'redir closed before read'
-        return
-      end
-
       begin
         source, addrinfo = sock.accept_nonblock
       rescue IO::WaitReadable, Errno::EINTR => e
@@ -231,29 +237,16 @@ module Girl
     end
 
     def read_source( sock )
-      if sock.closed?
-        puts 'source closed before read'
-        return
-      end
-
       begin
         data = sock.read_nonblock( PACK_SIZE )
       rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
         return
       rescue Exception => e
-        sock.close_read
-        @reads.delete( sock )
-        exception = e
-      end
-
-      info = @infos[ sock ]
-
-      if exception
-        ctlmsg = [ 0, SOURCE_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
-        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :source_fin, info[ :id ] )
+        add_closing( sock )
         return
       end
 
+      info = @infos[ sock ]
       pack_id = info[ :pcur ] + 1
 
       # ssh的第一段流量是明文版本号，https的第一段流量含明文域名，如果需要，混淆它。
@@ -268,11 +261,6 @@ module Girl
     end
 
     def read_tun( sock )
-      if sock.closed?
-        puts 'tun closed before read'
-        return
-      end
-
       info = @infos[ sock ]
       data, addrinfo, rflags, *controls = sock.recvmsg
       dest_id = data[ 0, 4 ].unpack( 'N' ).first
@@ -324,13 +312,6 @@ module Girl
           end
         when CONFIRM_SOURCE_FIN
           source_id = data[ 5, 4 ].unpack( 'N' ).first
-          source = info[ :sources ].delete( source_id )
-
-          if source.nil? || source.closed?
-            return
-          end
-
-          add_closing( source )
           info[ :wmems ][ :source_fin ].delete( source_id )
 
           # 若流量包已被确认光，删除该键，反之打删除标记
@@ -385,13 +366,11 @@ module Girl
     end
 
     def write_source( sock )
-      if sock.closed?
-        puts 'source closed before write'
-        return
-      end
-
       if @closings.include?( sock )
-        close_sock( sock )
+        info = close_sock( sock )
+        @tun_info[ :sources ].delete( info[ :id ] )
+        ctlmsg = [ 0, SOURCE_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
+        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :source_fin, info[ :id ] )
         return
       end
 
@@ -423,11 +402,6 @@ module Girl
     end
 
     def write_tun( sock )
-      if sock.closed?
-        puts 'tun closed before write'
-        return
-      end
-
       if @closings.include?( sock )
         close_tun
         return
