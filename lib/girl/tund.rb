@@ -156,7 +156,7 @@ module Girl
               @roomd_info[ :tunds ].keys.each do | tund |
                 info = @infos[ tund ]
 
-                if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] ) > 1800
+                if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] > 1800 )
                   add_closing( tund )
                 end
               end
@@ -299,10 +299,6 @@ module Girl
             begin
               dest.connect_nonblock( Socket.sockaddr_in( dst_port, dst_host ) )
             rescue IO::WaitWritable, Errno::EINTR
-            rescue Exception => e
-              puts "connect to #{ dst_port } #{ dst_host } #{ e.class }"
-              dest.close
-              return
             end
 
             dest_id = dest.object_id
@@ -426,8 +422,11 @@ module Girl
         unless tund.closed?
           tund_info = @infos[ tund ]
           tund_info[ :dests ].delete( info[ :id ] )
-          ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
-          send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
+
+          unless info[ :source_last_pack_id ]
+            ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
+            send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
+          end
         end
 
         return
@@ -603,7 +602,7 @@ module Girl
     def new_roomd
       roomd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       roomd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      roomd.bind( Socket.pack_sockaddr_in( @roomd_port, '0.0.0.0' ) )
+      roomd.bind( Socket.sockaddr_in( @roomd_port, '0.0.0.0' ) )
       roomd_info = {
         clients: [],
         tunds: {},

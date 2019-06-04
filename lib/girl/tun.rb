@@ -314,7 +314,7 @@ module Girl
           source_id = data[ 5, 4 ].unpack( 'N' ).first
           info[ :wmems ][ :source_fin ].delete( source_id )
           packs = info[ :wmems ][ :traffic ][ source_id ]
-          
+
           # 若流量包已被确认光，删除该键，反之打删除标记
           if packs
             if packs.empty?
@@ -372,8 +372,12 @@ module Girl
       if @closings.include?( sock )
         info = close_sock( sock )
         @tun_info[ :sources ].delete( info[ :id ] )
-        ctlmsg = [ 0, SOURCE_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
-        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :source_fin, info[ :id ] )
+
+        unless info[ :dest_last_pack_id ]
+          ctlmsg = [ 0, SOURCE_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
+          send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :source_fin, info[ :id ] )
+        end
+
         return
       end
 
@@ -554,7 +558,7 @@ module Girl
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      redir.bind( Socket.pack_sockaddr_in( @redir_port, '0.0.0.0' ) )
+      redir.bind( Socket.sockaddr_in( @redir_port, '0.0.0.0' ) )
       redir.listen( 511 )
 
       @redir = redir
