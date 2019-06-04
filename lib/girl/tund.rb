@@ -329,7 +329,7 @@ module Girl
           dest_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
           packs = info[ :wmems ][ :traffic ][ dest_id ]
 
-          if packs.delete( pack_id )
+          if packs && packs.delete( pack_id )
             # 若tund写前为空，遍历dest_fin2s，删除内容为空的写后节点。
             if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty?
               info[ :dest_fin2s ].select{ | dest_id | info[ :wmems ][ :traffic ][ dest_id ].empty? }.each do | dest_id |
@@ -469,7 +469,7 @@ module Girl
       end
 
       if @roomd_info[ :queue ].size > QUEUE_LIMIT
-        @mutex.synchronize
+        @mutex.synchronize do
           unless @roomd_info[ :paused_tunds ].include?( sock )
             @roomd_info[ :paused_tunds ] << sock
           end

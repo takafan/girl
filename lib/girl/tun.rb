@@ -284,7 +284,7 @@ module Girl
           source_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
           packs = info[ :wmems ][ :traffic ][ source_id ]
 
-          if packs.delete( pack_id )
+          if packs && packs.delete( pack_id )
             # 若tun写前为空，遍历source_fin2s，删除内容为空的写后节点。
             if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty?
               info[ :source_fin2s ].select{ | source_id | info[ :wmems ][ :traffic ][ source_id ].empty? }.each do | source_id |
@@ -418,7 +418,7 @@ module Girl
 
       # 重传队列超过上限，中断写
       if info[ :queue ].size > QUEUE_LIMIT
-        @mutex.synchronize
+        @mutex.synchronize do
           unless info[ :paused ]
             info[ :paused ] = true
           end
