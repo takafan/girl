@@ -121,11 +121,10 @@ module Girl
 
                   if pack
                     if times >= RESEND_LIMIT
+                      puts "resend traffic out of #{ RESEND_LIMIT } #{ Time.new }"
                       dest = tund_info[ :dests ][ dest_id ]
 
                       if dest && !dest.closed?
-                        dest_info = @infos[ dest ]
-                        puts "resend traffic out of #{ RESEND_LIMIT } #{ Time.new }"
                         add_closing( dest )
                       end
                     else
@@ -218,7 +217,7 @@ module Girl
           traffic: {}, # 流量包 dest_id => traffics
           dest_fin: {} # dest_id => ctlmsg
         },
-        deleting_wmem_traffics: [], # 待删的流量包键 dest_ids
+        dest_fin2s: [], # 已被tun确认关闭的dest_ids
         tun_addr: nil, # 近端地址
         dests: {}, # dest_id => dest
         src_dst: {}, # source_id => dest_id
@@ -330,13 +329,13 @@ module Girl
           dest_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
           packs = info[ :wmems ][ :traffic ][ dest_id ]
 
-          if packs
-            packs.delete( pack_id )
-
-            # 流量包已被确认光且有删除标记，删除该键
-            if packs.empty? && info[ :deleting_wmem_traffics ].include?( dest_id )
-              info[ :deleting_wmem_traffics ].delete( dest_id )
-              delete_wmem_traffic( info, dest_id )
+          if packs.delete( pack_id )
+            # 若tund写前为空，遍历dest_fin2s，删除内容为空的写后节点。
+            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty?
+              info[ :dest_fin2s ].select{ | dest_id | info[ :wmems ][ :traffic ][ dest_id ].empty? }.each do | dest_id |
+                info[ :dest_fin2s ].delete( dest_id )
+                delete_wmem_traffic( info, dest_id )
+              end
             end
           end
         when SOURCE_FIN
@@ -358,15 +357,15 @@ module Girl
           end
         when CONFIRM_DEST_FIN
           dest_id = data[ 5, 4 ].unpack( 'N' ).first
-          info[ :wmems ][ :dest_fin ].delete( dest_id )
-          packs = info[ :wmems ][ :traffic ][ dest_id ]
 
-          # 若流量包已被确认光，删除该键，反之打删除标记
-          if packs
-            if packs.empty?
+          if info[ :wmems ][ :dest_fin ].delete( dest_id )
+            packs = info[ :wmems ][ :traffic ][ dest_id ]
+
+            # 若tund写前为空，且该dest_id的写后为空，删除该节点。反之记入 :dest_fin2s。
+            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
               delete_wmem_traffic( info, dest_id )
             else
-              info[ :deleting_wmem_traffics ] << dest_id
+              info[ :dest_fin2s ] << dest_id
             end
           end
         when TUN_FIN
@@ -470,11 +469,14 @@ module Girl
       end
 
       if @roomd_info[ :queue ].size > QUEUE_LIMIT
-        unless @roomd_info[ :paused_tunds ].include?( sock )
-          @roomd_info[ :paused_tunds ] << sock
+        @mutex.synchronize
+          unless @roomd_info[ :paused_tunds ].include?( sock )
+            @roomd_info[ :paused_tunds ] << sock
+          end
+
+          @writes.delete( sock )
         end
 
-        @writes.delete( sock )
         return
       end
 

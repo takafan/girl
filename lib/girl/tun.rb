@@ -146,10 +146,10 @@ module Girl
 
                 if pack
                   if times > RESEND_LIMIT
+                    puts "resend traffic out of #{ RESEND_LIMIT } #{ now }"
                     source = @tun_info[ :sources ][ source_id ]
 
                     if source && !source.closed?
-                      puts "resend traffic out of #{ RESEND_LIMIT } #{ now }"
                       add_closing( source )
                     end
                   else
@@ -284,13 +284,13 @@ module Girl
           source_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
           packs = info[ :wmems ][ :traffic ][ source_id ]
 
-          if packs
-            packs.delete( pack_id )
-
-            # 流量包已被确认光且有删除标记，删除该键
-            if packs.empty? && info[ :deleting_wmem_traffics ].include?( source_id )
-              info[ :deleting_wmem_traffics ].delete( source_id )
-              delete_wmem_traffic( source_id )
+          if packs.delete( pack_id )
+            # 若tun写前为空，遍历source_fin2s，删除内容为空的写后节点。
+            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty?
+              info[ :source_fin2s ].select{ | source_id | info[ :wmems ][ :traffic ][ source_id ].empty? }.each do | source_id |
+                info[ :source_fin2s ].delete( source_id )
+                delete_wmem_traffic( source_id )
+              end
             end
           end
         when DEST_FIN
@@ -312,15 +312,15 @@ module Girl
           end
         when CONFIRM_SOURCE_FIN
           source_id = data[ 5, 4 ].unpack( 'N' ).first
-          info[ :wmems ][ :source_fin ].delete( source_id )
-          packs = info[ :wmems ][ :traffic ][ source_id ]
 
-          # 若流量包已被确认光，删除该键，反之打删除标记
-          if packs
-            if packs.empty?
+          if info[ :wmems ][ :source_fin ].delete( source_id )
+            packs = info[ :wmems ][ :traffic ][ source_id ]
+
+            # 若tun写前为空，且该source_id的写后为空，删除该节点。反之记入 :source_fin2s。
+            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
               delete_wmem_traffic( source_id )
             else
-              info[ :deleting_wmem_traffics ] << source_id
+              info[ :source_fin2s ] << source_id
             end
           end
         when TUND_FIN
@@ -418,11 +418,14 @@ module Girl
 
       # 重传队列超过上限，中断写
       if info[ :queue ].size > QUEUE_LIMIT
-        unless info[ :paused ]
-          info[ :paused ] = true
+        @mutex.synchronize
+          unless info[ :paused ]
+            info[ :paused ] = true
+          end
+
+          @writes.delete( sock )
         end
 
-        @writes.delete( sock )
         return
       end
 
@@ -592,7 +595,7 @@ module Girl
           a_new_source: {}, # source_id => ctlmsg
           source_fin: {} # source_id => ctlmsg
         },
-        deleting_wmem_traffics: [], # 待删的流量包键 source_ids
+        source_fin2s: [], # 已被tund确认关闭的source_ids
         tund_addr: Socket.sockaddr_in( tund_port, @tund_ip ), # 远端地址
         sources: {}, # source_id => source
         dst_src: {}, # source_id => dest_id
