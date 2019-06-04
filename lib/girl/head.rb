@@ -1,5 +1,5 @@
 module Girl
-  PACK_SIZE = 1456              # 包大小 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(pack id) = 1456
+  PACK_SIZE = 1448              # 包大小 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(source/dest id) - 8(pack id) = 1448
   CHUNK_SIZE = PACK_SIZE * 1000 # 块大小
   RESEND_AFTER = 1              # 几秒后重传
   QUEUE_LIMIT = 4000            # 重传队列上限，到达上限暂停写（只重传，不写新的）
