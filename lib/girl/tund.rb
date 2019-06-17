@@ -25,24 +25,21 @@ module Girl
       @reads = []
       @writes = []
 
-      nextr, nextw = IO.pipe
-      @roles[ nextr ] = :nextr
-      @reads << nextr
-      @nextw = nextw
-
       new_roomd
     end
 
     def looping
       puts 'looping'
 
+      loop_resend
+      loop_resume
+      loop_expire
+
       loop do
         rs, ws = IO.select( @reads, @writes )
 
         rs.each do | sock |
           case @roles[ sock ]
-          when :nextr
-            read_nextr( sock )
           when :roomd
             read_roomd( sock )
           when :dest
@@ -88,25 +85,103 @@ module Girl
 
     private
 
-    def read_nextr( sock )
-      case sock.read( 1 )
-      when NEXT_RESEND
-        Thread.new do
+    def loop_resend
+      Thread.new do
+        loop do
           sleep RESEND_INTERVAL
-          resend_wmems
-          @nextw.write( NEXT_RESEND )
+
+          if @roomd_info[ :queue ].any?
+            @mutex.synchronize do
+              now = Time.new
+              resends = []
+
+              while @roomd_info[ :queue ].any?
+                tund, mem_sym, mem_id, add_at, times = @roomd_info[ :queue ].first
+
+                if now - add_at < RESEND_AFTER
+                  break
+                end
+
+                @roomd_info[ :queue ].shift
+
+                unless tund.closed?
+                  tund_info = @infos[ tund ]
+
+                  if mem_sym == :traffic
+                    dest_id, pack_id = mem_id
+                    packs = tund_info[ :wmems ][ mem_sym ][ dest_id ]
+
+                    if packs
+                      pack = packs[ pack_id ]
+                    end
+                  else
+                    dest_id = mem_id
+                    pack = tund_info[ :wmems ][ mem_sym ][ dest_id ]
+                  end
+
+                  if pack
+                    if times >= RESEND_LIMIT
+                      puts "resend traffic out of #{ RESEND_LIMIT } #{ Time.new }"
+                      dest = tund_info[ :dests ][ dest_id ]
+
+                      if dest && !dest.closed?
+                        close_dest( dest )
+                      end
+                    else
+                      resends << [ tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times ]
+                    end
+                  end
+                end
+              end
+
+              resends.sort{ | a, b | a.last <=> b.last }.reverse.each do | tund, pack, tun_addr, mem_sym, mem_id, times |
+                send_pack( tund, pack, tun_addr, mem_sym, mem_id, times + 1 )
+              end
+            end
+          end
         end
-      when NEXT_RESUME
-        Thread.new do
+      end
+    end
+
+    def loop_resume
+      Thread.new do
+        loop do
           sleep RESUME_INTERVAL
-          resume_tunds
-          @nextw.write( NEXT_RESUME )
+
+          if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :queue ].size < RESUME_BELOW )
+            @mutex.synchronize do
+              loop do
+                tund = @roomd_info[ :paused_tunds ].shift
+                sent = send_buff( tund )
+                
+                unless sent
+                  break
+                end
+              end
+            end
+          end
         end
-      when NEXT_EXPIRE
-        Thread.new do
+      end
+    end
+
+    def loop_expire
+      Thread.new do
+        loop do
           sleep 900
-          expire_tunds
-          @nextw.write( NEXT_EXPIRE )
+
+          if @roomd_info[ :tunds ].any?
+            @mutex.synchronize do
+              now = Time.new
+
+              @roomd_info[ :tunds ].keys.each do | tund |
+                info = @infos[ tund ]
+
+                if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] > 1800 )
+                  close_tund( tund )
+                end
+              end
+            end
+          end
         end
       end
     end
@@ -334,86 +409,79 @@ module Girl
     end
 
     def write_dest( sock )
-      if @closings.include?( sock )
-        info = close_sock( sock )
-        tund = info[ :tund ]
-
-        unless tund.closed?
-          tund_info = @infos[ tund ]
-          tund_info[ :dests ].delete( info[ :id ] )
-
-          unless info[ :source_last_pack_id ]
-            ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
-            send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
-          end
+      @mutex.synchronize do
+        if @closings.include?( sock )
+          close_dest( sock )
+          @closings.delete( sock )
+          return
         end
 
-        return
-      end
+        info = @infos[ sock ]
+        data, from = get_buff( info )
 
-      info = @infos[ sock ]
-      data, from = get_buff( info )
+        if data.empty?
+          # 流量已收全，关闭dest
+          if info[ :source_last_pack_id ] && ( info[ :source_last_pack_id ] == info[ :source_pcur ] )
+            add_closing( sock )
+            return
+          end
 
-      if data.empty?
-        # 流量已收全，关闭dest
-        if info[ :source_last_pack_id ] && ( info[ :source_last_pack_id ] == info[ :source_pcur ] )
+          @writes.delete( sock )
+          return
+        end
+
+        begin
+          written = sock.write_nonblock( data )
+        rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
+          return
+        rescue Exception => e
           add_closing( sock )
           return
         end
 
-        @writes.delete( sock )
-        return
+        data = data[ written..-1 ]
+        info[ from ] = data
       end
-
-      begin
-        written = sock.write_nonblock( data )
-      rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-        return
-      rescue Exception => e
-        add_closing( sock )
-        return
-      end
-
-      data = data[ written..-1 ]
-      info[ from ] = data
     end
 
     def write_tund( sock )
-      if @closings.include?( sock )
-        info = close_sock( sock )
-        info[ :dests ].each{ | _, dest | add_closing( dest ) }
-        @roomd_info[ :paused_tunds ].delete( sock )
-        client = @roomd_info[ :tunds ].delete( sock )
-        @roomd_info[ :clients ].delete( client )
-        return
-      end
+      @mutex.synchronize do
+        if @closings.include?( sock )
+          close_tund( sock )
+          @closings.delete( sock )
+          return
+        end
 
-      if @roomd_info[ :queue ].size > QUEUE_LIMIT
-        @mutex.synchronize do
+        send_buff( sock )
+        @writes.delete( sock )
+      end
+    end
+
+    def send_buff( sock )
+      info = @infos[ sock ]
+
+      loop do
+        if @roomd_info[ :queue ].size > QUEUE_LIMIT
           unless @roomd_info[ :paused_tunds ].include?( sock )
             @roomd_info[ :paused_tunds ] << sock
           end
 
-          @writes.delete( sock )
+          return false
         end
 
-        return
+        data, from = get_buff( info )
+
+        if data.empty?
+          return true
+        end
+
+        len = data[ 0, 2 ].unpack( 'n' ).first
+        pack = data[ 2, ( 8 + len ) ]
+        dest_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
+        send_pack( sock, pack, info[ :tun_addr ], :traffic, [ dest_id, pack_id ] )
+        data = data[ ( 10 + len )..-1 ]
+        info[ from ] = data
       end
-
-      info = @infos[ sock ]
-      data, from = get_buff( info )
-
-      if data.empty?
-        @writes.delete( sock )
-        return
-      end
-
-      len = data[ 0, 2 ].unpack( 'n' ).first
-      pack = data[ 2, ( 8 + len ) ]
-      dest_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
-      send_pack( sock, pack, info[ :tun_addr ], :traffic, [ dest_id, pack_id ] )
-      data = data[ ( 10 + len )..-1 ]
-      info[ from ] = data
     end
 
     def add_buff( sock, data, add_inst = true )
@@ -501,7 +569,6 @@ module Girl
 
     def close_sock( sock )
       sock.close
-      @closings.delete( sock )
       @roles.delete( sock )
       @reads.delete( sock )
       @writes.delete( sock )
@@ -541,92 +608,29 @@ module Girl
       @roles[ roomd ] = :roomd
       @infos[ roomd ] = roomd_info
       @reads << roomd
-
-      @nextw.write( NEXT_RESEND )
-      @nextw.write( NEXT_RESUME )
-      @nextw.write( NEXT_EXPIRE )
     end
 
-    def resend_wmems
-      if @roomd_info[ :queue ].any?
-        @mutex.synchronize do
-          now = Time.new
-          resends = []
+    def close_dest( sock )
+      info = close_sock( sock )
+      tund = info[ :tund ]
 
-          while @roomd_info[ :queue ].any?
-            tund, mem_sym, mem_id, add_at, times = @roomd_info[ :queue ].first
+      unless tund.closed?
+        tund_info = @infos[ tund ]
+        tund_info[ :dests ].delete( info[ :id ] )
 
-            if now - add_at < RESEND_AFTER
-              break
-            end
-
-            @roomd_info[ :queue ].shift
-
-            unless tund.closed?
-              tund_info = @infos[ tund ]
-
-              if mem_sym == :traffic
-                dest_id, pack_id = mem_id
-                packs = tund_info[ :wmems ][ mem_sym ][ dest_id ]
-
-                if packs
-                  pack = packs[ pack_id ]
-                end
-              else
-                dest_id = mem_id
-                pack = tund_info[ :wmems ][ mem_sym ][ dest_id ]
-              end
-
-              if pack
-                if times >= RESEND_LIMIT
-                  puts "resend traffic out of #{ RESEND_LIMIT } #{ Time.new }"
-                  dest = tund_info[ :dests ][ dest_id ]
-
-                  if dest && !dest.closed?
-                    add_closing( dest )
-                  end
-                else
-                  resends << [ tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times ]
-                end
-              end
-            end
-          end
-
-          resends.sort{ | a, b | a.last <=> b.last }.reverse.each do | tund, pack, tun_addr, mem_sym, mem_id, times |
-            send_pack( tund, pack, tun_addr, mem_sym, mem_id, times + 1 )
-          end
+        unless info[ :source_last_pack_id ]
+          ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
+          send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
         end
       end
     end
 
-    def resume_tunds
-      if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :queue ].size < RESUME_BELOW )
-        @mutex.synchronize do
-          @roomd_info[ :paused_tunds ].each do | tund |
-            if !tund.closed?
-              add_write( tund )
-            end
-          end
-
-          @roomd_info[ :paused_tunds ].clear
-        end
-      end
-    end
-
-    def expire_tunds
-      if @roomd_info[ :tunds ].any?
-        @mutex.synchronize do
-          now = Time.new
-
-          @roomd_info[ :tunds ].keys.each do | tund |
-            info = @infos[ tund ]
-
-            if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] > 1800 )
-              add_closing( tund )
-            end
-          end
-        end
-      end
+    def close_tund( sock )
+      info = close_sock( sock )
+      info[ :dests ].each{ | _, dest | close_sock( dest ) }
+      @roomd_info[ :paused_tunds ].delete( sock )
+      client = @roomd_info[ :tunds ].delete( sock )
+      @roomd_info[ :clients ].delete( client )
     end
   end
 end
