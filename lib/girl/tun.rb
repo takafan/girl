@@ -63,6 +63,11 @@ module Girl
       @reads = []
       @writes = []
 
+      nextr, nextw = IO.pipe
+      @roles[ nextr ] = :nextr
+      @reads << nextr
+      @nextw = nextw
+
       new_redir
       new_tun
     end
@@ -70,15 +75,13 @@ module Girl
     def looping
       puts 'looping'
 
-      loop_resend
-      loop_heartbeat
-      loop_resume
-
       loop do
         rs, ws = IO.select( @reads, @writes )
 
         rs.each do | sock |
           case @roles[ sock ]
+          when :nextr
+            read_nextr( sock )
           when :redir
             read_redir( sock )
           when :source
@@ -113,86 +116,25 @@ module Girl
 
     private
 
-    def loop_resend
-      Thread.new do
-        loop do
-          sleep RESEND_INTERVAL
-
-          if @tun_info[ :queue ].any?
-            @mutex.synchronize do
-              now = Time.new
-              resends = []
-
-              while @tun_info[ :queue ].any?
-                mem_sym, mem_id, add_at, times = @tun_info[ :queue ].first
-
-                if now - add_at < RESEND_AFTER
-                  break
-                end
-
-                @tun_info[ :queue ].shift
-
-                if mem_sym == :traffic
-                  source_id, pack_id = mem_id
-                  packs = @tun_info[ :wmems ][ mem_sym ][ source_id ]
-
-                  if packs
-                    pack = packs[ pack_id ]
-                  end
-                else
-                  source_id = mem_id
-                  pack = @tun_info[ :wmems ][ mem_sym ][ source_id ]
-                end
-
-                if pack
-                  if times > RESEND_LIMIT
-                    puts "resend traffic out of #{ RESEND_LIMIT } #{ now }"
-                    source = @tun_info[ :sources ][ source_id ]
-
-                    if source && !source.closed?
-                      add_closing( source )
-                    end
-                  else
-                    resends << [ pack, mem_sym, mem_id, times ]
-                  end
-                end
-              end
-
-              resends.sort{ | a, b | a.last <=> b.last }.reverse.each do | pack, mem_sym, mem_id, times |
-                send_pack( @tun, pack, @tun_info[ :tund_addr ], mem_sym, mem_id, times + 1 )
-              end
-            end
-          end
-        end
-      end
-    end
-
-    def loop_heartbeat
-      Thread.new do
-        loop do
+    def read_nextr( sock )
+      case sock.read( 1 )
+      when NEXT_HEARTBEAT
+        Thread.new do
           sleep 59
-
-          @mutex.synchronize do
-            send_heartbeat
-          end
+          send_heartbeat
+          @nextw.write( NEXT_HEARTBEAT )
         end
-      end
-    end
-
-    def loop_resume
-      Thread.new do
-        loop do
+      when NEXT_RESEND
+        Thread.new do
+          sleep RESEND_INTERVAL
+          resend_wmems
+          @nextw.write( NEXT_RESEND )
+        end
+      when NEXT_RESUME
+        Thread.new do
           sleep RESUME_INTERVAL
-
-          if @tun_info[ :paused ] && ( @tun_info[ :queue ].size < RESUME_BELOW )
-            @mutex.synchronize do
-              unless @writes.include?( @tun )
-                @writes << @tun
-              end
-
-              @tun_info[ :paused ] = false
-            end
-          end
+          resume_tun
+          @nextw.write( NEXT_RESUME )
         end
       end
     end
@@ -306,10 +248,7 @@ module Girl
 
           source_info = @infos[ source ]
           source_info[ :dest_last_pack_id ] = last_pack_id
-
-          unless @writes.include?( source )
-            @writes << source
-          end
+          add_write( source )
         when CONFIRM_SOURCE_FIN
           source_id = data[ 5, 4 ].unpack( 'N' ).first
 
@@ -457,8 +396,8 @@ module Girl
         info[ :wbuff ].clear
       end
 
-      if add_inst && !@writes.include?( sock )
-        @writes << sock
+      if add_inst
+        add_write( sock )
       end
     end
 
@@ -511,30 +450,18 @@ module Girl
       end
     end
 
-    def send_heartbeat
-      ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'NCC' )
-      send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
-    end
-
     def add_closing( sock )
       unless @closings.include?( sock )
         @closings << sock
       end
 
+      add_write( sock )
+    end
+
+    def add_write( sock )
       unless @writes.include?( sock )
         @writes << sock
       end
-    end
-
-    def close_tun
-      close_sock( @tun )
-      @tun_info[ :sources ].each { | _, source | add_closing( source ) }
-    end
-
-    def delete_wmem_traffic( source_id )
-      @tun_info[ :wmems ][ :traffic ].delete( source_id )
-      dest_id = @tun_info[ :src_dst ].delete( source_id )
-      @tun_info[ :dst_src ].delete( dest_id )
     end
 
     def close_sock( sock )
@@ -555,6 +482,17 @@ module Girl
       end
 
       info
+    end
+
+    def delete_wmem_traffic( source_id )
+      @tun_info[ :wmems ][ :traffic ].delete( source_id )
+      dest_id = @tun_info[ :src_dst ].delete( source_id )
+      @tun_info[ :dst_src ].delete( dest_id )
+    end
+
+    def close_tun
+      close_sock( @tun )
+      @tun_info[ :sources ].each { | _, source | add_closing( source ) }
     end
 
     def new_redir
@@ -611,12 +549,79 @@ module Girl
       @reads << tun
 
       send_heartbeat
+      @nextw.write( NEXT_HEARTBEAT )
+      @nextw.write( NEXT_RESEND )
+      @nextw.write( NEXT_RESUME )
     end
 
     def renew_tun
       close_tun
       sleep 5
       new_tun
+    end
+
+    def send_heartbeat
+      @mutex.synchronize do
+        ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'NCC' )
+        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+      end
+    end
+
+    def resend_wmems
+      if @tun_info[ :queue ].any?
+        @mutex.synchronize do
+          now = Time.new
+          resends = []
+
+          while @tun_info[ :queue ].any?
+            mem_sym, mem_id, add_at, times = @tun_info[ :queue ].first
+
+            if now - add_at < RESEND_AFTER
+              break
+            end
+
+            @tun_info[ :queue ].shift
+
+            if mem_sym == :traffic
+              source_id, pack_id = mem_id
+              packs = @tun_info[ :wmems ][ mem_sym ][ source_id ]
+
+              if packs
+                pack = packs[ pack_id ]
+              end
+            else
+              source_id = mem_id
+              pack = @tun_info[ :wmems ][ mem_sym ][ source_id ]
+            end
+
+            if pack
+              if times > RESEND_LIMIT
+                puts "resend traffic out of #{ RESEND_LIMIT } #{ now }"
+                source = @tun_info[ :sources ][ source_id ]
+
+                if source && !source.closed?
+                  add_closing( source )
+                end
+              else
+                resends << [ pack, mem_sym, mem_id, times ]
+              end
+            end
+          end
+
+          resends.sort{ | a, b | a.last <=> b.last }.reverse.each do | pack, mem_sym, mem_id, times |
+            send_pack( @tun, pack, @tun_info[ :tund_addr ], mem_sym, mem_id, times + 1 )
+          end
+        end
+      end
+    end
+
+    def resume_tun
+      if @tun_info[ :paused ] && ( @tun_info[ :queue ].size < RESUME_BELOW )
+        @mutex.synchronize do
+          add_write( @tun )
+          @tun_info[ :paused ] = false
+        end
+      end
     end
   end
 end
