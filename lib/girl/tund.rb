@@ -152,12 +152,12 @@ module Girl
 
           if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :queue ].size < RESUME_BELOW )
             @mutex.synchronize do
-              overflow = false
+              space = QUEUE_LIMIT - @roomd_info[ :queue ].size
 
               @roomd_info[ :paused_tunds ].size.times do
                 tund = @roomd_info[ :paused_tunds ].shift
 
-                loop do
+                while space > 0
                   data, from = get_buff( tund )
 
                   if data.empty?
@@ -165,14 +165,10 @@ module Girl
                   end
 
                   send_buff( tund, data, from )
-
-                  if @roomd_info[ :queue ].size > QUEUE_LIMIT
-                    overflow = true
-                    break
-                  end
+                  space -= 1
                 end
 
-                if overflow
+                if space <= 0
                   @roomd_info[ :paused_tunds ] << tund
                   break
                 end

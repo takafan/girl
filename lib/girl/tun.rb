@@ -188,25 +188,18 @@ module Girl
 
           if @tun_info[ :paused ] && ( @tun_info[ :queue ].size < RESUME_BELOW )
             @mutex.synchronize do
-              overflow = false
+              space = QUEUE_LIMIT - @tun_info[ :queue ].size
 
-              loop do
+              while space > 0
                 data, from = get_buff( @tun )
 
                 if data.empty?
+                  @tun_info[ :paused ] = false
                   break
                 end
 
                 send_buff( @tun, data, from )
-
-                if @roomd_info[ :queue ].size > QUEUE_LIMIT
-                  overflow = true
-                  break
-                end
-              end
-
-              unless overflow
-                @tun_info[ :paused ] = false
+                space -= 1
               end
             end
           end
