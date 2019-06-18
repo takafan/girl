@@ -319,7 +319,9 @@ module Girl
           end
         when TUND_FIN
           puts 'tund fin'
-          renew_tun
+          close_tun
+          sleep 5
+          new_tun
         end
 
         return
@@ -545,6 +547,7 @@ module Girl
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       redir.bind( Socket.sockaddr_in( @redir_port, '0.0.0.0' ) )
       redir.listen( 511 )
 
@@ -595,12 +598,6 @@ module Girl
       @reads << tun
 
       send_heartbeat
-    end
-
-    def renew_tun
-      close_tun
-      sleep 5
-      new_tun
     end
 
     def close_source( sock )

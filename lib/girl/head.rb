@@ -17,8 +17,4 @@ module Girl
   CONFIRM_SOURCE_FIN = 8
   TUND_FIN = 9
   TUN_FIN = 10
-  NEXT_HEARTBEAT = [ 1 ].pack( 'C' )
-  NEXT_RESEND = [ 2 ].pack( 'C' )
-  NEXT_RESUME = [ 3 ].pack( 'C' )
-  NEXT_EXPIRE = [ 4 ].pack( 'C' )
 end
