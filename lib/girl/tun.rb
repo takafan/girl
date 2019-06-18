@@ -77,23 +77,25 @@ module Girl
       loop do
         rs, ws = IO.select( @reads, @writes )
 
-        rs.each do | sock |
-          case @roles[ sock ]
-          when :redir
-            read_redir( sock )
-          when :source
-            read_source( sock )
-          when :tun
-            read_tun( sock )
+        @mutex.synchronize do
+          rs.each do | sock |
+            case @roles[ sock ]
+            when :redir
+              read_redir( sock )
+            when :source
+              read_source( sock )
+            when :tun
+              read_tun( sock )
+            end
           end
-        end
 
-        ws.each do | sock |
-          case @roles[ sock ]
-          when :source
-            write_source( sock )
-          when :tun
-            write_tun( sock )
+          ws.each do | sock |
+            case @roles[ sock ]
+            when :source
+              write_source( sock )
+            when :tun
+              write_tun( sock )
+            end
           end
         end
       end
@@ -186,8 +188,26 @@ module Girl
 
           if @tun_info[ :paused ] && ( @tun_info[ :queue ].size < RESUME_BELOW )
             @mutex.synchronize do
-              @tun_info[ :paused ] = false
-              send_buff( @tun )
+              overflow = false
+
+              loop do
+                data, from = get_buff( @tun )
+
+                if data.empty?
+                  break
+                end
+
+                send_buff( @tun, data, from )
+
+                if @roomd_info[ :queue ].size > QUEUE_LIMIT
+                  overflow = true
+                  break
+                end
+              end
+
+              unless overflow
+                @tun_info[ :paused ] = false
+              end
             end
           end
         end
@@ -365,80 +385,76 @@ module Girl
     end
 
     def write_source( sock )
-      @mutex.synchronize do
-        if @closings.include?( sock )
-          close_source( sock )
-          @closings.delete( sock )
-          return
-        end
+      if @closings.include?( sock )
+        close_source( sock )
+        @closings.delete( sock )
+        return
+      end
 
-        info = @infos[ sock ]
-        data, from = get_buff( info )
+      info = @infos[ sock ]
+      data, from = get_buff( sock )
 
-        if data.empty?
-          # 流量已收全，关闭source
-          if info[ :dest_last_pack_id ] && ( info[ :dest_last_pack_id ] == info[ :dest_pcur ] )
-            add_closing( sock )
-            return
-          end
-
-          @writes.delete( sock )
-          return
-        end
-
-        begin
-          written = sock.write_nonblock( data )
-        rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-          return
-        rescue Exception => e
+      if data.empty?
+        # 流量已收全，关闭source
+        if info[ :dest_last_pack_id ] && ( info[ :dest_last_pack_id ] == info[ :dest_pcur ] )
           add_closing( sock )
           return
         end
 
-        data = data[ written..-1 ]
-        info[ from ] = data
+        @writes.delete( sock )
+        return
       end
+
+      begin
+        written = sock.write_nonblock( data )
+      rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
+        return
+      rescue Exception => e
+        add_closing( sock )
+        return
+      end
+
+      data = data[ written..-1 ]
+      info[ from ] = data
     end
 
     def write_tun( sock )
-      @mutex.synchronize do
-        if @closings.include?( sock )
-          close_tun
-          @closings.delete( sock )
-          return
-        end
-
-        send_buff( sock )
-        @writes.delete( sock )
+      if @closings.include?( sock )
+        close_tun
+        @closings.delete( sock )
+        return
       end
-    end
 
-    def send_buff( sock )
       info = @infos[ sock ]
 
-      loop do
-        # 重传队列超过上限，中断写
-        if info[ :queue ].size > QUEUE_LIMIT
-          unless info[ :paused ]
-            info[ :paused ] = true
-          end
-
-          return
+      # 重传队列超过上限，中断写
+      if info[ :queue ].size > QUEUE_LIMIT
+        unless info[ :paused ]
+          info[ :paused ] = true
         end
 
-        data, from = get_buff( info )
-
-        if data.empty?
-          return
-        end
-
-        len = data[ 0, 2 ].unpack( 'n' ).first
-        pack = data[ 2, ( 8 + len ) ]
-        source_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
-        send_pack( sock, pack, info[ :tund_addr ], :traffic, [ source_id, pack_id ] )
-        data = data[ ( 10 + len )..-1 ]
-        info[ from ] = data
+        @writes.delete( sock )
+        return
       end
+
+      data, from = get_buff( sock )
+
+      if data.empty?
+        @writes.delete( sock )
+        return
+      end
+
+      send_buff( sock, data, from )
+    end
+
+    def send_buff( sock, data, from )
+      info = @infos[ sock ]
+      len = data[ 0, 2 ].unpack( 'n' ).first
+      pack = data[ 2, ( 8 + len ) ]
+      source_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
+      send_pack( sock, pack, info[ :tund_addr ], :traffic, [ source_id, pack_id ] )
+      data = data[ ( 10 + len )..-1 ]
+      info[ from ] = data
     end
 
     def add_buff( sock, data, add_inst = true )
@@ -459,7 +475,8 @@ module Girl
       end
     end
 
-    def get_buff( info )
+    def get_buff( sock )
+      info = @infos[ sock ]
       data, from = info[ :cache ], :cache
 
       if data.empty?
