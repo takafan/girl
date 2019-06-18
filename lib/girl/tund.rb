@@ -150,7 +150,7 @@ module Girl
 
           if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :queue ].size < RESUME_BELOW )
             @mutex.synchronize do
-              loop do
+              @roomd_info[ :paused_tunds ].size.times do
                 tund = @roomd_info[ :paused_tunds ].shift
                 sent = send_buff( tund )
                 
