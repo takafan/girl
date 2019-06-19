@@ -1,13 +1,12 @@
-SERVICES = %w[ dhcpcd dnsmasq girla hostapd p2p1_sshd redir resolv ]
+SERVICES = %w[ dhcpcd dnsmasq girla hostapd resolv tun ]
 
 CONFIG_FILES = %w[
   dnsmasq.d/wlan0.conf
   dhcpcd.conf
   girl.custom.txt
   girl.im
-  girl.p2pd
-  girl.relayd
   girl.resolvd
+  girl.tund
   hostapd.conf
   nameservers.txt
 ]

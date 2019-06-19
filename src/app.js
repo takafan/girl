@@ -13,9 +13,9 @@ export default {
       this.systemctl( command, 'p2p1_sshd' )
     },
 
-    check_redir: function( checked ) {
+    check_tun: function( checked ) {
       let command = checked ? 'enable' : 'disable'
-      this.systemctl( command, 'redir' )
+      this.systemctl( command, 'tun' )
     },
 
     check_resolv: function( checked ) {
@@ -71,7 +71,7 @@ export default {
         this.is_locked = data.is_locked
         this.measure_temp = data.measure_temp
       }).catch( err => {
-        this.$Modal.error({ content: err.message })
+        console.log( err.message )
       })
     },
 
@@ -84,7 +84,7 @@ export default {
         this.saved = file
         this.$Notice.success( { title: this.translates[ file ] + ' 已更新' } )
       }).catch( err => {
-        this.$Modal.error( { content: err.message } )
+        console.log( err.message )
       })
     },
 
@@ -96,8 +96,8 @@ export default {
 
       this.editing = service
 
-      if ( service == 'redir' ) {
-        let text = this.texts[ 'girl.relayd' ]
+      if ( service == 'tun' ) {
+        let text = this.texts[ 'girl.tund' ]
         if ( !text ) {
           return
         }
@@ -106,9 +106,8 @@ export default {
         axios.get( 'http://' + host + ':3000/girld/expire_info?im=' + im ).then( res => {
           let data = res.data
           let expire_info = '本月in: ' + data.input + ' out: ' + data.output
-          if ( data.expire_time ) {
-            let expire_time = new Date( data.expire_time * 1000 )
-            expire_info += '&nbsp;&nbsp;' + '到期：' + expire_time.getFullYear() + '-' + ( expire_time.getMonth() + 1 ) + '-' + expire_time.getDate()
+          if ( data.expire ) {
+            expire_info += '&nbsp;&nbsp;' + '到期：' + data.expire
           }
           this.expire_info = expire_info
         }).catch( err => {
@@ -133,7 +132,7 @@ export default {
           this.$Notice.success( { title: this.translates[ service ] + ' 已' + this.translates[ command ] } )
         })
       }).catch( err => {
-        this.$Modal.error( { content: err.message } )
+        console.log( err.message )
       })
     },
 
@@ -168,17 +167,15 @@ export default {
         dnsmasq: 'dhcp租约',
         enable: '打开自动启动',
         hostapd: '热点',
-        p2p1_sshd: 'p2p',
         restart: '重启',
         start: '启动',
         status: '刷新',
         stop: '停止',
-        redir: '妹子网关',
-        resolv: '妹子dns',
+        tun: '网关近端',
+        resolv: 'dns近端',
         'dnsmasq.d/wlan0.conf': 'dhcp租约配置',
         'dhcpcd.conf': '网卡配置',
         'girl.custom.txt': '自定义',
-        'girl.p2pd': 'p2p配对服务器地址',
         'girl.relayd': '网关远端地址',
         'girl.resolvd': 'dns远端地址',
         'hostapd.conf': '热点配置',
