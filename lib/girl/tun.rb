@@ -217,12 +217,15 @@ module Girl
             @mutex.synchronize do
               @tun_info[ :source_fin2s ].size.times do
                 source_id = @tun_info[ :source_fin2s ].shift
+                packs = @tun_info[ :wmems ][ :traffic ][ source_id ]
 
-                # 若该source_id的写后为空，删除该节点。反之加回 :source_fin2s。
-                if @tun_info[ :wmems ][ :traffic ][ source_id ].empty?
-                  delete_wmem_traffic( source_id )
-                else
-                  @tun_info[ :source_fin2s ] << source_id
+                if packs
+                  # 若该source_id的写后为空，删除该节点。反之加回 :source_fin2s。
+                  if packs.empty?
+                    delete_wmem_traffic( source_id )
+                  else
+                    @tun_info[ :source_fin2s ] << source_id
+                  end
                 end
               end
             end
@@ -341,18 +344,18 @@ module Girl
           if info[ :wmems ][ :source_fin ].delete( source_id )
             packs = info[ :wmems ][ :traffic ][ source_id ]
 
-            # 若tun写前为空，该source_id的写后也为空，删除该节点。反之记入 :source_fin2s。
-            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
-              delete_wmem_traffic( source_id )
-            else
-              info[ :source_fin2s ] << source_id
+            if packs
+              # 若tun写前为空，该source_id的写后也为空，删除该节点。反之记入 :source_fin2s。
+              if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
+                delete_wmem_traffic( source_id )
+              else
+                info[ :source_fin2s ] << source_id
+              end
             end
           end
         when TUND_FIN
           puts 'tund fin'
-          close_tun
-          sleep 5
-          new_tun
+          add_closing( sock )
         end
 
         return
@@ -398,7 +401,6 @@ module Girl
     def write_source( sock )
       if @closings.include?( sock )
         close_source( sock )
-        @closings.delete( sock )
         return
       end
 
@@ -432,7 +434,9 @@ module Girl
     def write_tun( sock )
       if @closings.include?( sock )
         close_tun
-        @closings.delete( sock )
+        sleep 5
+        new_tun
+
         return
       end
 
@@ -548,6 +552,7 @@ module Girl
 
     def close_sock( sock )
       sock.close
+      @closings.delete( sock )
       @roles.delete( sock )
       @reads.delete( sock )
       @writes.delete( sock )
@@ -630,7 +635,6 @@ module Girl
 
     def close_source( sock )
       info = close_sock( sock )
-      @tun_info[ :sources ].delete( info[ :id ] )
 
       unless info[ :dest_last_pack_id ]
         ctlmsg = [ 0, SOURCE_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
@@ -640,7 +644,7 @@ module Girl
 
     def close_tun
       close_sock( @tun )
-      @tun_info[ :sources ].each { | _, source | add_closing( source ) }
+      @tun_info[ :sources ].each { | _, source | close_sock( source ) }
     end
 
     def send_heartbeat

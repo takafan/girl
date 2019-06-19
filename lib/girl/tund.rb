@@ -194,11 +194,13 @@ module Girl
                   tund_info = @infos[ tund ]
                   packs = tund_info[ :wmems ][ :traffic ][ dest_id ]
 
-                  # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之加回 :dest_fin2s。
-                  if tund_info[ :wbuff ].empty? && tund_info[ :cache ].empty? && tund_info[ :chunks ].empty? && packs.empty?
-                    delete_wmem_traffic( tund_info, dest_id )
-                  else
-                    @roomd_info[ :dest_fin2s ] << [ tund, dest_id ]
+                  if packs
+                    # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之加回 :dest_fin2s。
+                    if tund_info[ :wbuff ].empty? && tund_info[ :cache ].empty? && tund_info[ :chunks ].empty? && packs.empty?
+                      delete_wmem_traffic( tund_info, dest_id )
+                    else
+                      @roomd_info[ :dest_fin2s ] << [ tund, dest_id ]
+                    end
                   end
                 end
               end
@@ -393,11 +395,13 @@ module Girl
           if info[ :wmems ][ :dest_fin ].delete( dest_id )
             packs = info[ :wmems ][ :traffic ][ dest_id ]
 
-            # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之记入 :dest_fin2s。
-            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
-              delete_wmem_traffic( info, dest_id )
-            else
-              @roomd_info[ :dest_fin2s ] << [ sock, dest_id ]
+            if packs
+              # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之记入 :dest_fin2s。
+              if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
+                delete_wmem_traffic( info, dest_id )
+              else
+                @roomd_info[ :dest_fin2s ] << [ sock, dest_id ]
+              end
             end
           end
         when TUN_FIN
