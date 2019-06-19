@@ -559,10 +559,6 @@ module Girl
         sock.sendmsg( pack, 0, dest_sockaddr )
       rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
         puts "sendmsg #{ e.class }"
-      rescue IOError => e
-        puts e.class
-        add_closing( sock )
-        return
       end
 
       if mem_sym
