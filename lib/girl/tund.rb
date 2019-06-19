@@ -33,6 +33,7 @@ module Girl
 
       loop_resend
       loop_resume
+      loop_clean
       loop_expire
 
       loop do
@@ -179,6 +180,34 @@ module Girl
       end
     end
 
+    def loop_clean
+      Thread.new do
+        loop do
+          sleep 30
+
+          if @roomd_info[ :dest_fin2s ].any?
+            @mutex.synchronize do
+              @roomd_info[ :dest_fin2s ].size.times do
+                tund, dest_id = @roomd_info[ :dest_fin2s ].shift
+
+                unless tund.closed?
+                  tund_info = @infos[ tund ]
+                  packs = tund_info[ :wmems ][ :traffic ][ dest_id ]
+
+                  # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之加回 :dest_fin2s。
+                  if tund_info[ :wbuff ].empty? && tund_info[ :cache ].empty? && tund_info[ :chunks ].empty? && packs.empty?
+                    delete_wmem_traffic( tund_info, dest_id )
+                  else
+                    @roomd_info[ :dest_fin2s ] << [ tund, dest_id ]
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
     def loop_expire
       Thread.new do
         loop do
@@ -233,7 +262,6 @@ module Girl
           traffic: {}, # 流量包 dest_id => traffics
           dest_fin: {} # dest_id => ctlmsg
         },
-        dest_fin2s: [], # 已被tun确认关闭的dest_ids
         tun_addr: nil, # 近端地址
         dests: {}, # dest_id => dest
         src_dst: {}, # source_id => dest_id
@@ -342,14 +370,8 @@ module Girl
           dest_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
           packs = info[ :wmems ][ :traffic ][ dest_id ]
 
-          if packs && packs.delete( pack_id )
-            # 若tund写前为空，遍历dest_fin2s，删除内容为空的写后节点。
-            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty?
-              info[ :dest_fin2s ].select{ | dest_id | info[ :wmems ][ :traffic ][ dest_id ].empty? }.each do | dest_id |
-                info[ :dest_fin2s ].delete( dest_id )
-                delete_wmem_traffic( info, dest_id )
-              end
-            end
+          if packs
+            packs.delete( pack_id )
           end
         when SOURCE_FIN
           source_id, last_pack_id = data[ 5, 8 ].unpack( 'NN' )
@@ -371,11 +393,11 @@ module Girl
           if info[ :wmems ][ :dest_fin ].delete( dest_id )
             packs = info[ :wmems ][ :traffic ][ dest_id ]
 
-            # 若tund写前为空，且该dest_id的写后为空，删除该节点。反之记入 :dest_fin2s。
+            # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之记入 :dest_fin2s。
             if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
               delete_wmem_traffic( info, dest_id )
             else
-              info[ :dest_fin2s ] << dest_id
+              @roomd_info[ :dest_fin2s ] << [ sock, dest_id ]
             end
           end
         when TUN_FIN
@@ -610,7 +632,8 @@ module Girl
         clients: [],
         tunds: {},
         queue: [], # 重传队列
-        paused_tunds: [] # 暂停写的tunds
+        paused_tunds: [], # 暂停写的tunds
+        dest_fin2s: [] # 已被tun确认关闭的dest_ids [ [ tund, dest_id ], .. ]
       }
 
       @roomd = roomd

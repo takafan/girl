@@ -73,6 +73,7 @@ module Girl
       loop_heartbeat
       loop_resend
       loop_resume
+      loop_clean
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -207,6 +208,29 @@ module Girl
       end
     end
 
+    def loop_clean
+      Thread.new do
+        loop do
+          sleep 30
+
+          if @tun_info[ :source_fin2s ].any? && @tun_info[ :wbuff ].empty? && @tun_info[ :cache ].empty? && @tun_info[ :chunks ].empty?
+            @mutex.synchronize do
+              @tun_info[ :source_fin2s ].size.times do
+                source_id = @tun_info[ :source_fin2s ].shift
+
+                # 若该source_id的写后为空，删除该节点。反之加回 :source_fin2s。
+                if @tun_info[ :wmems ][ :traffic ][ source_id ].empty?
+                  delete_wmem_traffic( source_id )
+                else
+                  @tun_info[ :source_fin2s ] << source_id
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
     def read_redir( sock )
       begin
         source, addrinfo = sock.accept_nonblock
@@ -294,14 +318,8 @@ module Girl
           source_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
           packs = info[ :wmems ][ :traffic ][ source_id ]
 
-          if packs && packs.delete( pack_id )
-            # 若tun写前为空，遍历source_fin2s，删除内容为空的写后节点。
-            if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty?
-              info[ :source_fin2s ].select{ | source_id | info[ :wmems ][ :traffic ][ source_id ].empty? }.each do | source_id |
-                info[ :source_fin2s ].delete( source_id )
-                delete_wmem_traffic( source_id )
-              end
-            end
+          if packs
+            packs.delete( pack_id )
           end
         when DEST_FIN
           dest_id, last_pack_id = data[ 5, 8 ].unpack( 'NN' )
@@ -323,7 +341,7 @@ module Girl
           if info[ :wmems ][ :source_fin ].delete( source_id )
             packs = info[ :wmems ][ :traffic ][ source_id ]
 
-            # 若tun写前为空，且该source_id的写后为空，删除该节点。反之记入 :source_fin2s。
+            # 若tun写前为空，该source_id的写后也为空，删除该节点。反之记入 :source_fin2s。
             if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
               delete_wmem_traffic( source_id )
             else
