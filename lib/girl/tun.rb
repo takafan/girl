@@ -57,11 +57,17 @@ module Girl
       @tun_chunk_dir = tun_chunk_dir
       @hex = Girl::Hex.new
       @mutex = Mutex.new
-      @roles = {} # sock => :redir / :source / :tun
-      @infos = {}
-      @closings = []
       @reads = []
       @writes = []
+      @closings = []
+      @socks = {} # object_id => sock
+      @roles = {} # sock => :ctlr / :redir / :source / :tun
+      @infos = {}
+
+      ctlr, ctlw = IO.pipe
+      @ctlw = ctlw
+      @roles[ ctlr ] = :ctlr
+      @reads << ctlr
 
       new_redir
       new_tun
@@ -81,6 +87,8 @@ module Girl
         @mutex.synchronize do
           rs.each do | sock |
             case @roles[ sock ]
+            when :ctlr
+              read_ctlr( sock )
             when :redir
               read_redir( sock )
             when :source
@@ -165,7 +173,7 @@ module Girl
                     source = @tun_info[ :sources ][ source_id ]
 
                     if source && !source.closed?
-                      close_source( source )
+                      @ctlw.write( [ CTL_CLOSE_SOCK, [ source.object_id ].pack( 'N' ) ].join )
                     end
                   else
                     resends << [ pack, mem_sym, mem_id, times ]
@@ -234,6 +242,18 @@ module Girl
       end
     end
 
+    def read_ctlr( ctlr )
+      case ctlr.read( 1 )
+      when CTL_CLOSE_SOCK
+        sock_id = ctlr.read( 4 ).unpack( 'N' ).first
+        sock = @socks[ sock_id ]
+
+        if sock
+          add_closing( sock )
+        end
+      end
+    end
+
     def read_redir( sock )
       begin
         source, addrinfo = sock.accept_nonblock
@@ -252,6 +272,8 @@ module Girl
       end
 
       source_id = source.object_id
+
+      @socks[ source_id ] = source
       @roles[ source ] = :source
       @infos[ source ] = {
         id: source_id,
@@ -269,6 +291,7 @@ module Girl
       @reads << source
       @tun_info[ :sources ][ source_id ] = source
       @tun_info[ :wmems ][ :traffic ][ source_id ] = {}
+      
       ctlmsg = [ [ 0, A_NEW_SOURCE, source_id ].pack( 'NCN' ), option.data ].join
       send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :a_new_source, source_id )
     end
@@ -355,6 +378,7 @@ module Girl
           end
         when TUND_FIN
           puts 'tund fin'
+          sleep 5
           add_closing( sock )
         end
 
@@ -434,9 +458,7 @@ module Girl
     def write_tun( sock )
       if @closings.include?( sock )
         close_tun
-        sleep 5
         new_tun
-
         return
       end
 
@@ -538,6 +560,7 @@ module Girl
 
     def add_closing( sock )
       unless @closings.include?( sock )
+        @reads.delete( sock )
         @closings << sock
       end
 
@@ -552,10 +575,11 @@ module Girl
 
     def close_sock( sock )
       sock.close
-      @closings.delete( sock )
-      @roles.delete( sock )
       @reads.delete( sock )
       @writes.delete( sock )
+      @closings.delete( sock )
+      @socks.delete( sock.object_id )
+      @roles.delete( sock )
       info = @infos.delete( sock )
 
       if info

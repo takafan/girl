@@ -19,11 +19,17 @@ module Girl
       @tund_chunk_dir = tund_chunk_dir
       @hex = Girl::Hex.new
       @mutex = Mutex.new
-      @roles = {} # sock => :roomd / :dest / :tund
-      @infos = {}
-      @closings = []
       @reads = []
       @writes = []
+      @closings = []
+      @socks = {} # object_id => sock
+      @roles = {} # sock => :ctlr / :roomd / :dest / :tund
+      @infos = {}
+
+      ctlr, ctlw = IO.pipe
+      @ctlw = ctlw
+      @roles[ ctlr ] = :ctlr
+      @reads << ctlr
 
       new_roomd
     end
@@ -42,6 +48,8 @@ module Girl
         @mutex.synchronize do
           rs.each do | sock |
             case @roles[ sock ]
+            when :ctlr
+              read_ctlr( sock )
             when :roomd
               read_roomd( sock )
             when :dest
@@ -128,7 +136,7 @@ module Girl
                       dest = tund_info[ :dests ][ dest_id ]
 
                       if dest && !dest.closed?
-                        close_dest( dest )
+                        @ctlw.write( [ CTL_CLOSE_SOCK, [ dest.object_id ].pack( 'N' ) ].join )
                       end
                     else
                       resends << [ tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times ]
@@ -223,11 +231,23 @@ module Girl
                 info = @infos[ tund ]
 
                 if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] > 1800 )
-                  close_tund( tund )
+                  @ctlw.write( [ CTL_CLOSE_SOCK, [ tund.object_id ].pack( 'N' ) ].join )
                 end
               end
             end
           end
+        end
+      end
+    end
+
+    def read_ctlr( ctlr )
+      case ctlr.read( 1 )
+      when CTL_CLOSE_SOCK
+        sock_id = ctlr.read( 4 ).unpack( 'N' ).first
+        sock = @socks[ sock_id ]
+
+        if sock
+          add_closing( sock )
         end
       end
     end
@@ -251,12 +271,14 @@ module Girl
 
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+      tund_id = tund.object_id
 
+      @socks[ tund_id ] = tund
       @roles[ tund ] = :tund
       @infos[ tund ] = {
         wbuff: '', # 写前缓存
         cache: '', # 块读出缓存
-        filename: [ Process.pid, tund.object_id ].join( '-' ), # 块名
+        filename: [ Process.pid, tund_id ].join( '-' ), # 块名
         chunk_dir: @tund_chunk_dir, # 块目录
         chunks: [], # 块文件名，wbuff每超过1.4M落一个块
         chunk_seed: 0, # 块序号
@@ -344,6 +366,8 @@ module Girl
             end
 
             dest_id = dest.object_id
+
+            @socks[ dest_id ] = dest
             @roles[ dest ] = :dest
             @infos[ dest ] = {
               id: dest_id,
@@ -360,6 +384,7 @@ module Girl
               tund: sock
             }
             @reads << dest
+
             info[ :dests ][ dest_id ] = dest
             info[ :src_dst ][ source_id ] = dest_id
             info[ :dst_src ][ dest_id ] = source_id
@@ -452,7 +477,6 @@ module Girl
     def write_dest( sock )
       if @closings.include?( sock )
         close_dest( sock )
-        @closings.delete( sock )
         return
       end
 
@@ -486,7 +510,6 @@ module Girl
     def write_tund( sock )
       if @closings.include?( sock )
         close_tund( sock )
-        @closings.delete( sock )
         return
       end
 
@@ -587,6 +610,7 @@ module Girl
 
     def add_closing( sock )
       unless @closings.include?( sock )
+        @reads.delete( sock )
         @closings << sock
       end
 
@@ -601,9 +625,11 @@ module Girl
 
     def close_sock( sock )
       sock.close
-      @roles.delete( sock )
       @reads.delete( sock )
       @writes.delete( sock )
+      @closings.delete( sock )
+      @socks.delete( sock.object_id )
+      @roles.delete( sock )
       info = @infos.delete( sock )
 
       if info
@@ -630,7 +656,7 @@ module Girl
       roomd.bind( Socket.sockaddr_in( @roomd_port, '0.0.0.0' ) )
       roomd_info = {
         clients: [],
-        tunds: {},
+        tunds: {}, # tund => client
         queue: [], # 重传队列
         paused_tunds: [], # 暂停写的tunds
         dest_fin2s: [] # 已被tun确认关闭的dest_ids [ [ tund, dest_id ], .. ]

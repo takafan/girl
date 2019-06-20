@@ -17,4 +17,5 @@ module Girl
   CONFIRM_SOURCE_FIN = 8
   TUND_FIN = 9
   TUN_FIN = 10
+  CTL_CLOSE_SOCK = [ 1 ].pack( 'C' )
 end
