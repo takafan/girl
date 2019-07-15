@@ -5,7 +5,6 @@ CONFIG_FILES = %w[
   dhcpcd.conf
   girl.custom.txt
   girl.im
-  girl.resolvd
   girl.tund
   hostapd.conf
   nameservers.txt

@@ -62,6 +62,7 @@ export default {
           loadings[ 'save@' + pair[ 0 ] ] = false
         })
 
+        this.loadeds = data.loadeds
         this.colour_actives = colour_actives
         this.runnings = runnings
         this.enableds = enableds
@@ -81,8 +82,13 @@ export default {
         this.loadings[ 'save@' + file ] = false
         let data = res.data
         this.editing = null
-        this.saved = file
-        this.$Notice.success( { title: this.translates[ file ] + ' 已更新' } )
+        // this.saved = file
+        this.load
+        this.$notify.success({
+          title: '成功',
+          message: this.translates[ file ] + ' 已更新',
+          type: 'success'
+        })
       }).catch( err => {
         console.log( err.message )
       })
@@ -105,11 +111,9 @@ export default {
         let im = this.texts[ 'girl.im' ].split( "\n" )[ 0 ].split( ':' )[ 0 ]
         axios.get( 'http://' + host + ':3000/girld/expire_info?im=' + im ).then( res => {
           let data = res.data
-          let expire_info = '本月in: ' + data.input + ' out: ' + data.output
-          if ( data.expire ) {
-            expire_info += '&nbsp;&nbsp;' + '到期：' + data.expire
-          }
-          this.expire_info = expire_info
+          this.expire_info.input = data.input
+          this.expire_info.output = data.output
+          this.expire_info.expire = data.expire
         }).catch( err => {
           console.log( err )
         })
@@ -129,7 +133,11 @@ export default {
             this.editing = null
           }
           this.saved = null
-          this.$Notice.success( { title: this.translates[ service ] + ' 已' + this.translates[ command ] } )
+          this.$notify.success({
+            title: '成功',
+            message: this.translates[ service ] + ' 已' + this.translates[ command ],
+            type: 'success'
+          })
         })
       }).catch( err => {
         console.log( err.message )
@@ -149,10 +157,15 @@ export default {
   },
   data () {
     return {
+      loadeds: {},
       colour_actives: {},
       editing: null,
       enableds: {},
-      expire_info: '',
+      expire_info: {
+        input: '-',
+        output: '-',
+        expire: '-'
+      },
       http_host: process.env.VUE_APP_HOST ? ( 'http://' + process.env.VUE_APP_HOST ) : '',
       is_locked: false,
       loadings: {},
@@ -176,8 +189,7 @@ export default {
         'dnsmasq.d/wlan0.conf': 'dhcp租约配置',
         'dhcpcd.conf': '网卡配置',
         'girl.custom.txt': '自定义',
-        'girl.relayd': '网关远端地址',
-        'girl.resolvd': 'dns远端地址',
+        'girl.tund': '远端地址',
         'hostapd.conf': '热点配置',
         'nameservers.txt': 'dns默认地址'
       }

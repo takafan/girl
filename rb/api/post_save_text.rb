@@ -14,5 +14,21 @@ post '/api/save_text' do
     f.puts text
   end
 
+  servs = case file
+  when 'dnsmasq.d/wlan0.conf'
+    'dnsmasq'
+  when 'dhcpcd.conf'
+    'dhcpcd'
+  when 'girl.custom.txt'
+    'resolv tun'
+  when 'girl.tund'
+    'p1 resolv tun'
+  when 'hostapd.conf'
+    'hostapd'
+  when 'nameservers.txt'
+    'resolv'
+  end
+
+  system "systemctl restart #{ servs }"
   success
 end
