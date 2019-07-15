@@ -50,7 +50,7 @@ Girl::Resolvd.new( 7070 ).looping
 ```ruby
 require 'girl/resolv'
 
-Girl::Resolv.new( 1717, [ '114.114.114.114' ], '{ your.server.ip }', 7070, [ 'google.com' ] ).looping
+Girl::Resolv.new( 1717, [ '114.114.114.114' ], 'your.server.ip', 7070, [ 'google.com' ] ).looping
 ```
 
 ```bash
