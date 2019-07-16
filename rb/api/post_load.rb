@@ -13,7 +13,7 @@ post '/api/load' do
   end
 
   CONFIG_FILES.each do | file |
-    path = File.join( '/boot', file )
+    path = File.join( CONFIG_DIR, file )
     texts[ file ] = File.exist?( path ) ? IO.read( path, encoding: 'utf-8' ) : ''
   end
 
@@ -26,6 +26,6 @@ post '/api/load' do
     actives: actives,
     texts: texts,
     measure_temp: measure_temp,
-    is_locked: File.exist?( '/boot/lock' )
+    is_locked: File.exist?( File.join( CONFIG_DIR, 'lock' ) )
   })
 end

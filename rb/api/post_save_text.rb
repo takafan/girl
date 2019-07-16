@@ -10,7 +10,7 @@ post '/api/save_text' do
     halt errmsg 'unknown file'
   end
 
-  File.open( File.join( '/boot', file ), 'w' ) do |f|
+  File.open( File.join( CONFIG_DIR, file ), 'w' ) do |f|
     f.puts text
   end
 
@@ -29,6 +29,9 @@ post '/api/save_text' do
     'resolv'
   end
 
-  system "systemctl restart #{ servs }"
+  if servs
+    system "systemctl restart #{ servs }"
+  end
+
   success
 end

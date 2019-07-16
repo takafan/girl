@@ -1,5 +1,5 @@
 def check_lock
-  halt errmsg '已被锁定，不能修改' if File.exist?( '/boot/lock' )
+  halt errmsg '已被锁定，不能修改' if File.exist?( File.join( CONFIG_DIR, 'lock' ) )
 end
 
 def errmsg( msg = nil, contents = {} )

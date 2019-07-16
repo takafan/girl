@@ -12,9 +12,9 @@ post '/api/systemctl' do
 
   case command
   when 'restart', 'status'
-    halt errmsg 'unknown service' unless %w[ dhcpcd dnsmasq hostapd resolv tun ].include?( service )
+    halt errmsg 'unknown service' unless SERVICES.include?( service )
   when 'start', 'stop', 'enable', 'disable'
-    halt errmsg 'unknown service' unless %w[ hostapd resolv tun ].include?( service )
+    halt errmsg 'unknown service' unless CUSTOM_SERVICES.include?( service )
   end
 
   res = {}

@@ -4,43 +4,27 @@ require 'sinatra'
 set :public_folder, '/srv/girl/dist'
 set :server, 'webrick'
 
-module Api
-end
+SERVICES = %w[ dhcpcd dnsmasq hostapd resolv tun ]
 
-module Consts
-end
+CUSTOM_SERVICES = %w[ hostapd resolv tun ]
 
-module Helpers
-end
+CONFIG_DIR = '/boot'
 
-API_TEMP = <<EOF
-include Consts
+CONFIG_FILES = %w[
+  dnsmasq.d/wlan0.conf
+  dhcpcd.conf
+  girl.custom.txt
+  girl.im
+  girl.tund
+  hostapd.conf
+  nameservers.txt
+]
 
-def self.registered(app)
-  app.helpers Helpers
+require File.expand_path( '../helpers.rb', __FILE__ )
 
-  __apis__
-end
-EOF
-
-def inject
-  Consts.module_eval( IO.read( File.expand_path( '../consts.rb', __FILE__ ) ) )
-  Helpers.module_eval( IO.read( File.expand_path( '../helpers.rb', __FILE__ ) ) )
-
-  apis = Dir[ File.expand_path( '../api/*.rb', __FILE__ ) ].map{ | file | "app.#{ IO.read( file ).strip }" }
-  Api.module_eval( API_TEMP.sub( '__apis__', apis.join( "\n" ) ) )
-  register Api
-end
-
-inject
+Dir[ File.expand_path( '../api/*.rb', __FILE__ ) ].each{ | file | require file }
 
 Signal.trap( :TERM ) do
   puts 'trap TERM'
   Sinatra::Application.quit!
-end
-
-Signal.trap( :USR2 ) do
-  puts 'trap USR2'
-  Sinatra::Application.reset!
-  inject
 end
