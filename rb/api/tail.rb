@@ -1,9 +1,9 @@
-get '/api/tail' do
+get '/api/tail/:service' do
   check_lock
 
   service = params[ :service ]
 
-  halt errmsg 'unknown service' unless %w[ dhcpcd dnsmasq hostapd p2p1_sshd redir resolv ].include?( service )
+  halt errmsg 'unknown service' unless SERVICES.include?( service )
 
   content_type 'text/plain', charset: 'utf-8'
 

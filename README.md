@@ -131,7 +131,3 @@ curl https://www.google.com/
 ![妹子路由器1](http://89.208.243.143/pic1.jpg)
 
 ![妹子路由器3](http://89.208.243.143/pic3.jpg)
-
-## 服务器推荐
-
-ping值稳定：cn2 gia。低延迟：中华电信、韩国电信。

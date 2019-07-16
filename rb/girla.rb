@@ -1,5 +1,4 @@
 require 'json'
-require 'net/http'
 require 'sinatra'
 
 set :public_folder, '/srv/girl/dist'

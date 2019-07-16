@@ -8,11 +8,6 @@ export default {
       this.systemctl( command, 'hostapd' )
     },
 
-    check_p2p1_sshd: function( checked ) {
-      let command = checked ? 'enable' : 'disable'
-      this.systemctl( command, 'p2p1_sshd' )
-    },
-
     check_tun: function( checked ) {
       let command = checked ? 'enable' : 'disable'
       this.systemctl( command, 'tun' )
@@ -82,8 +77,7 @@ export default {
         this.loadings[ 'save@' + file ] = false
         let data = res.data
         this.editing = null
-        // this.saved = file
-        this.load
+        this.load()
         this.$notify.success({
           title: '成功',
           message: this.translates[ file ] + ' 已更新',
@@ -129,10 +123,9 @@ export default {
           this.colour_actives[ service ] = this.colour_in( data.active )
           this.runnings[ service ] = data.active.includes( 'running' )
           this.enableds[ service ] = data.loaded.includes( 'enabled;' )
-          if ( command != 'status' ) {
+          if ( [ 'start', 'stop', 'restart' ].includes( command ) ) {
             this.editing = null
           }
-          this.saved = null
           this.$notify.success({
             title: '成功',
             message: this.translates[ service ] + ' 已' + this.translates[ command ],
@@ -149,7 +142,7 @@ export default {
     },
 
     tail: function( service ) {
-      window.open( this.http_host + '/api/tail?service=' + service, '_blank' )
+      window.open( this.http_host + '/api/tail/' + service, '_blank' )
     }
   },
   mounted: function () {
@@ -172,7 +165,6 @@ export default {
       measure_temp: null,
       poppings: {},
       runnings: {},
-      saved: null,
       texts: {},
       translates: {
         dhcpcd: '网卡',
