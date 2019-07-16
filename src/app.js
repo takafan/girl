@@ -101,7 +101,7 @@ export default {
         if ( !text ) {
           return
         }
-        let host = text.split( "\n" )[ 0 ].split( ':' )[ 0 ]
+        let host = text.split( "\n" )[ 0 ]
         let im = this.texts[ 'girl.im' ].split( "\n" )[ 0 ].split( ':' )[ 0 ]
         axios.get( 'http://' + host + ':3000/expire_info/' + im ).then( res => {
           let data = res.data
