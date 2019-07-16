@@ -1,5 +1,8 @@
 def check_lock
-  halt errmsg '已被锁定，不能修改' if File.exist?( File.join( CONFIG_DIR, 'lock' ) )
+  if File.exist?( File.join( CONFIG_DIR, 'lock' ) )
+    content_type 'text/plain', charset: 'utf-8'
+    halt '已被锁定。'
+  end
 end
 
 def errmsg( msg = nil, contents = {} )

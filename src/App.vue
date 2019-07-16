@@ -16,7 +16,7 @@
           <span class="output" v-if="enableds.tun">Auto;&nbsp;</span>
           <span class="output" v-html="colour_actives.tun"></span>
         </div>
-        <div v-if="editing == 'tun'" class="top-interval narrow">
+        <div v-if="editing == 'tun' && !is_locked" class="top-interval narrow">
           <div>
             <span class="label">本月in：</span>
             {{ expire_info.input }}
@@ -32,8 +32,7 @@
           <div class="top-interval right">
             <el-checkbox
               v-model="enableds.tun"
-              @change="check_tun"
-              :disabled="is_locked">
+              @change="check_tun">
               开机自动启动
             </el-checkbox>
             <el-button
@@ -42,34 +41,29 @@
             </el-button>
             <el-button
               @click="systemctl( 'status', 'tun' )"
-              :loading="loadings[ 'status@tun' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'status@tun' ]">
               刷新
             </el-button>
             <el-button
               v-if="runnings.tun"
               @click="systemctl( 'stop', 'tun' )"
-              :loading="loadings[ 'stop@tun' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'stop@tun' ]">
               停止
             </el-button>
             <el-button
               v-if="!runnings.tun"
               @click="systemctl( 'start', 'tun' )"
-              :loading="loadings[ 'start@tun' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'start@tun' ]">
               启动
             </el-button>
             <el-button
               v-if="runnings.tun"
               @click="systemctl( 'restart', 'tun' )"
-              :loading="loadings[ 'restart@tun' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'restart@tun' ]">
               重启
             </el-button>
             <el-button
-              @click="tail( 'tun' )"
-              :disabled="is_locked">
+              @click="tail( 'tun' )">
               日志
             </el-button>
           </div>
@@ -85,12 +79,11 @@
           <span class="output" v-if="enableds.resolv">Auto;&nbsp;</span>
           <span class="output" v-html="colour_actives.resolv"></span>
         </div>
-        <div v-if="editing == 'resolv'" class="top-interval narrow">
+        <div v-if="editing == 'resolv' && !is_locked" class="top-interval narrow">
           <div class="right">
             <el-checkbox
               v-model="enableds.resolv"
-              @change="check_resolv"
-              :disabled="is_locked">
+              @change="check_resolv">
               开机自动启动
             </el-checkbox>
             <el-button
@@ -99,34 +92,29 @@
             </el-button>
             <el-button
               @click="systemctl( 'status', 'resolv' )"
-              :loading="loadings[ 'status@resolv' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'status@resolv' ]">
               刷新
             </el-button>
             <el-button
               v-if="runnings.resolv"
               @click="systemctl( 'stop', 'resolv' )"
-              :loading="loadings[ 'stop@resolv' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'stop@resolv' ]">
               停止
             </el-button>
             <el-button
               v-if="!runnings.resolv"
               @click="systemctl( 'start', 'resolv' )"
-              :loading="loadings[ 'start@resolv' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'start@resolv' ]">
               启动
             </el-button>
             <el-button
               v-if="runnings.resolv"
               @click="systemctl( 'restart', 'resolv' )"
-              :loading="loadings[ 'restart@resolv' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'restart@resolv' ]">
               重启
             </el-button>
             <el-button
-              @click="tail( 'resolv' )"
-              :disabled="is_locked">
+              @click="tail( 'resolv' )">
               日志
             </el-button>
           </div>
@@ -142,12 +130,11 @@
           <span class="output" v-if="enableds.hostapd">Auto;&nbsp;</span>
           <span class="output" v-html="colour_actives.hostapd"></span>
         </div>
-        <div v-if="editing == 'hostapd'" class="top-interval narrow">
+        <div v-if="editing == 'hostapd' && !is_locked" class="top-interval narrow">
           <div class="right">
             <el-checkbox
               v-model="enableds.hostapd"
-              @change="check_hostapd"
-              :disabled="is_locked">
+              @change="check_hostapd">
               开机自动启动
             </el-checkbox>
             <el-button
@@ -156,39 +143,33 @@
             </el-button>
             <el-button
               @click="systemctl( 'status', 'hostapd' )"
-              :loading="loadings[ 'status@hostapd' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'status@hostapd' ]">
               刷新
             </el-button>
             <el-button
               v-if="runnings.hostapd"
               @click="systemctl( 'stop', 'hostapd' )"
-              :loading="loadings[ 'stop@hostapd' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'stop@hostapd' ]">
               停止
             </el-button>
             <el-button
               v-if="!runnings.hostapd"
               @click="systemctl( 'start', 'hostapd' )"
-              :loading="loadings[ 'start@hostapd' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'start@hostapd' ]">
               启动
             </el-button>
             <el-button
               v-if="runnings.hostapd"
               @click="systemctl( 'restart', 'hostapd' )"
-              :loading="loadings[ 'restart@hostapd' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'restart@hostapd' ]">
               重启
             </el-button>
             <el-button
-              @click="tail( 'hostapd' )"
-              :disabled="is_locked">
+              @click="tail( 'hostapd' )">
               日志
             </el-button>
             <el-button
-              @click="station()"
-              :disabled="is_locked">
+              @click="station()">
               客户端
             </el-button>
           </div>
@@ -204,7 +185,7 @@
           <span class="output" v-if="enableds.dhcpcd">Auto;&nbsp;</span>
           <span class="output" v-html="colour_actives.dhcpcd"></span>
         </div>
-        <div v-if="editing == 'dhcpcd'" class="top-interval narrow">
+        <div v-if="editing == 'dhcpcd' && !is_locked" class="top-interval narrow">
           <div class="right">
             <el-button
               @click="editing = null">
@@ -212,25 +193,21 @@
             </el-button>
             <el-button
               @click="systemctl( 'status', 'dhcpcd' )"
-              :loading="loadings[ 'status@dhcpcd' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'status@dhcpcd' ]">
               刷新
             </el-button>
             <el-button
               v-if="runnings.dhcpcd"
               @click="systemctl( 'restart', 'dhcpcd' )"
-              :loading="loadings[ 'restart@dhcpcd' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'restart@dhcpcd' ]">
               重启
             </el-button>
             <el-button
-              @click="tail( 'dhcpcd' )"
-              :disabled="is_locked">
+              @click="tail( 'dhcpcd' )">
               日志
             </el-button>
             <el-button
-              @click="ip()"
-              :disabled="is_locked">
+              @click="ip()">
               ip
             </el-button>
           </div>
@@ -246,7 +223,7 @@
           <span class="output" v-if="enableds.dnsmasq">Auto;&nbsp;</span>
           <span class="output" v-html="colour_actives.dnsmasq"></span>
         </div>
-        <div v-if="editing == 'dnsmasq'" class="top-interval narrow">
+        <div v-if="editing == 'dnsmasq' && !is_locked" class="top-interval narrow">
           <div class="right">
             <el-button
               @click="editing = null">
@@ -254,20 +231,17 @@
             </el-button>
             <el-button
               @click="systemctl( 'status', 'dnsmasq' )"
-              :loading="loadings[ 'status@dnsmasq' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'status@dnsmasq' ]">
               刷新
             </el-button>
             <el-button
               v-if="runnings.dnsmasq"
               @click="systemctl( 'restart', 'dnsmasq' )"
-              :loading="loadings[ 'restart@dnsmasq' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'restart@dnsmasq' ]">
               重启
             </el-button>
             <el-button
-              @click="tail( 'dnsmasq' )"
-              :disabled="is_locked">
+              @click="tail( 'dnsmasq' )">
               日志
             </el-button>
           </div>
@@ -279,7 +253,7 @@
     <el-row class="row">
       <el-col>
         <div class="title">{{ translates[ 'girl.tund' ] }}</div>
-        <div v-if="editing == 'girl.tund'" class="interval narrow">
+        <div v-if="editing == 'girl.tund' && !is_locked" class="interval narrow">
           <el-input
             type="textarea"
             :rows="10"
@@ -293,8 +267,7 @@
             </el-button>
             <el-button
               @click="save_text( 'girl.tund' )"
-              :loading="loadings[ 'save@girl.tund' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'save@girl.tund' ]">
               保存
             </el-button>
           </div>
@@ -313,7 +286,7 @@
     <el-row class="row">
       <el-col>
         <div class="title">{{ translates[ 'girl.custom.txt' ] }}</div>
-        <div v-if="editing == 'girl.custom.txt'" class="interval narrow">
+        <div v-if="editing == 'girl.custom.txt' && !is_locked" class="interval narrow">
           <el-input
             type="textarea"
             :rows="10"
@@ -327,8 +300,7 @@
             </el-button>
             <el-button
               @click="save_text( 'girl.custom.txt' )"
-              :loading="loadings[ 'save@girl.custom.txt' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'save@girl.custom.txt' ]">
               保存
             </el-button>
           </div>
@@ -386,7 +358,7 @@
     <el-row class="row">
       <el-col>
         <div class="title">{{ translates[ 'hostapd.conf' ] }}</div>
-        <div v-if="editing == 'hostapd.conf'" class="interval narrow">
+        <div v-if="editing == 'hostapd.conf' && !is_locked" class="interval narrow">
           <el-input
             type="textarea"
             :rows="10"
@@ -400,8 +372,7 @@
             </el-button>
             <el-button
               @click="save_text( 'hostapd.conf' )"
-              :loading="loadings[ 'save@hostapd.conf' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'save@hostapd.conf' ]">
               保存
             </el-button>
           </div>
@@ -425,7 +396,7 @@
     <el-row class="row">
       <el-col>
         <div class="title">{{ translates[ 'nameservers.txt' ] }}</div>
-        <div v-if="editing == 'nameservers.txt'" class="interval narrow">
+        <div v-if="editing == 'nameservers.txt' && !is_locked" class="interval narrow">
           <el-input
             type="textarea"
             :rows="10"
@@ -439,8 +410,7 @@
             </el-button>
             <el-button
               @click="save_text( 'nameservers.txt' )"
-              :loading="loadings[ 'save@nameservers.txt' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'save@nameservers.txt' ]">
               保存
             </el-button>
           </div>
@@ -459,7 +429,7 @@
     <el-row class="row">
       <el-col>
         <div class="title">{{ translates[ 'dhcpcd.conf' ] }}</div>
-        <div v-if="editing == 'dhcpcd.conf'" class="interval narrow">
+        <div v-if="editing == 'dhcpcd.conf' && !is_locked" class="interval narrow">
           <el-input
             type="textarea"
             :rows="10"
@@ -473,8 +443,7 @@
             </el-button>
             <el-button
               @click="save_text( 'dhcpcd.conf' )"
-              :loading="loadings[ 'save@dhcpcd.conf' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'save@dhcpcd.conf' ]">
               保存
             </el-button>
           </div>
@@ -496,7 +465,7 @@
     <el-row class="row">
       <el-col>
         <div class="title">{{ translates[ 'dnsmasq.d/wlan0.conf' ] }}</div>
-        <div v-if="editing == 'dnsmasq.d/wlan0.conf'" class="interval narrow">
+        <div v-if="editing == 'dnsmasq.d/wlan0.conf' && !is_locked" class="interval narrow">
           <el-input
             type="textarea"
             :rows="10"
@@ -510,8 +479,7 @@
             </el-button>
             <el-button
               @click="save_text( 'dnsmasq.d/wlan0.conf' )"
-              :loading="loadings[ 'save@dnsmasq.d/wlan0.conf' ]"
-              :disabled="is_locked">
+              :loading="loadings[ 'save@dnsmasq.d/wlan0.conf' ]">
               保存
             </el-button>
           </div>

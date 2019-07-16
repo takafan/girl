@@ -4,11 +4,10 @@ post '/api/save_text' do
   data = JSON.parse( request.body.read, symbolize_names: true )
 
   file = data[ :file ]
-  text = data[ :text ]
+  halt errmsg 'unknown file' unless CONFIG_FILES.include?( file )
 
-  unless CONFIG_FILES.include?( file )
-    halt errmsg 'unknown file'
-  end
+  text = data[ :text ]
+  halt errmsg 'missing text' unless text
 
   File.open( File.join( CONFIG_DIR, file ), 'w' ) do |f|
     f.puts text

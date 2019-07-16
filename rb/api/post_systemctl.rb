@@ -6,9 +6,7 @@ post '/api/systemctl' do
   command = data[ :command ]
   service = data[ :service ]
 
-  unless %w[ restart start stop enable disable status ].include?( command )
-    halt errmsg 'unknown command'
-  end
+  halt errmsg 'unknown command' unless %w[ restart start stop enable disable status ].include?( command )
 
   case command
   when 'restart', 'status'
