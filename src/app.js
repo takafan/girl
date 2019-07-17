@@ -18,14 +18,6 @@ export default {
       this.systemctl( command, 'resolv' )
     },
 
-    colour_in: function( text ) {
-      return text.replace('active (running)',
-        '<span class="running">active (running)</span>' ).replace( 'active (exited)',
-        '<span class="running">active (exited)</span>' ).replace( 'inactive (dead)',
-        '<span class="dead">inactive (dead)</span>' ).replace( 'failed',
-        '<span class="failed">failed</span>' )
-    },
-
     ip: function() {
       window.open( this.http_host + '/api/ip', '_blank' )
     },
@@ -34,8 +26,8 @@ export default {
       axios.post( this.http_host + '/api/load' ).then( res => {
         let data = res.data
         let enableds = {}
-        let colour_actives = {}
         let runnings = {}
+        let colour_actives = {}
         let poppings = {}
         let loadings = {}
 
@@ -44,8 +36,12 @@ export default {
         })
 
         Object.entries( data.actives ).forEach( pair => {
-          colour_actives[ pair[ 0 ] ] = this.colour_in( pair[ 1 ] )
           runnings[ pair[ 0 ] ] = pair[ 1 ].includes( 'running' )
+          colour_actives[ pair[ 0 ] ] = pair[ 1 ].replace('active (running)',
+            '<span class="running">active (running)</span>' ).replace( 'active (exited)',
+            '<span class="running">active (exited)</span>' ).replace( 'inactive (dead)',
+            '<span class="dead">inactive (dead)</span>' ).replace( 'failed',
+            '<span class="failed">failed</span>' )
           loadings[ 'restart@' + pair[ 0 ] ] = false
           loadings[ 'start@' + pair[ 0 ] ] = false
           loadings[ 'stop@' + pair[ 0 ] ] = false
@@ -57,9 +53,8 @@ export default {
           loadings[ 'save@' + pair[ 0 ] ] = false
         })
 
-        this.loadeds = data.loadeds
-        this.colour_actives = colour_actives
         this.runnings = runnings
+        this.colour_actives = colour_actives
         this.enableds = enableds
         this.poppings = poppings
         this.loadings = loadings
@@ -67,7 +62,7 @@ export default {
         this.is_locked = data.is_locked
         this.measure_temp = data.measure_temp
       }).catch( err => {
-        console.log( err.message )
+        console.log( err )
       })
     },
 
@@ -84,7 +79,7 @@ export default {
           type: 'success'
         })
       }).catch( err => {
-        console.log( err.message )
+        console.log( err )
       })
     },
 
@@ -117,23 +112,18 @@ export default {
     systemctl: function( command, service ) {
       this.loadings[ command + '@' + service ] = true
       axios.post( this.http_host + '/api/systemctl', { command: command, service: service } ).then( res => {
-        axios.post( this.http_host + '/api/systemctl', { command: 'status', service: service } ).then( res2 => {
-          this.loadings[ command + '@' + service ] = false
-          let data = res2.data
-          this.colour_actives[ service ] = this.colour_in( data.active )
-          this.runnings[ service ] = data.active.includes( 'running' )
-          this.enableds[ service ] = data.loaded.includes( 'enabled;' )
-          if ( [ 'start', 'stop', 'restart' ].includes( command ) ) {
-            this.editing = null
-          }
-          this.$notify.success({
-            title: '成功',
-            message: this.translates[ service ] + ' 已' + this.translates[ command ],
-            type: 'success'
-          })
+        this.loadings[ command + '@' + service ] = false
+        if ( [ 'start', 'stop', 'restart' ].includes( command ) ) {
+          this.editing = null
+        }
+        this.load()
+        this.$notify.success({
+          title: '成功',
+          message: this.translates[ service ] + ' 已' + this.translates[ command ],
+          type: 'success'
         })
       }).catch( err => {
-        console.log( err.message )
+        console.log( err )
       })
     },
 
@@ -150,7 +140,6 @@ export default {
   },
   data () {
     return {
-      loadeds: {},
       colour_actives: {},
       editing: null,
       enableds: {},
