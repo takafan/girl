@@ -83,12 +83,12 @@ body {
   text-align: right;
 }
 
-#bear {
-  height: 96.8px;
-}
-
 #header {
   text-align: right;
+}
+
+#header img {
+  height: 96.8px;
 }
 
 #footer {
@@ -96,11 +96,11 @@ body {
   max-width: 414px;
 }
 
-#main {
-  margin: 0 0 0 2%;
-}
-
-#shadow {
+#footer img {
   width: 100%;
   display: block;
+}
+
+#main {
+  margin: 0 0 0 2%;
 }

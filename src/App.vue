@@ -1,9 +1,8 @@
 <template>
   <div id="app">
     <div id="header">
-      <div><img id="bear" src="./assets/bear.jpg" /></div>
+      <div><img src="./assets/bear.jpg" /></div>
       <div class="right" v-if="is_locked"><i class="el-icon-lock"></i></div>
-      <div class="right">{{ measure_temp }}</div>
     </div>
 
     <div id="main">
@@ -496,7 +495,7 @@
     </div>
 
     <div id="footer">
-      <img id="shadow" src="./assets/shadow.jpg" />
+      <img src="./assets/fun.jpg" />
     </div>
   </div>
 </template>
