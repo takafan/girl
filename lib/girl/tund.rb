@@ -104,7 +104,6 @@ module Girl
           if @roomd_info[ :queue ].any?
             @mutex.synchronize do
               now = Time.new
-              resends = []
 
               while @roomd_info[ :queue ].any?
                 tund, mem_sym, mem_id, add_at, times = @roomd_info[ :queue ].first
@@ -132,21 +131,18 @@ module Girl
 
                   if pack
                     if times >= RESEND_LIMIT
-                      puts "resend traffic out of #{ RESEND_LIMIT } #{ Time.new }"
+                      puts "resend out of #{ RESEND_LIMIT } tund #{ tund.object_id } to #{ Socket.unpack_sockaddr_in( tund_info[ :tun_addr ] ).inspect } #{ now }"
                       dest = tund_info[ :dests ][ dest_id ]
 
                       if dest && !dest.closed?
                         @ctlw.write( [ CTL_CLOSE_SOCK, [ dest.object_id ].pack( 'N' ) ].join )
                       end
                     else
-                      resends << [ tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times ]
+                      # puts "debug resend #{ mem_id.inspect } times #{ times + 1 } #{ Time.new }" if times > 5
+                      send_pack( tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times + 1 )
                     end
                   end
                 end
-              end
-
-              resends.sort{ | a, b | a.last <=> b.last }.reverse.each do | tund, pack, tun_addr, mem_sym, mem_id, times |
-                send_pack( tund, pack, tun_addr, mem_sym, mem_id, times + 1 )
               end
             end
           end
@@ -161,27 +157,10 @@ module Girl
 
           if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :queue ].size < RESUME_BELOW )
             @mutex.synchronize do
-              space = QUEUE_LIMIT - @roomd_info[ :queue ].size
-
-              @roomd_info[ :paused_tunds ].size.times do
-                tund = @roomd_info[ :paused_tunds ].shift
-
-                while space > 0
-                  data, from = get_buff( tund )
-
-                  if data.empty?
-                    break
-                  end
-
-                  send_buff( tund, data, from )
-                  space -= 1
-                end
-
-                if space <= 0
-                  @roomd_info[ :paused_tunds ] << tund
-                  break
-                end
-              end
+              tund_ids = @roomd_info[ :paused_tunds ].map{ | tund | tund.object_id }
+              len = tund_ids.size
+              @ctlw.write( [ CTL_RESUME, [ len ].pack( 'N' ), tund_ids.pack( 'N*' ) ].join )
+              @roomd_info[ :paused_tunds ].clear
             end
           end
         end
@@ -248,6 +227,17 @@ module Girl
 
         if sock
           add_closing( sock )
+        end
+      when CTL_RESUME
+        len = ctlr.read( 4 ).unpack( 'N' ).first
+        tund_ids = ctlr.read( 4 * len ).unpack( 'N*' )
+        tund_ids.each do | tund_id |
+          # puts "debug resume #{ tund_id } #{ Time.new }"
+          tund = @socks[ tund_id ]
+
+          if tund
+            add_write( tund )
+          end
         end
       end
     end
@@ -515,6 +505,7 @@ module Girl
 
       if @roomd_info[ :queue ].size > QUEUE_LIMIT
         unless @roomd_info[ :paused_tunds ].include?( sock )
+          # puts "debug pause #{ sock.object_id } #{ Time.new }"
           @roomd_info[ :paused_tunds ] << sock
         end
 
@@ -529,10 +520,6 @@ module Girl
         return
       end
 
-      send_buff( sock, data, from )
-    end
-
-    def send_buff( sock, data, from )
       info = @infos[ sock ]
       len = data[ 0, 2 ].unpack( 'n' ).first
       pack = data[ 2, ( 8 + len ) ]

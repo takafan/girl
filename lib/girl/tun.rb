@@ -144,7 +144,6 @@ module Girl
           if @tun_info[ :queue ].any?
             @mutex.synchronize do
               now = Time.new
-              resends = []
 
               while @tun_info[ :queue ].any?
                 mem_sym, mem_id, add_at, times = @tun_info[ :queue ].first
@@ -169,20 +168,17 @@ module Girl
 
                 if pack
                   if times > RESEND_LIMIT
-                    puts "resend traffic out of #{ RESEND_LIMIT } #{ now }"
+                    puts "resend out of #{ RESEND_LIMIT } tun #{ @tun.object_id } #{ Socket.unpack_sockaddr_in( @tun_info[ :tund_addr ] ).inspect } #{ now }"
                     source = @tun_info[ :sources ][ source_id ]
 
                     if source && !source.closed?
                       @ctlw.write( [ CTL_CLOSE_SOCK, [ source.object_id ].pack( 'N' ) ].join )
                     end
                   else
-                    resends << [ pack, mem_sym, mem_id, times ]
+                    # puts "debug resend #{ mem_id.inspect } times #{ times + 1 } #{ Time.new }" if times > 5
+                    send_pack( @tun, pack, @tun_info[ :tund_addr ], mem_sym, mem_id, times + 1 )
                   end
                 end
-              end
-
-              resends.sort{ | a, b | a.last <=> b.last }.reverse.each do | pack, mem_sym, mem_id, times |
-                send_pack( @tun, pack, @tun_info[ :tund_addr ], mem_sym, mem_id, times + 1 )
               end
             end
           end
@@ -197,19 +193,8 @@ module Girl
 
           if @tun_info[ :paused ] && ( @tun_info[ :queue ].size < RESUME_BELOW )
             @mutex.synchronize do
-              space = QUEUE_LIMIT - @tun_info[ :queue ].size
-
-              while space > 0
-                data, from = get_buff( @tun )
-
-                if data.empty?
-                  @tun_info[ :paused ] = false
-                  break
-                end
-
-                send_buff( @tun, data, from )
-                space -= 1
-              end
+              @ctlw.write( CTL_RESUME )
+              @tun_info[ :paused ] = false
             end
           end
         end
@@ -251,6 +236,9 @@ module Girl
         if sock
           add_closing( sock )
         end
+      when CTL_RESUME
+        # puts "debug resume #{ @tun.object_id } #{ Time.new }"
+        add_write( @tun )
       end
     end
 
@@ -291,7 +279,7 @@ module Girl
       @reads << source
       @tun_info[ :sources ][ source_id ] = source
       @tun_info[ :wmems ][ :traffic ][ source_id ] = {}
-      
+
       ctlmsg = [ [ 0, A_NEW_SOURCE, source_id ].pack( 'NCN' ), option.data ].join
       send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :a_new_source, source_id )
     end
@@ -467,6 +455,7 @@ module Girl
       # 重传队列超过上限，中断写
       if info[ :queue ].size > QUEUE_LIMIT
         unless info[ :paused ]
+          # puts "debug pause #{ @tun.object_id } #{ Time.new }"
           info[ :paused ] = true
         end
 
@@ -481,11 +470,6 @@ module Girl
         return
       end
 
-      send_buff( sock, data, from )
-    end
-
-    def send_buff( sock, data, from )
-      info = @infos[ sock ]
       len = data[ 0, 2 ].unpack( 'n' ).first
       pack = data[ 2, ( 8 + len ) ]
       source_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
