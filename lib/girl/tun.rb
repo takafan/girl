@@ -63,6 +63,8 @@ module Girl
       @socks = {} # object_id => sock
       @roles = {} # sock => :ctlr / :redir / :source / :tun
       @infos = {}
+      @read_after_writables = []
+      @write_after_readables = []
 
       ctlr, ctlw = IO.pipe
       @ctlw = ctlw
@@ -92,7 +94,13 @@ module Girl
             when :redir
               read_redir( sock )
             when :source
-              read_source( sock )
+              if @write_after_readables.include?( sock )
+                puts "write source #{ sock.object_id } after a TLS/SSL handshake #{ Time.new }"
+                add_write( sock )
+                write_source( @write_after_readables.delete( sock ) )
+              else
+                read_source( sock )
+              end
             when :tun
               read_tun( sock )
             end
@@ -101,7 +109,13 @@ module Girl
           ws.each do | sock |
             case @roles[ sock ]
             when :source
-              write_source( sock )
+              if @read_after_writables.include?( sock )
+                puts "read source #{ sock.object_id } after a TLS/SSL handshake #{ Time.new }"
+                @reads << sock
+                read_source( @read_after_writables.delete( sock ) )
+              else
+                write_source( sock )
+              end
             when :tun
               write_tun( sock )
             end
@@ -287,8 +301,14 @@ module Girl
     def read_source( sock )
       begin
         data = sock.read_nonblock( PACK_SIZE )
-      rescue IO::WaitReadable, Errno::EINTR, IO::WaitWritable => e
+      rescue IO::WaitReadable, Errno::EINTR => e
         return
+      rescue IO::WaitWritable => e
+        @reads.delete( sock )
+
+        unless @read_after_writables.include?( sock )
+          @read_after_writables << sock
+        end
       rescue Exception => e
         add_closing( sock )
         return
@@ -427,13 +447,20 @@ module Girl
         end
 
         @writes.delete( sock )
+        @write_after_readables.delete( sock )
         return
       end
 
       begin
         written = sock.write_nonblock( data )
-      rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
+      rescue IO::WaitWritable, Errno::EINTR => e
         return
+      rescue IO::WaitReadable => e
+        @writes.delete( sock )
+
+        unless @write_after_readables.include?( sock )
+          @write_after_readables << sock
+        end
       rescue Exception => e
         add_closing( sock )
         return
