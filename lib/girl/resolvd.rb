@@ -9,109 +9,71 @@ module Girl
   class Resolvd
 
     def initialize( port = 7070, nameservers = [] )
-      reads = []
-      pub_socks = {} # nameserver => sock
-      pub_addrs = []
-      pub_addr6s = []
+      resolvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      resolvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      resolvd.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
+      puts "resolvd bound on #{ port }"
 
-      nameservers.each do | ip |
-        addr = Socket.sockaddr_in( 53, ip )
+      nameservers = nameservers.select{ | ns | Addrinfo.udp( ns, 53 ).ipv4? }
 
-        if Addrinfo.udp( ip, 53 ).ipv6?
-          pub_addr6s << addr
-        else
-          pub_addrs << addr
-        end
-      end
-
-      begin
-        sock4 = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-        sock4.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        sock4.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
-        puts "bound on #{ port } AF_INET"
-
-        reads << sock4
-
-        pub_addrs.each do | addr |
-          pub_socks[ addr ] = sock4
-        end
-      rescue Errno::EAFNOSUPPORT => e
-        puts "AF_INET #{ e.class }"
-      end
-
-      begin
-        sock6 = Socket.new( Socket::AF_INET6, Socket::SOCK_DGRAM, 0 )
-        sock6.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        sock6.bind( Socket.sockaddr_in( port, '::0' ) )
-        puts "bound on #{ port } AF_INET6"
-
-        reads << sock6
-
-        pub_addr6s.each do | addr |
-          pub_socks[ addr ] = sock6
-        end
-      rescue Errno::EAFNOSUPPORT => e
-        puts "AF_INET6 #{ e.class }"
-      end
-
-      @reads = reads
-      @pub_socks = pub_socks
+      @resolvd = resolvd
+      @pub_addrs = nameservers.map{ | ns | Socket.sockaddr_in( 53, ns ) }
       @ids = {}
       @hex = Girl::Hex.new
     end
 
     def looping
       loop do
-        readable_socks, _ = IO.select( @reads )
+        rs, _ = IO.select( [ @resolvd ] )
 
-        readable_socks.each do | sock |
-          data, addrinfo, rflags, *controls = sock.recvmsg
-          sender = addrinfo.to_sockaddr
-
-          unless @pub_socks.include?( sender )
-            data = @hex.decode( data )
-          end
-
-          if data.size <= 12
-            puts 'missing header?'
-            next
-          end
-
-          id = data[ 0, 2 ]
-          qr = data[ 2, 2 ].unpack( 'B16' ).first[ 0 ]
-          qname_len = data[ 12..-1 ].index( [ 0 ].pack( 'C' ) )
-
-          unless qname_len
-            puts 'missing qname?'
-            next
-          end
-
-          if qr == '0'
-            qname = data[ 12, qname_len ]
-
-            @pub_socks.each do | sockaddr, alias_sock |
-              begin
-                alias_sock.sendmsg( data, 0, sockaddr )
-              rescue Errno::ENETUNREACH => e
-                puts e.class
-                next
-              end
-            end
-
-            @ids[ id ] = [ sender, sock ]
-          elsif qr == '1' && @ids.include?( id )
-            # relay the fastest response, ignore followings
-            src, alias_sock = @ids.delete( id )
-            data = @hex.encode( data )
-            alias_sock.sendmsg( data, 0, src )
-          end
+        rs.each do | sock |
+          read_sock( sock )
         end
       end
     end
 
     def quit!
-      @reads.each{ | sock | sock.close }
       exit
+    end
+
+    def read_sock( sock )
+      data, addrinfo, rflags, *controls = sock.recvmsg
+      # puts "debug recvmsg #{ data.inspect }"
+
+      if data.size <= 12
+        # heartbeat
+        return
+      end
+
+      src = addrinfo.to_sockaddr
+
+      unless @pub_addrs.include?( src )
+        data = @hex.decode( data )
+      end
+
+      id = data[ 0, 2 ]
+      qr = data[ 2, 2 ].unpack( 'B16' ).first[ 0 ]
+      qname_len = data[ 12..-1 ].index( [ 0 ].pack( 'C' ) )
+
+      unless qname_len
+        puts 'missing qname?'
+        return
+      end
+
+      if qr == '0'
+        qname = data[ 12, qname_len ]
+
+        @pub_addrs.each do | pub_addr |
+          sock.sendmsg( data, 0, pub_addr )
+        end
+
+        @ids[ id ] = src
+      elsif qr == '1' && @ids.include?( id )
+        # relay the fastest response, ignore followings
+        src = @ids.delete( id )
+        data = @hex.encode( data )
+        sock.sendmsg( data, 0, src )
+      end
     end
 
   end
