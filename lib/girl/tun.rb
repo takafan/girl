@@ -6,44 +6,60 @@ require 'socket'
 ##
 # Girl::Tun - tcp流量正常的到达目的地。近端。
 #
+##
 # usage
 # =====
 #
-# 1. Girl::Tund.new( 9090 ).looping # 远端
+# Girl::Tund.new( 9090 ).looping # 远端
 #
-# 2. Girl::Tun.new( '{ your.server.ip }', 9090, 1919 ).looping # 近端
+# Girl::Tun.new( 'your.server.ip', 9090, 1919 ).looping # 近端
 #
-# 3. dig +short www.google.com @127.0.0.1 -p1717 # dig with girl/resolv, got 216.58.217.196
+# dig +short www.google.com @127.0.0.1 -p1717 # dig with girl/resolv, got 216.58.217.196
 #
-# 4. iptables -t nat -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
+# iptables -t nat -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
 #
-# 5. curl https://www.google.com/
+# curl https://www.google.com/
 #
 # 包结构
 # ======
 #
 # 流量打包成udp，在tun-tund之间传输，包结构：
 #
-# N: 1+ source/dest_id -> N: pack_id -> traffic
-#    0  ctlmsg         -> C: 1 heartbeat          -> C: random char
-#                            2 a new source       -> NnnN: source_id dst_family dst_port dst_ip
-#                            3 paired             -> NN: source_id dest_id
-#                            4 confirm a pack     -> NN: source/dest_id pack_id
-#                            5 dest fin           -> NN: dest_id last_pack_id
-#                            6 source fin         -> NN: source_id last_pack_id
-#                            7 confirm dest fin   -> N: dest_id
-#                            8 confirm source fin -> N: source_id
-#                            9 tund fin
-#                            10 tun fin
+# N: 1+ source/dest_id -> N: pack_id          -> traffic
+#    0  ctlmsg         -> C:  1 tund port     -> n: tund port
+#                             2 heartbeat     -> C: random char
+#                             3 a new source  -> NnnN: source_id dst_family dst_port dst_host
+#                             4 paired        -> NN: source_id dest_id
+#                             5 dest status   -> NNN: dest_id biggest_dest_pack_id continue_source_pack_id
+#                             6 source status -> NNN: source_id biggest_source_pack_id continue_dest_pack_id
+#                             7 miss          -> NNN: source/dest_id pack_id_begin pack_id_end
+#                             8 fin1          -> N: source/dest_id
+#                             9 got fin1      -> N: source/dest_id
+#                            10 fin2          -> N: source/dest_id
+#                            11 got fin2      -> N: source/dest_id
+#                            12 tund fin
+#                            13 tun fin
+#
+# 两套关闭
+# ========
+#
+# 1-1. source.close > !ext.is_dest_closed > send fin1 loop
+# 1-2. recv got_fin1 > break loop
+# 1-3. recv fin2 > send got_fin2 > del ext
+#
+# 2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true
+# 2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source
+# 2-3. source.close > ext.is_dest_closed > del ext > loop send fin2
+# 2-4. recv got_fin2 > break loop
 #
 module Girl
   class Tun
     ##
     # tund_ip          远端ip
     # roomd_port       roomd端口，roomd用于配对tun-tund
-    # redir_port       本地端口，同时配置iptables把流量引向这个端口
-    # source_chunk_dir 文件缓存目录，缓存source来不及写的流量
-    # tun_chunk_dir    文件缓存目录，缓存tun来不及写的流量
+    # redir_port       本地端口，请配置iptables把流量引向这个端口
+    # source_chunk_dir 文件缓存目录，缓存source写前
+    # tun_chunk_dir    文件缓存目录，缓存tun写前
     # hex_block        外部传入自定义加解密
     def initialize( tund_ip, roomd_port = 9090, redir_port = 1919, source_chunk_dir = '/tmp', tun_chunk_dir = '/tmp', hex_block = nil )
       if hex_block
@@ -52,7 +68,6 @@ module Girl
 
       @tund_ip = tund_ip
       @roomd_addr = Socket.sockaddr_in( roomd_port, tund_ip )
-      @redir_port = redir_port
       @source_chunk_dir = source_chunk_dir
       @tun_chunk_dir = tun_chunk_dir
       @hex = Girl::Hex.new
@@ -63,25 +78,30 @@ module Girl
       @socks = {} # object_id => sock
       @roles = {} # sock => :ctlr / :redir / :source / :tun
       @infos = {}
-      @read_after_writables = []
-      @write_after_readables = []
 
       ctlr, ctlw = IO.pipe
       @ctlw = ctlw
       @roles[ ctlr ] = :ctlr
       @reads << ctlr
 
-      new_redir
+      redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
+      redir.listen( 511 )
+      @roles[ redir ] = :redir
+      @reads << redir
+
       new_tun
     end
 
     def looping
       puts 'looping'
 
-      loop_heartbeat
-      loop_resend
-      loop_resume
-      loop_clean
+      loop_expire
+      loop_send_heartbeat
+      loop_send_status
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -94,13 +114,7 @@ module Girl
             when :redir
               read_redir( sock )
             when :source
-              if @write_after_readables.include?( sock )
-                puts "write source #{ sock.object_id } after a TLS/SSL handshake #{ Time.new }"
-                add_write( sock )
-                write_source( @write_after_readables.delete( sock ) )
-              else
-                read_source( sock )
-              end
+              read_source( sock )
             when :tun
               read_tun( sock )
             end
@@ -109,13 +123,7 @@ module Girl
           ws.each do | sock |
             case @roles[ sock ]
             when :source
-              if @read_after_writables.include?( sock )
-                puts "read source #{ sock.object_id } after a TLS/SSL handshake #{ Time.new }"
-                @reads << sock
-                read_source( @read_after_writables.delete( sock ) )
-              else
-                write_source( sock )
-              end
+              write_source( sock )
             when :tun
               write_tun( sock )
             end
@@ -128,7 +136,7 @@ module Girl
     end
 
     def quit!
-      unless @tun.closed?
+      if !@tun.closed? && @tun_info[ :tund_addr ]
         ctlmsg = [ 0, TUN_FIN ].pack( 'NC' )
         send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
       end
@@ -138,109 +146,9 @@ module Girl
 
     private
 
-    def loop_heartbeat
-      Thread.new do
-        loop do
-          sleep 59
-
-          @mutex.synchronize do
-            send_heartbeat
-          end
-        end
-      end
-    end
-
-    def loop_resend
-      Thread.new do
-        loop do
-          sleep RESEND_INTERVAL
-
-          if @tun_info[ :queue ].any?
-            @mutex.synchronize do
-              now = Time.new
-
-              while @tun_info[ :queue ].any?
-                mem_sym, mem_id, add_at, times = @tun_info[ :queue ].first
-
-                if now - add_at < RESEND_AFTER
-                  break
-                end
-
-                @tun_info[ :queue ].shift
-
-                if mem_sym == :traffic
-                  source_id, pack_id = mem_id
-                  packs = @tun_info[ :wmems ][ mem_sym ][ source_id ]
-
-                  if packs
-                    pack = packs[ pack_id ]
-                  end
-                else
-                  source_id = mem_id
-                  pack = @tun_info[ :wmems ][ mem_sym ][ source_id ]
-                end
-
-                if pack
-                  if times > RESEND_LIMIT
-                    puts "resend out of #{ RESEND_LIMIT } tun #{ @tun.object_id } #{ Socket.unpack_sockaddr_in( @tun_info[ :tund_addr ] ).inspect } #{ now }"
-                    source = @tun_info[ :sources ][ source_id ]
-
-                    if source && !source.closed?
-                      @ctlw.write( [ CTL_CLOSE_SOCK, [ source.object_id ].pack( 'N' ) ].join )
-                    end
-                  else
-                    # puts "debug resend #{ mem_id.inspect } times #{ times + 1 } #{ Time.new }" if times > 5
-                    send_pack( @tun, pack, @tun_info[ :tund_addr ], mem_sym, mem_id, times + 1 )
-                  end
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-
-    def loop_resume
-      Thread.new do
-        loop do
-          sleep RESUME_INTERVAL
-
-          if @tun_info[ :paused ] && ( @tun_info[ :queue ].size < RESUME_BELOW )
-            @mutex.synchronize do
-              @ctlw.write( CTL_RESUME )
-              @tun_info[ :paused ] = false
-            end
-          end
-        end
-      end
-    end
-
-    def loop_clean
-      Thread.new do
-        loop do
-          sleep 30
-
-          if @tun_info[ :source_fin2s ].any? && @tun_info[ :wbuff ].empty? && @tun_info[ :cache ].empty? && @tun_info[ :chunks ].empty?
-            @mutex.synchronize do
-              @tun_info[ :source_fin2s ].size.times do
-                source_id = @tun_info[ :source_fin2s ].shift
-                packs = @tun_info[ :wmems ][ :traffic ][ source_id ]
-
-                if packs
-                  # 若该source_id的写后为空，删除该节点。反之加回 :source_fin2s。
-                  if packs.empty?
-                    delete_wmem_traffic( source_id )
-                  else
-                    @tun_info[ :source_fin2s ] << source_id
-                  end
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-
+    ##
+    # read ctlr
+    #
     def read_ctlr( ctlr )
       case ctlr.read( 1 )
       when CTL_CLOSE_SOCK
@@ -251,16 +159,19 @@ module Girl
           add_closing( sock )
         end
       when CTL_RESUME
-        # puts "debug resume #{ @tun.object_id } #{ Time.new }"
+        puts "resume tun #{ Time.new } p#{ Process.pid }"
         add_write( @tun )
       end
     end
 
-    def read_redir( sock )
+    ##
+    # read redir
+    #
+    def read_redir( redir )
       begin
-        source, addrinfo = sock.accept_nonblock
+        source, addrinfo = redir.accept_nonblock
       rescue IO::WaitReadable, Errno::EINTR => e
-        puts "accept source #{ e.class }"
+        puts "accept source #{ e.class } #{ Time.new } p#{ Process.pid }"
         return
       end
 
@@ -268,7 +179,7 @@ module Girl
         # /usr/include/linux/netfilter_ipv4.h
         option = source.getsockopt( Socket::SOL_IP, 80 )
       rescue Exception => e
-        puts "get SO_ORIGINAL_DST #{ e.class }"
+        puts "get SO_ORIGINAL_DST #{ e.class } #{ Time.new } p#{ Process.pid }"
         source.close
         return
       end
@@ -278,43 +189,46 @@ module Girl
       @socks[ source_id ] = source
       @roles[ source ] = :source
       @infos[ source ] = {
-        id: source_id,
         wbuff: '',
         cache: '',
         filename: [ Process.pid, source_id ].join( '-' ),
         chunk_dir: @source_chunk_dir,
         chunks: [],
         chunk_seed: 0,
-        pcur: 0,
-        dest_pcur: 0,
-        pieces: {},
-        dest_last_pack_id: nil
+        pcur: 0
       }
-      @reads << source
-      @tun_info[ :sources ][ source_id ] = source
-      @tun_info[ :wmems ][ :traffic ][ source_id ] = {}
+      @tun_info[ :sources ] << source
+      @tun_info[ :source_exts ][ source_id ] = {
+        source: source,
+        wmems: {},                 # 写后缓存 pack_id => [ data, add_at ]
+        biggest_pack_id: 0,        # 发到几
+        continue_dest_pack_id: 0,  # 收到几
+        pieces: {},                # 跳号包 dest_pack_id => data
+        dest_id: nil,              # 对面id
+        is_dest_closed: false,     # 对面是否已关闭
+        biggest_dest_pack_id: 0,   # 对面发到几
+        completed_pack_id: 0       # 完成到几（对面收到几）
+      }
 
-      ctlmsg = [ [ 0, A_NEW_SOURCE, source_id ].pack( 'NCN' ), option.data ].join
-      send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :a_new_source, source_id )
+      add_read( source )
+      loop_send_a_new_source( source_id, option.data )
     end
 
-    def read_source( sock )
+    ##
+    # read source
+    #
+    def read_source( source )
       begin
-        data = sock.read_nonblock( PACK_SIZE )
+        data = source.read_nonblock( PACK_SIZE )
       rescue IO::WaitReadable, Errno::EINTR => e
         return
-      rescue IO::WaitWritable => e
-        @reads.delete( sock )
-
-        unless @read_after_writables.include?( sock )
-          @read_after_writables << sock
-        end
       rescue Exception => e
-        add_closing( sock )
+        add_closing( source )
         return
       end
 
-      info = @infos[ sock ]
+      # puts "debug read source #{ data.inspect } #{ Time.new } p#{ Process.pid }"
+      info = @infos[ source ]
       pack_id = info[ :pcur ] + 1
 
       # ssh的第一段流量是明文版本号，https的第一段流量含明文域名，如果需要，混淆它。
@@ -323,91 +237,190 @@ module Girl
         data = @hex.encode( data )
       end
 
-      prefix = [ data.bytesize, info[ :id ], pack_id ].pack( 'nNN' )
-      add_buff( @tun, [ prefix, data ].join, !info[ :paused ] )
+      prefix = [ data.bytesize, source.object_id, pack_id ].pack( 'nNN' )
+      is_add_write = @tun_info[ :tund_addr ] && !@tun_info[ :paused ]
+      add_buff( @tun, [ prefix, data ].join, is_add_write )
       info[ :pcur ] = pack_id
     end
 
-    def read_tun( sock )
-      info = @infos[ sock ]
-      data, addrinfo, rflags, *controls = sock.recvmsg
+    ##
+    # read tun
+    #
+    def read_tun( tun )
+      info = @infos[ tun ]
+      data, addrinfo, rflags, *controls = tun.recvmsg
+      info[ :last_coming_at ] = Time.new
       dest_id = data[ 0, 4 ].unpack( 'N' ).first
 
       if dest_id == 0
-        ctl_num = data[ 4 ].unpack( 'C' ).first
+        case data[ 4 ].unpack( 'C' ).first
+        when TUND_PORT
+          tund_port = data[ 5, 2 ].unpack( 'n' ).first
+          # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
 
-        case ctl_num
+          info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
+          send_heartbeat
+          add_write( tun )
         when PAIRED
           source_id, dest_id = data[ 5, 8 ].unpack( 'NN' )
-          info[ :wmems ][ :a_new_source ].delete( source_id )
+          # puts "debug got PAIRED #{ source_id } #{ dest_id } #{ Time.new } p#{ Process.pid }"
 
-          if info[ :dst_src ].include?( dest_id )
-            puts " #{ dest_id } already paired"
-            return
-          end
+          ext = info[ :source_exts ][ source_id ]
+          return if ext.nil? || ext[ :dest_id ]
 
+          ext[ :dest_id ] = dest_id
           info[ :dst_src ][ dest_id ] = source_id
-          info[ :src_dst ][ source_id ] = dest_id
-        when CONFIRM_A_PACK
-          source_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
-          packs = info[ :wmems ][ :traffic ][ source_id ]
-
-          if packs
-            packs.delete( pack_id )
-          end
-        when DEST_FIN
-          dest_id, last_pack_id = data[ 5, 8 ].unpack( 'NN' )
-          ctlmsg = [ 0, CONFIRM_DEST_FIN, dest_id ].pack( 'NCN' )
-          send_pack( sock, ctlmsg, info[ :tund_addr ] )
+        when DEST_STATUS
+          dest_id, biggest_dest_pack_id, continue_source_pack_id  = data[ 5, 16 ].unpack( 'NNN' )
           source_id = info[ :dst_src ][ dest_id ]
-          source = info[ :sources ][ source_id ]
+          return unless source_id
 
-          if source.nil? || source.closed?
+          ext = info[ :source_exts ][ source_id ]
+          return unless ext
+
+          # 更新对面发到几
+          if biggest_dest_pack_id > ext[ :biggest_dest_pack_id ]
+            ext[ :biggest_dest_pack_id ] = biggest_dest_pack_id
+          end
+
+          # 更新对面收到几，释放写后
+          if continue_source_pack_id > ext[ :completed_pack_id ]
+            wmems = ext[ :wmems ]
+            pack_ids = wmems.keys.select { | pack_id | pack_id <= continue_source_pack_id }
+            pack_ids.each { | pack_id | wmems.delete( pack_id ) }
+            info[ :wmems_size ] -= pack_ids.size
+            # puts "debug completed #{ continue_source_pack_id } wmems #{ info[ :wmems_size ] }"
+            ext[ :completed_pack_id ] = continue_source_pack_id
+          end
+
+          #   2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true
+          # > 2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source
+          #   2-3. source.close > ext.is_dest_closed > del ext > loop send fin2
+          #   2-4. recv got_fin2 > break loop
+          if ext[ :is_dest_closed ] && ( ext[ :biggest_dest_pack_id ] == ext[ :continue_dest_pack_id ] )
+            # puts "debug 2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source #{ Time.new } p#{ Process.pid }"
+            add_closing( ext[ :source ] )
             return
           end
 
-          source_info = @infos[ source ]
-          source_info[ :dest_last_pack_id ] = last_pack_id
-          add_write( source )
-        when CONFIRM_SOURCE_FIN
-          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          # 发miss
+          if !ext[ :source ].closed? && ( ext[ :continue_dest_pack_id ] < ext[ :biggest_dest_pack_id ] )
+            ranges = []
+            curr_pack_id = ext[ :continue_dest_pack_id ] + 1
 
-          if info[ :wmems ][ :source_fin ].delete( source_id )
-            packs = info[ :wmems ][ :traffic ][ source_id ]
-
-            if packs
-              # 若tun写前为空，该source_id的写后也为空，删除该节点。反之记入 :source_fin2s。
-              if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
-                delete_wmem_traffic( source_id )
-              else
-                info[ :source_fin2s ] << source_id
+            ext[ :pieces ].keys.sort.each do | pack_id |
+              if pack_id > curr_pack_id
+                ranges << [ curr_pack_id, pack_id - 1 ]
               end
+
+              curr_pack_id = pack_id + 1
+            end
+
+            if curr_pack_id <= ext[ :biggest_dest_pack_id ]
+              ranges << [ curr_pack_id, ext[ :biggest_dest_pack_id ] ]
+            end
+
+            # puts "debug #{ ext[ :continue_dest_pack_id ] }/#{ ext[ :biggest_dest_pack_id ] } send MISS #{ ranges.size }"
+            ranges.each do | pack_id_begin, pack_id_end |
+              ctlmsg = [
+                0,
+                MISS,
+                dest_id,
+                pack_id_begin,
+                pack_id_end
+              ].pack( 'NCNNN' )
+
+              send_pack( @tun, ctlmsg,  @tun_info[ :tund_addr ] )
             end
           end
+        when MISS
+          source_id, pack_id_begin, pack_id_end = data[ 5, 12 ].unpack( 'NNN' )
+          ext = info[ :source_exts ][ source_id ]
+          return unless ext
+
+          ( pack_id_begin..pack_id_end ).each do | pack_id |
+            data, add_at = ext[ :wmems ][ pack_id ]
+            break if Time.new - add_at < 1
+
+            if data
+              send_pack( tun, data, info[ :tund_addr ] )
+            end
+          end
+        when FIN1
+          # > 2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true
+          #   2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source
+          #   2-3. source.close > ext.is_dest_closed > del ext > loop send fin2
+          #   2-4. recv got_fin2 > break loop
+
+          # puts "debug 2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true #{ Time.new } p#{ Process.pid }"
+          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          ctlmsg = [
+            0,
+            GOT_FIN1,
+            dest_id
+          ].pack( 'NCN' )
+
+          send_pack( tun, ctlmsg, info[ :tund_addr ] )
+
+          source_id = info[ :dst_src ][ dest_id ]
+          return unless source_id
+
+          ext = info[ :source_exts ][ source_id ]
+          return unless ext
+
+          ext[ :is_dest_closed ] = true
+        when GOT_FIN1
+          #   1-1. source.close > !ext.is_dest_closed > send fin1 loop
+          # > 1-2. recv got_fin1 > break loop
+          #   1-3. recv fin2 > send got_fin2 > del ext
+
+          # puts "debug 1-2. recv got_fin1 > break loop #{ Time.new } p#{ Process.pid }"
+          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          info[ :fin1s ].delete( source_id )
+        when FIN2
+          #   1-1. source.close > !ext.is_dest_closed > send fin1 loop
+          #   1-2. recv got_fin1 > break loop
+          # > 1-3. recv fin2 > send got_fin2 > del ext
+
+          # puts "debug 1-3. recv fin2 > send got_fin2 > del ext #{ Time.new } p#{ Process.pid }"
+          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          ctlmsg = [
+            0,
+            GOT_FIN2,
+            dest_id
+          ].pack( 'NCN' )
+
+          send_pack( tun, ctlmsg, info[ :tund_addr ] )
+
+          source_id = info[ :dst_src ].delete( dest_id )
+          return unless source_id
+
+          del_source_ext( source_id )
+        when GOT_FIN2
+          #   2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true
+          #   2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source
+          #   2-3. source.close > ext.is_dest_closed > del ext > loop send fin2
+          # > 2-4. recv got_fin2 > break loop
+
+          # puts "debug 2-4. recv got_fin2 > break loop #{ Time.new } p#{ Process.pid }"
+          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          info[ :fin2s ].delete( source_id )
         when TUND_FIN
-          puts 'tund fin'
-          sleep 5
-          add_closing( sock )
+          puts "tund fin #{ Time.new } p#{ Process.pid }"
+          add_closing( tun )
         end
 
         return
       end
 
-      pack_id = data[ 4, 4 ].unpack( 'N' ).first
-      ctlmsg = [ 0, CONFIRM_A_PACK, dest_id, pack_id ].pack( 'NCNN' )
-      send_pack( sock, ctlmsg, info[ :tund_addr ] )
       source_id = info[ :dst_src ][ dest_id ]
-      source = info[ :sources ][ source_id ]
+      return unless source_id
 
-      if source.nil? || source.closed?
-        return
-      end
+      ext = info[ :source_exts ][ source_id ]
+      return if ext.nil? || ext[ :source ].closed?
 
-      source_info = @infos[ source ]
-
-      if pack_id <= source_info[ :dest_pcur ]
-        return
-      end
+      pack_id = data[ 4, 4 ].unpack( 'N' ).first
+      return if ( pack_id <= ext[ :continue_dest_pack_id ] ) || ext[ :pieces ].include?( pack_id )
 
       data = data[ 8..-1 ]
 
@@ -417,52 +430,42 @@ module Girl
       end
 
       # 放进source的写前缓存，跳号放碎片缓存
-      if pack_id - source_info[ :dest_pcur ] == 1
-        while source_info[ :pieces ].include?( pack_id + 1 )
-          data << source_info[ :pieces ].delete( pack_id + 1 )
+      if pack_id - ext[ :continue_dest_pack_id ] == 1
+        while ext[ :pieces ].include?( pack_id + 1 )
+          data << ext[ :pieces ].delete( pack_id + 1 )
           pack_id += 1
         end
 
-        add_buff( source, data )
-        source_info[ :dest_pcur ] = pack_id
+        ext[ :continue_dest_pack_id ] = pack_id
+        add_buff( ext[ :source ], data )
       else
-        source_info[ :pieces ][ pack_id ] = data
+        ext[ :pieces ][ pack_id ] = data
       end
     end
 
-    def write_source( sock )
-      if @closings.include?( sock )
-        close_source( sock )
+    ##
+    # write source
+    #
+    def write_source( source )
+      if @closings.include?( source )
+        close_source( source )
         return
       end
 
-      info = @infos[ sock ]
-      data, from = get_buff( sock )
+      info = @infos[ source ]
+      data, from = get_buff( source )
 
       if data.empty?
-        # 流量已收全，关闭source
-        if info[ :dest_last_pack_id ] && ( info[ :dest_last_pack_id ] == info[ :dest_pcur ] )
-          add_closing( sock )
-          return
-        end
-
-        @writes.delete( sock )
-        @write_after_readables.delete( sock )
+        @writes.delete( source )
         return
       end
 
       begin
-        written = sock.write_nonblock( data )
+        written = source.write_nonblock( data )
       rescue IO::WaitWritable, Errno::EINTR => e
         return
-      rescue IO::WaitReadable => e
-        @writes.delete( sock )
-
-        unless @write_after_readables.include?( sock )
-          @write_after_readables << sock
-        end
       rescue Exception => e
-        add_closing( sock )
+        add_closing( source )
         return
       end
 
@@ -470,56 +473,244 @@ module Girl
       info[ from ] = data
     end
 
-    def write_tun( sock )
-      if @closings.include?( sock )
+    ##
+    # write tun
+    #
+    def write_tun( tun )
+      if @closings.include?( tun )
         close_tun
         new_tun
         return
       end
 
-      info = @infos[ sock ]
+      info = @infos[ tun ]
 
-      # 重传队列超过上限，中断写
-      if info[ :queue ].size > QUEUE_LIMIT
+      # 写后缓存超过上限，中断写
+      if info[ :wmems_size ] > WMEMS_LIMIT
         unless info[ :paused ]
-          # puts "debug pause #{ @tun.object_id } #{ Time.new }"
+          puts "pause #{ Time.new } p#{ Process.pid }"
           info[ :paused ] = true
         end
 
-        @writes.delete( sock )
+        @writes.delete( tun )
         return
       end
 
-      data, from = get_buff( sock )
+      data, from = get_buff( tun )
 
       if data.empty?
-        @writes.delete( sock )
+        @writes.delete( tun )
         return
       end
 
       len = data[ 0, 2 ].unpack( 'n' ).first
       pack = data[ 2, ( 8 + len ) ]
       source_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
-      send_pack( sock, pack, info[ :tund_addr ], :traffic, [ source_id, pack_id ] )
+      ext = info[ :source_exts ][ source_id ]
+
+      if ext
+        send_pack( tun, pack, info[ :tund_addr ] )
+        ext[ :biggest_pack_id ] = pack_id
+        ext[ :wmems ][ pack_id ] = [ pack, Time.new ]
+        info[ :wmems_size ] += 1
+      end
+
       data = data[ ( 10 + len )..-1 ]
       info[ from ] = data
     end
 
-    def add_buff( sock, data, add_inst = true )
-      info = @infos[ sock ]
-      info[ :wbuff ] << data
+    def new_tun
+      tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
-      if info[ :wbuff ].size >= CHUNK_SIZE
-        filename = [ info[ :filename ], info[ :chunk_seed ] ].join( '.' )
-        chunk_path = File.join( info[ :chunk_dir ], filename )
-        IO.binwrite( chunk_path, info[ :wbuff ] )
-        info[ :chunks ] << filename
-        info[ :chunk_seed ] += 1
-        info[ :wbuff ].clear
+      tun_info = {
+        wbuff: '',                                            # 写前缓存
+        cache: '',                                            # 块读出缓存
+        filename: [ Process.pid, tun.object_id ].join( '-' ), # 块名
+        chunk_dir: @tun_chunk_dir,                            # 块目录
+        chunks: [],                                           # 块文件名，wbuff每超过1.4M落一个块
+        chunk_seed: 0,                                        # 块序号
+        tund_addr: nil,                                       # 远端地址
+        dst_src: {},                                          # dest_id => source_id
+        sources: [],                                          # 开着的source
+        source_exts: {},                                      # 传输相关 source_id => {}
+        fin1s: [],                                            # fin1: source已关闭，等待对面收完流量 source_id
+        fin2s: [],                                            # fin2: 流量已收完 source_id
+        last_coming_at: nil,                                  # 上一次来流量的时间
+        wmems_size: 0,                                        # 写后缓存总个数
+        paused: false                                         # 是否暂停写
+      }
+
+      @tun = tun
+      @roles[ tun ] = :tun
+      @tun_info = tun_info
+      @infos[ tun ] = tun_info
+
+      add_read( tun )
+      loop_send_hello
+    end
+
+    def loop_expire
+      Thread.new do
+        loop do
+          sleep CHECK_EXPIRE_INTERVAL
+
+          @mutex.synchronize do
+            if @tun_info[ :last_coming_at ] && ( Time.new - @tun_info[ :last_coming_at ] > EXPIRE_AFTER )
+              @ctlw.write( [ CTL_CLOSE_SOCK, [ @tun.object_id ].pack( 'N' ) ].join )
+            end
+          end
+        end
       end
+    end
 
-      if add_inst
-        add_write( sock )
+    def loop_send_heartbeat
+      Thread.new do
+        loop do
+          sleep HEARTBEAT_INTERVAL
+
+          @mutex.synchronize do
+            send_heartbeat
+          end
+        end
+      end
+    end
+
+    def loop_send_status
+      Thread.new do
+        loop do
+          sleep STATUS_INTERVAL
+
+          if !@tun.closed? && @tun_info[ :tund_addr ] && @tun_info[ :source_exts ].any?
+            @mutex.synchronize do
+              @tun_info[ :source_exts ].each do | source_id, ext |
+                ctlmsg = [
+                  0,
+                  SOURCE_STATUS,
+                  source_id,
+                  ext[ :biggest_pack_id ],
+                  ext[ :continue_dest_pack_id ]
+                ].pack( 'NCNNN' )
+
+                send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+              end
+            end
+          end
+
+          if !@tun.closed? && @tun_info[ :paused ] && ( @tun_info[ :wmems_size ].size < RESUME_BELOW )
+            @mutex.synchronize do
+              puts "resume #{ Time.new } p#{ Process.pid }"
+              @ctlw.write( CTL_RESUME )
+              @tun_info[ :paused ] = false
+            end
+          end
+        end
+      end
+    end
+
+    def loop_send_hello
+      Thread.new do
+        loop do
+          break if @tun.closed?
+
+          if @tun_info[ :tund_addr ]
+            # puts "debug already got tund addr, break hello loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
+          @mutex.synchronize do
+            # puts "debug send hello #{ Time.new } p#{ Process.pid }"
+            send_pack( @tun, @hex.hello, @roomd_addr )
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    def loop_send_a_new_source( source_id, original_dst )
+      Thread.new do
+        loop do
+          break if @tun.closed?
+
+          if @tun_info[ :tund_addr ]
+            ext = @tun_info[ :source_exts ][ source_id ]
+
+            if ext.nil? || ext[ :dest_id ]
+              # puts "debug break a new source loop #{ Time.new } p#{ Process.pid }"
+              break
+            end
+
+            @mutex.synchronize do
+              ctlmsg = [ [ 0, A_NEW_SOURCE, source_id ].pack( 'NCN' ), original_dst ].join
+              # puts "debug send a new source #{ Time.new } p#{ Process.pid }"
+              send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+            end
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    def loop_send_fin1( source_id )
+      Thread.new do
+        loop do
+          if @tun.closed? || !@tun_info[ :fin1s ].include?( source_id )
+            # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
+          @mutex.synchronize do
+            ctlmsg = [
+              0,
+              FIN1,
+              source_id
+            ].pack( 'NCN' )
+            # puts "debug send FIN1 #{ source_id } #{ Time.new } p#{ Process.pid }"
+            send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    def loop_send_fin2( source_id )
+      Thread.new do
+        loop do
+          if @tun.closed? || !@tun_info[ :fin2s ].include?( source_id )
+            # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
+          @mutex.synchronize do
+            ctlmsg = [
+              0,
+              FIN2,
+              source_id
+            ].pack( 'NCN' )
+            # puts "debug send FIN2 #{ source_id } #{ Time.new } p#{ Process.pid }"
+            send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    def send_heartbeat
+      return if @tun.closed? || @tun_info[ :tund_addr ].nil?
+
+      ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'NCC' )
+      send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+    end
+
+    def send_pack( sock, data, target_sockaddr )
+      begin
+        sock.sendmsg( data, 0, target_sockaddr )
+      rescue IO::WaitWritable, Errno::EINTR, Errno::EDESTADDRREQ => e
+        puts "sendmsg #{ e.class } #{ Time.new } p#{ Process.pid }"
       end
     end
 
@@ -544,43 +735,93 @@ module Girl
       [ data, from ]
     end
 
-    def send_pack( sock, pack, dest_sockaddr, mem_sym = nil, mem_id = nil, rcount = 0 )
-      begin
-        sock.sendmsg( pack, 0, dest_sockaddr )
-      rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-        puts "sendmsg #{ e.class }"
+    def add_buff( sock, data, is_add_write = true )
+      info = @infos[ sock ]
+      info[ :wbuff ] << data
+
+      if info[ :wbuff ].size >= CHUNK_SIZE
+        filename = [ info[ :filename ], info[ :chunk_seed ] ].join( '.' )
+        chunk_path = File.join( info[ :chunk_dir ], filename )
+        IO.binwrite( chunk_path, info[ :wbuff ] )
+        info[ :chunks ] << filename
+        info[ :chunk_seed ] += 1
+        info[ :wbuff ].clear
       end
 
-      if mem_sym
-        if rcount == 0
-          if mem_sym == :traffic
-            source_id, pack_id = mem_id
-            packs = @tun_info[ :wmems ][ mem_sym ][ source_id ]
-
-            if packs
-              packs[ pack_id ] = pack
-            end
-          else
-            @tun_info[ :wmems ][ mem_sym ][ mem_id ] = pack
-          end
-        end
-
-        @tun_info[ :queue ] << [ mem_sym, mem_id, Time.new, rcount ]
+      if is_add_write
+        add_write( sock )
       end
     end
 
-    def add_closing( sock )
-      unless @closings.include?( sock )
-        @reads.delete( sock )
-        @closings << sock
-      end
+    def add_read( sock )
+      return if sock.closed? || @reads.include?( sock )
 
-      add_write( sock )
+      @reads << sock
     end
 
     def add_write( sock )
-      unless @writes.include?( sock )
-        @writes << sock
+      return if sock.closed? || @writes.include?( sock )
+
+      @writes << sock
+    end
+
+    def add_closing( sock )
+      return if sock.closed? || @closings.include?( sock )
+
+      @reads.delete( sock )
+      @closings << sock
+      add_write( sock )
+    end
+
+    def del_source_ext( source_id )
+      ext = @tun_info[ :source_exts ].delete( source_id )
+      return if ext.nil? || ext[ :wmems ].empty?
+
+      @tun_info[ :wmems_size ] -= ext[ :wmems ].size
+      # puts "debug delete ext, wmems #{ @tun_info[ :wmems_size ] } #{ Time.new } p#{ Process.pid }"
+    end
+
+    def close_tun
+      close_sock( @tun )
+      @tun_info[ :sources ].each { | source | add_closing( source ) }
+    end
+
+    def close_source( source )
+      close_sock( source )
+      return if @tun.closed?
+
+      @tun_info[ :sources ].delete( source )
+      source_id = source.object_id
+      ext = @tun_info[ :source_exts ][ source_id ]
+
+      if ext
+        ext[ :pieces ].clear
+
+        if ext[ :is_dest_closed ]
+          #   2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true
+          #   2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source
+          # > 2-3. source.close > ext.is_dest_closed > del ext > loop send fin2
+          #   2-4. recv got_fin2 > break loop
+
+          # puts "debug 2-3. source.close > ext.is_dest_closed > del ext > loop send fin2 #{ Time.new } p#{ Process.pid }"
+          @tun_info[ :dst_src ].delete( ext[ :dest_id ] )
+          del_source_ext( source_id )
+
+          unless @tun_info[ :fin2s ].include?( source_id )
+            @tun_info[ :fin2s ] << source_id
+            loop_send_fin2( source_id )
+          end
+        else
+          # > 1-1. source.close > !ext.is_dest_closed > send fin1 loop
+          #   1-2. recv got_fin1 > break loop
+          #   1-3. recv fin2 > send got_fin2 > del ext
+
+          # puts "debug 1-1. source.close > !ext.is_dest_closed > send fin1 loop #{ Time.new } p#{ Process.pid }"
+          unless @tun_info[ :fin1s ].include?( source_id )
+            @tun_info[ :fin1s ] << source_id
+            loop_send_fin1( source_id )
+          end
+        end
       end
     end
 
@@ -603,88 +844,6 @@ module Girl
       end
 
       info
-    end
-
-    def delete_wmem_traffic( source_id )
-      @tun_info[ :wmems ][ :traffic ].delete( source_id )
-      dest_id = @tun_info[ :src_dst ].delete( source_id )
-      @tun_info[ :dst_src ].delete( dest_id )
-    end
-
-    def new_redir
-      redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      redir.bind( Socket.sockaddr_in( @redir_port, '0.0.0.0' ) )
-      redir.listen( 511 )
-
-      @redir = redir
-      @roles[ redir ] = :redir
-      @reads << redir
-    end
-
-    def new_tun
-      tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-      send_pack( tun, @hex.hello, @roomd_addr )
-      rs, ws = IO.select( [ tun ], [], [], 5 )
-
-      unless rs
-        raise 'apply for a tunnel timeout'
-      end
-
-      data, addrinfo, rflags, *controls = rs.first.recvmsg
-      tund_port = data.unpack( 'n' ).first
-      puts "tund #{ tund_port }"
-
-      tun_info = {
-        wbuff: '', # 写前缓存
-        cache: '', # 块读出缓存
-        filename: [ Process.pid, tun.object_id ].join( '-' ), # 块名
-        chunk_dir: @tun_chunk_dir, # 块目录
-        chunks: [], # 块文件名，wbuff每超过1.4M落一个块
-        chunk_seed: 0, # 块序号
-        wmems: { # 写后缓存
-          traffic: {}, # 流量包 source_id => traffics
-          a_new_source: {}, # source_id => ctlmsg
-          source_fin: {} # source_id => ctlmsg
-        },
-        source_fin2s: [], # 已被tund确认关闭的source_ids
-        tund_addr: Socket.sockaddr_in( tund_port, @tund_ip ), # 远端地址
-        sources: {}, # source_id => source
-        dst_src: {}, # source_id => dest_id
-        src_dst: {}, # dest_id => source_id
-        queue: [], # 重传队列
-        paused: false # 是否暂停写
-      }
-
-      @tun = tun
-      @tun_info = tun_info
-      @roles[ tun ] = :tun
-      @infos[ tun ] = tun_info
-      @reads << tun
-
-      send_heartbeat
-    end
-
-    def close_source( sock )
-      info = close_sock( sock )
-
-      unless info[ :dest_last_pack_id ]
-        ctlmsg = [ 0, SOURCE_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
-        send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ], :source_fin, info[ :id ] )
-      end
-    end
-
-    def close_tun
-      close_sock( @tun )
-      @tun_info[ :sources ].each { | _, source | close_sock( source ) }
-    end
-
-    def send_heartbeat
-      ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'NCC' )
-      send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
     end
   end
 end

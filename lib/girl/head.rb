@@ -1,22 +1,25 @@
 module Girl
-  PACK_SIZE = 1448              # 包大小 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(source/dest id) - 8(pack id) = 1448
-  CHUNK_SIZE = PACK_SIZE * 1000 # 块大小
-  RESEND_AFTER = 1              # 几秒后重传
-  QUEUE_LIMIT = 4000            # 重传队列上限，到达上限暂停写（只重传，不写新的）
-  RESUME_BELOW = 500            # 降到多少以下恢复写
-  RESEND_INTERVAL = 0.01        # 检查重传间隔
-  RESEND_LIMIT = 20             # 重传次数上限
-  RESUME_INTERVAL = 0.1         # 检查恢复写间隔
-  HEARTBEAT = 1
-  A_NEW_SOURCE = 2
-  PAIRED = 3
-  CONFIRM_A_PACK = 4
-  DEST_FIN = 5
-  SOURCE_FIN = 6
-  CONFIRM_DEST_FIN = 7
-  CONFIRM_SOURCE_FIN = 8
-  TUND_FIN = 9
-  TUN_FIN = 10
-  CTL_CLOSE_SOCK = [ 1 ].pack( 'C' )
-  CTL_RESUME = [ 2 ].pack( 'C' )
+  PACK_SIZE             = 1448             # 包大小 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(source/dest id) - 8(pack id) = 1448
+  CHUNK_SIZE            = PACK_SIZE * 1000 # 块大小
+  WMEMS_LIMIT           = 100_000          # 写后缓存上限，到达上限暂停写
+  RESUME_BELOW          = 50_000           # 降到多少以下恢复写
+  CHECK_EXPIRE_INTERVAL = 900              # 检查过期间隔
+  EXPIRE_AFTER          = 1800             # 多久过期
+  HEARTBEAT_INTERVAL    = 59               # 心跳间隔
+  STATUS_INTERVAL       = 0.5              # 发送状态间隔
+  TUND_PORT             = 1
+  HEARTBEAT             = 2
+  A_NEW_SOURCE          = 3
+  PAIRED                = 4
+  DEST_STATUS           = 5
+  SOURCE_STATUS         = 6
+  MISS                  = 7
+  FIN1                  = 8
+  GOT_FIN1              = 9
+  FIN2                  = 10
+  GOT_FIN2              = 11
+  TUND_FIN              = 12
+  TUN_FIN               = 13
+  CTL_CLOSE_SOCK        = [ 1 ].pack( 'C' )
+  CTL_RESUME            = [ 2 ].pack( 'C' )
 end

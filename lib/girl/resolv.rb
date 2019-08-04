@@ -8,11 +8,11 @@ require 'socket'
 # usage
 # =====
 #
-# 1. Girl::Resolvd.new( 7070 ).looping # @server
+# Girl::Resolvd.new( 7070 ).looping # 远端
 #
-# 2. Girl::Resolv.new( 1717, [ '114.114.114.114' ], 'your.server.ip', 7070, [ 'google.com' ] ).looping # @home
+# Girl::Resolv.new( 1717, [ '114.114.114.114' ], 'your.server.ip', 7070, [ 'google.com' ] ).looping # 近端
 #
-# 3. dig google.com @127.0.0.1 -p1717
+# dig google.com @127.0.0.1 -p1717
 #
 module Girl
   class Resolv

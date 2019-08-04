@@ -6,15 +6,27 @@ require 'socket'
 ##
 # Girl::Tund - tcp流量正常的到达目的地。远端。
 #
+##
+# 两套关闭
+# ========
+#
+# 1-1. dest.close > !ext.is_source_closed > send fin1 loop
+# 1-2. recv got_fin1 > break loop
+# 1-3. recv fin2 > send got_fin2 > del ext
+#
+# 2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
+# 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
+# 2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
+# 2-4. recv got_fin2 > break loop
+#
 module Girl
   class Tund
     ##
     # roomd_port     roomd端口，roomd用于配对tun-tund
-    # dest_chunk_dir 文件缓存目录，缓存dest来不及写的流量
-    # tund_chunk_dir 文件缓存目录，缓存tund来不及写的流量
+    # dest_chunk_dir 文件缓存目录，缓存dest写前
+    # tund_chunk_dir 文件缓存目录，缓存tund写前
     #
     def initialize( roomd_port = 9090, dest_chunk_dir = '/tmp', tund_chunk_dir = '/tmp' )
-      @roomd_port = roomd_port
       @dest_chunk_dir = dest_chunk_dir
       @tund_chunk_dir = tund_chunk_dir
       @hex = Girl::Hex.new
@@ -25,24 +37,34 @@ module Girl
       @socks = {} # object_id => sock
       @roles = {} # sock => :ctlr / :roomd / :dest / :tund
       @infos = {}
-      @read_after_writables = []
-      @write_after_readables = []
 
       ctlr, ctlw = IO.pipe
       @ctlw = ctlw
       @roles[ ctlr ] = :ctlr
       @reads << ctlr
 
-      new_roomd
+      roomd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      roomd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      roomd.bind( Socket.sockaddr_in( roomd_port, '0.0.0.0' ) )
+      roomd_info = {
+        tunds: [],        # tund
+        paused_tunds: [], # 暂停写的tunds
+        tund_clients: {}, # tund => sockaddr
+        wmems_size: 0     # 写后缓存总个数
+      }
+
+      @roomd = roomd
+      @roomd_info = roomd_info
+      @roles[ roomd ] = :roomd
+      @infos[ roomd ] = roomd_info
+      @reads << roomd
     end
 
     def looping
       puts 'looping'
 
-      loop_resend
-      loop_resume
-      loop_clean
       loop_expire
+      loop_send_status
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -55,13 +77,7 @@ module Girl
             when :roomd
               read_roomd( sock )
             when :dest
-              if @write_after_readables.include?( sock )
-                puts "write dest #{ sock.object_id } after a TLS/SSL handshake #{ Time.new }"
-                add_write( sock )
-                write_dest( @write_after_readables.delete( sock ) )
-              else
-                read_dest( sock )
-              end
+              read_dest( sock )
             when :tund
               read_tund( sock )
             end
@@ -70,13 +86,7 @@ module Girl
           ws.each do | sock |
             case @roles[ sock ]
             when :dest
-              if @read_after_writables.include?( sock )
-                puts "read dest #{ sock.object_id } after a TLS/SSL handshake #{ Time.new }"
-                @reads << sock
-                read_dest( @read_after_writables.delete( sock ) )
-              else
-                write_dest( sock )
-              end
+              write_dest( sock )
             when :tund
               write_tund( sock )
             end
@@ -91,18 +101,14 @@ module Girl
     def quit!
       ctlmsg = [ 0, TUND_FIN ].pack( 'NC' )
 
-      @roomd_info[ :tunds ].keys.each do | tund |
-        if tund.closed?
-          next
+      @roomd_info[ :tunds ].each do | tund |
+        unless tund.closed?
+          tund_info = @infos[ tund ]
+
+          if tund_info[ :tun_addr ]
+            send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
+          end
         end
-
-        tund_info = @infos[ tund ]
-
-        unless tund_info[ :tun_addr ]
-          next
-        end
-
-        send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
       end
 
       exit
@@ -110,129 +116,9 @@ module Girl
 
     private
 
-    def loop_resend
-      Thread.new do
-        loop do
-          sleep RESEND_INTERVAL
-
-          if @roomd_info[ :queue ].any?
-            @mutex.synchronize do
-              now = Time.new
-
-              while @roomd_info[ :queue ].any?
-                tund, mem_sym, mem_id, add_at, times = @roomd_info[ :queue ].first
-
-                if now - add_at < RESEND_AFTER
-                  break
-                end
-
-                @roomd_info[ :queue ].shift
-
-                unless tund.closed?
-                  tund_info = @infos[ tund ]
-
-                  if mem_sym == :traffic
-                    dest_id, pack_id = mem_id
-                    packs = tund_info[ :wmems ][ mem_sym ][ dest_id ]
-
-                    if packs
-                      pack = packs[ pack_id ]
-                    end
-                  else
-                    dest_id = mem_id
-                    pack = tund_info[ :wmems ][ mem_sym ][ dest_id ]
-                  end
-
-                  if pack
-                    if times >= RESEND_LIMIT
-                      puts "resend out of #{ RESEND_LIMIT } tund #{ tund.object_id } to #{ Socket.unpack_sockaddr_in( tund_info[ :tun_addr ] ).inspect } #{ now }"
-                      dest = tund_info[ :dests ][ dest_id ]
-
-                      if dest && !dest.closed?
-                        @ctlw.write( [ CTL_CLOSE_SOCK, [ dest.object_id ].pack( 'N' ) ].join )
-                      end
-                    else
-                      # puts "debug resend #{ mem_id.inspect } times #{ times + 1 } #{ Time.new }" if times > 5
-                      send_pack( tund, pack, tund_info[ :tun_addr ], mem_sym, mem_id, times + 1 )
-                    end
-                  end
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-
-    def loop_resume
-      Thread.new do
-        loop do
-          sleep RESUME_INTERVAL
-
-          if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :queue ].size < RESUME_BELOW )
-            @mutex.synchronize do
-              tund_ids = @roomd_info[ :paused_tunds ].map{ | tund | tund.object_id }
-              len = tund_ids.size
-              @ctlw.write( [ CTL_RESUME, [ len ].pack( 'N' ), tund_ids.pack( 'N*' ) ].join )
-              @roomd_info[ :paused_tunds ].clear
-            end
-          end
-        end
-      end
-    end
-
-    def loop_clean
-      Thread.new do
-        loop do
-          sleep 30
-
-          if @roomd_info[ :dest_fin2s ].any?
-            @mutex.synchronize do
-              @roomd_info[ :dest_fin2s ].size.times do
-                tund, dest_id = @roomd_info[ :dest_fin2s ].shift
-
-                unless tund.closed?
-                  tund_info = @infos[ tund ]
-                  packs = tund_info[ :wmems ][ :traffic ][ dest_id ]
-
-                  if packs
-                    # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之加回 :dest_fin2s。
-                    if tund_info[ :wbuff ].empty? && tund_info[ :cache ].empty? && tund_info[ :chunks ].empty? && packs.empty?
-                      delete_wmem_traffic( tund_info, dest_id )
-                    else
-                      @roomd_info[ :dest_fin2s ] << [ tund, dest_id ]
-                    end
-                  end
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-
-    def loop_expire
-      Thread.new do
-        loop do
-          sleep 900
-
-          if @roomd_info[ :tunds ].any?
-            @mutex.synchronize do
-              now = Time.new
-
-              @roomd_info[ :tunds ].keys.each do | tund |
-                info = @infos[ tund ]
-
-                if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] > 1800 )
-                  @ctlw.write( [ CTL_CLOSE_SOCK, [ tund.object_id ].pack( 'N' ) ].join )
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-
+    ##
+    # read ctlr
+    #
     def read_ctlr( ctlr )
       case ctlr.read( 1 )
       when CTL_CLOSE_SOCK
@@ -243,10 +129,10 @@ module Girl
           add_closing( sock )
         end
       when CTL_RESUME
-        len = ctlr.read( 4 ).unpack( 'N' ).first
+        len = ctlr.read( 2 ).unpack( 'n' ).first
         tund_ids = ctlr.read( 4 * len ).unpack( 'N*' )
         tund_ids.each do | tund_id |
-          # puts "debug resume #{ tund_id } #{ Time.new }"
+          puts "resume #{ tund_id } #{ Time.new } p#{ Process.pid }"
           tund = @socks[ tund_id ]
 
           if tund
@@ -256,20 +142,19 @@ module Girl
       end
     end
 
-    def read_roomd( sock )
-      info = @infos[ sock ]
-      data, addrinfo, rflags, *controls = sock.recvmsg
+    ##
+    # read roomd
+    #
+    def read_roomd( roomd )
+      info = @infos[ roomd ]
+      data, addrinfo, rflags, *controls = roomd.recvmsg
+      sockaddr = addrinfo.to_sockaddr
+      return if info[ :tund_clients ].any? { | tund, client | client == sockaddr }
+
       result = @hex.check( data, addrinfo )
 
       if result != :success
-        puts result
-        return
-      end
-
-      client = addrinfo.to_sockaddr
-
-      if info[ :clients ].include?( client )
-        puts "tunnel already exist #{ addrinfo.ip_unpack.inspect }"
+        puts "#{ result } #{ Time.new } p#{ Process.pid }"
         return
       end
 
@@ -280,52 +165,47 @@ module Girl
       @socks[ tund_id ] = tund
       @roles[ tund ] = :tund
       @infos[ tund ] = {
-        wbuff: '', # 写前缓存
-        cache: '', # 块读出缓存
+        wbuff: '',                                      # 写前缓存
+        cache: '',                                      # 块读出缓存
         filename: [ Process.pid, tund_id ].join( '-' ), # 块名
-        chunk_dir: @tund_chunk_dir, # 块目录
-        chunks: [], # 块文件名，wbuff每超过1.4M落一个块
-        chunk_seed: 0, # 块序号
-        wmems: { # 写后缓存
-          traffic: {}, # 流量包 dest_id => traffics
-          dest_fin: {} # dest_id => ctlmsg
-        },
-        tun_addr: nil, # 近端地址
-        dests: {}, # dest_id => dest
-        src_dst: {}, # source_id => dest_id
-        dst_src: {}, # dest_id => source_id
-        last_coming_at: nil # 上一次来流量的时间
+        chunk_dir: @tund_chunk_dir,                     # 块目录
+        chunks: [],                                     # 块文件名，wbuff每超过1.4M落一个块
+        chunk_seed: 0,                                  # 块序号
+        tun_addr: nil,                                  # 近端地址
+        src_dst: {},                                    # source_id => dest_id
+        dests: [],                                      # 开着的dest
+        dest_exts: {},                                  # 传输相关 dest_id => {}
+        fin1s: [],                                      # fin1: dest已关闭，等待对面收完流量 dest_id
+        fin2s: [],                                      # fin2: 流量已收完 dest_id
+        last_coming_at: nil                             # 上一次来流量的时间
       }
-      @reads << tund
 
-      tund_port = tund.local_address.ip_unpack.last
-      send_pack( sock, [ tund_port ].pack( 'n' ), client )
-      info[ :clients ] << client
-      info[ :tunds ][ tund ] = client
-      puts "p#{ Process.pid } #{ info[ :tunds ].size } tunds #{ Time.new }"
+      info[ :tunds ] << tund
+      puts "tunds size #{ info[ :tunds ].size } #{ Time.new } p#{ Process.pid }"
+      info[ :tund_clients ][ tund ] = sockaddr
+
+      add_read( tund )
+      loop_send_tund_port( tund, sockaddr )
     end
 
-    def read_dest( sock )
+    ##
+    # read dest
+    #
+    def read_dest( dest )
       begin
-        data = sock.read_nonblock( PACK_SIZE )
+        data = dest.read_nonblock( PACK_SIZE )
       rescue IO::WaitReadable, Errno::EINTR => e
         return
-      rescue IO::WaitWritable => e
-        @reads.delete( sock )
-
-        unless @read_after_writables.include?( sock )
-          @read_after_writables << sock
-        end
       rescue Exception => e
-        add_closing( sock )
+        add_closing( dest )
         return
       end
 
-      info = @infos[ sock ]
+      info = @infos[ dest ]
       tund = info[ :tund ]
 
       if tund.closed?
-        add_closing( sock )
+        add_closing( dest )
         return
       end
 
@@ -335,22 +215,25 @@ module Girl
         data = @hex.encode( data )
       end
 
-      prefix = [ data.bytesize, info[ :id ], pack_id ].pack( 'nNN' )
-      add_inst = !@roomd_info[ :paused_tunds ].include?( tund )
-      add_buff( tund, [ prefix, data ].join, add_inst )
+      prefix = [ data.bytesize, dest.object_id, pack_id ].pack( 'nNN' )
+      is_add_write = !@roomd_info[ :paused_tunds ].include?( tund )
+      add_buff( tund, [ prefix, data ].join, is_add_write )
       info[ :pcur ] = pack_id
     end
 
-    def read_tund( sock )
-      info = @infos[ sock ]
-      data, addrinfo, rflags, *controls = sock.recvmsg
+    ##
+    # read tund
+    #
+    def read_tund( tund )
+      info = @infos[ tund ]
+      data, addrinfo, rflags, *controls = tund.recvmsg
       tun_addr = addrinfo.to_sockaddr
 
       if info[ :tun_addr ].nil?
         info[ :tun_addr ] = tun_addr
-        add_write( sock )
+        add_write( tund )
       elsif info[ :tun_addr ] != tun_addr
-        puts "tun addr not match? #{ addrinfo.ip_unpack.inspect }"
+        puts "tun addr not match? #{ addrinfo.ip_unpack.inspect } #{ Time.new } p#{ Process.pid }"
         return
       end
 
@@ -365,103 +248,203 @@ module Girl
           source_id = data[ 5, 4 ].unpack( 'N' ).first
           dest_id = info[ :src_dst ][ source_id ]
 
-          unless dest_id
-            dst_family, dst_port, dst_host = data[ 9, 8 ].unpack( 'nnN' )
-            dest = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-            dest.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-
-            begin
-              dest.connect_nonblock( Socket.sockaddr_in( dst_port, dst_host ) )
-            rescue IO::WaitWritable, Errno::EINTR
-            end
-
-            dest_id = dest.object_id
-
-            @socks[ dest_id ] = dest
-            @roles[ dest ] = :dest
-            @infos[ dest ] = {
-              id: dest_id,
-              wbuff: '',
-              cache: '',
-              filename: [ Process.pid, dest_id ].join( '-' ),
-              chunk_dir: @dest_chunk_dir,
-              chunks: [],
-              chunk_seed: 0,
-              pieces: {}, # 跳号缓存
-              pcur: 0, # 打包光标
-              source_pcur: 0, # 写前光标
-              source_last_pack_id: nil,
-              tund: sock
-            }
-            @reads << dest
-
-            info[ :dests ][ dest_id ] = dest
-            info[ :src_dst ][ source_id ] = dest_id
-            info[ :dst_src ][ dest_id ] = source_id
-            info[ :wmems ][ :traffic ][ dest_id ] = {}
-          end
-
-          ctlmsg = [ 0, PAIRED, source_id, dest_id ].pack( 'NCNN' )
-          send_pack( sock, ctlmsg, info[ :tun_addr ] )
-        when CONFIRM_A_PACK
-          dest_id, pack_id = data[ 5, 8 ].unpack( 'NN' )
-          packs = info[ :wmems ][ :traffic ][ dest_id ]
-
-          if packs
-            packs.delete( pack_id )
-          end
-        when SOURCE_FIN
-          source_id, last_pack_id = data[ 5, 8 ].unpack( 'NN' )
-          ctlmsg = [ 0, CONFIRM_SOURCE_FIN, source_id ].pack( 'NCN' )
-          send_pack( sock, ctlmsg, info[ :tun_addr ] )
-          dest_id = info[ :src_dst ][ source_id ]
-          dest = info[ :dests ][ dest_id ]
-
-          if dest.nil? || dest.closed?
+          if dest_id
+            send_paired( tund, source_id, dest_id )
             return
           end
 
-          dest_info = @infos[ dest ]
-          dest_info[ :source_last_pack_id ] = last_pack_id
-          add_write( dest )
-        when CONFIRM_DEST_FIN
-          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          dst_family, dst_port, dst_host = data[ 9, 8 ].unpack( 'nnN' )
+          dest = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+          dest.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
-          if info[ :wmems ][ :dest_fin ].delete( dest_id )
-            packs = info[ :wmems ][ :traffic ][ dest_id ]
+          begin
+            dest.connect_nonblock( Socket.sockaddr_in( dst_port, dst_host ) )
+          rescue IO::WaitWritable, Errno::EINTR
+          end
 
-            if packs
-              # 若tund写前为空，该dest_id的写后也为空，删除该节点。反之记入 :dest_fin2s。
-              if info[ :wbuff ].empty? && info[ :cache ].empty? && info[ :chunks ].empty? && packs.empty?
-                delete_wmem_traffic( info, dest_id )
-              else
-                @roomd_info[ :dest_fin2s ] << [ sock, dest_id ]
+          dest_id = dest.object_id
+
+          @socks[ dest_id ] = dest
+          @roles[ dest ] = :dest
+          @infos[ dest ] = {
+            wbuff: '',
+            cache: '',
+            filename: [ Process.pid, dest_id ].join( '-' ),
+            chunk_dir: @dest_chunk_dir,
+            chunks: [],
+            chunk_seed: 0,
+            pcur: 0, # 打包光标
+            tund: tund
+          }
+
+          info[ :dests ] << dest
+          info[ :dest_exts ][ dest_id ] = {
+            dest: dest,
+            wmems: {},                   # 写后缓存 pack_id => [ data, add_at ]
+            biggest_pack_id: 0,          # 发到几
+            continue_source_pack_id: 0,  # 收到几
+            pieces: {},                  # 跳号包 source_pack_id => data
+            source_id: source_id,        # 对面id
+            is_source_closed: false,     # 对面是否已关闭
+            biggest_source_pack_id: 0,   # 对面发到几
+            completed_pack_id: 0         # 完成到几（对面收到几）
+          }
+          info[ :src_dst ][ source_id ] = dest_id
+          add_read( dest )
+          send_paired( tund, source_id, dest_id )
+        when SOURCE_STATUS
+          source_id, biggest_source_pack_id, continue_dest_pack_id  = data[ 5, 12 ].unpack( 'NNN' )
+          dest_id = info[ :src_dst ][ source_id ]
+          return unless dest_id
+
+          ext = info[ :dest_exts ][ dest_id ]
+          return unless ext
+
+          # 更新对面发到几
+          if biggest_source_pack_id > ext[ :biggest_source_pack_id ]
+            ext[ :biggest_source_pack_id ] = biggest_source_pack_id
+          end
+
+          # 更新对面收到几，释放写后
+          if continue_dest_pack_id > ext[ :completed_pack_id ]
+            wmems = ext[ :wmems ]
+            pack_ids = wmems.keys.select { | pack_id | pack_id <= continue_dest_pack_id }
+            pack_ids.each { | pack_id | wmems.delete( pack_id ) }
+            @roomd_info[ :wmems_size ] -= pack_ids.size
+            # puts "debug completed #{ continue_dest_pack_id } wmems #{ @roomd_info[ :wmems_size ] }"
+            ext[ :completed_pack_id ] = continue_dest_pack_id
+          end
+
+          #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
+          # > 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
+          #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
+          #   2-4. recv got_fin2 > break loop
+          if ext[ :is_source_closed ] && ( ext[ :biggest_source_pack_id ] == ext[ :continue_source_pack_id ] )
+            # puts "debug 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest #{ Time.new } p#{ Process.pid }"
+            add_closing( ext[ :dest ] )
+            return
+          end
+
+          # 发miss
+          if !ext[ :dest ].closed? && ( ext[ :continue_source_pack_id ] < ext[ :biggest_source_pack_id ] )
+            ranges = []
+            curr_pack_id = ext[ :continue_source_pack_id ] + 1
+
+            ext[ :pieces ].keys.sort.each do | pack_id |
+              if pack_id > curr_pack_id
+                ranges << [ curr_pack_id, pack_id - 1 ]
               end
+
+              curr_pack_id = pack_id + 1
+            end
+
+            if curr_pack_id <= ext[ :biggest_source_pack_id ]
+              ranges << [ curr_pack_id, ext[ :biggest_source_pack_id ] ]
+            end
+
+            # puts "debug #{ ext[ :continue_source_pack_id ] }/#{ ext[ :biggest_source_pack_id ] } send MISS #{ ranges.size }"
+            ranges.each do | pack_id_begin, pack_id_end |
+              ctlmsg = [
+                0,
+                MISS,
+                source_id,
+                pack_id_begin,
+                pack_id_end
+              ].pack( 'NCNNN' )
+
+              send_pack( tund, ctlmsg, info[ :tun_addr ] )
             end
           end
+        when MISS
+          dest_id, pack_id_begin, pack_id_end = data[ 5, 12 ].unpack( 'NNN' )
+          ext = info[ :dest_exts ][ dest_id ]
+          return unless ext
+
+          ( pack_id_begin..pack_id_end ).each do | pack_id |
+            data, add_at = ext[ :wmems ][ pack_id ]
+            break if Time.new - add_at < 1
+
+            if data
+              send_pack( tund, data, info[ :tun_addr ] )
+            end
+          end
+        when FIN1
+          # > 2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
+          #   2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
+          #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
+          #   2-4. recv got_fin2 > break loop
+
+          # puts "debug 2-1. recv fin1 > send got_fin1 > ext.is_source_closed true #{ Time.new } p#{ Process.pid }"
+          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          ctlmsg = [
+            0,
+            GOT_FIN1,
+            source_id
+          ].pack( 'NCN' )
+
+          send_pack( tund, ctlmsg, info[ :tun_addr ] )
+
+          dest_id = info[ :src_dst ][ source_id ]
+          return unless dest_id
+
+          ext = info[ :dest_exts ][ dest_id ]
+          return unless ext
+
+          if !ext[ :is_source_closed ]
+            ext[ :is_source_closed ] = true
+          end
+        when GOT_FIN1
+          #   1-1. dest.close > !ext.is_source_closed > send fin1 loop
+          # > 1-2. recv got_fin1 > break loop
+          #   1-3. recv fin2 > send got_fin2 > del ext
+
+          # puts "debug 1-2. recv got_fin1 > break loop #{ Time.new } p#{ Process.pid }"
+          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          info[ :fin1s ].delete( dest_id )
+        when FIN2
+          #   1-1. dest.close > !ext.is_source_closed > send fin1 loop
+          #   1-2. recv got_fin1 > break loop
+          # > 1-3. recv fin2 > send got_fin2 > del ext
+
+          # puts "debug 1-3. recv fin2 > send got_fin2 > del ext #{ Time.new } p#{ Process.pid }"
+          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          ctlmsg = [
+            0,
+            GOT_FIN2,
+            source_id
+          ].pack( 'NCN' )
+
+          send_pack( tund, ctlmsg, info[ :tun_addr ] )
+
+          dest_id = info[ :src_dst ].delete( source_id )
+          return unless dest_id
+
+          del_dest_ext( tund, dest_id )
+        when GOT_FIN2
+          #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
+          #   2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
+          #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
+          # > 2-4. recv got_fin2 > break loop
+
+          # puts "debug 2-4. recv got_fin2 > break loop #{ Time.new } p#{ Process.pid }"
+          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          info[ :fin2s ].delete( dest_id )
         when TUN_FIN
-          add_closing( sock )
+          puts "tun fin #{ Time.new } p#{ Process.pid }"
+          add_closing( tund )
         end
 
         return
       end
 
-      pack_id = data[ 4, 4 ].unpack( 'N' ).first
-      ctlmsg = [ 0, CONFIRM_A_PACK, source_id, pack_id ].pack( 'NCNN' )
-      send_pack( sock, ctlmsg, info[ :tun_addr ] )
-
       dest_id = info[ :src_dst ][ source_id ]
-      dest = info[ :dests ][ dest_id ]
+      return unless dest_id
 
-      if dest.nil? || dest.closed?
-        return
-      end
+      ext = info[ :dest_exts ][ dest_id ]
+      return if ext.nil? || ext[ :dest ].closed?
 
-      dest_info = @infos[ dest ]
-
-      if pack_id <= dest_info[ :source_pcur ]
-        return
-      end
+      pack_id = data[ 4, 4 ].unpack( 'N' ).first
+      return if ( pack_id <= ext[ :continue_source_pack_id ] ) || ext[ :pieces ].include?( pack_id )
 
       data = data[ 8..-1 ]
 
@@ -471,52 +454,47 @@ module Girl
       end
 
       # 放进dest的写前缓存，跳号放碎片缓存
-      if pack_id - dest_info[ :source_pcur ] == 1
-        while dest_info[ :pieces ].include?( pack_id + 1 )
-          data << dest_info[ :pieces ].delete( pack_id + 1 )
+      if pack_id - ext[ :continue_source_pack_id ] == 1
+        while ext[ :pieces ].include?( pack_id + 1 )
+          data << ext[ :pieces ].delete( pack_id + 1 )
           pack_id += 1
         end
 
-        add_buff( dest, data )
-        dest_info[ :source_pcur ] = pack_id
+        ext[ :continue_source_pack_id ] = pack_id
+        add_buff( ext[ :dest ], data )
       else
-        dest_info[ :pieces ][ pack_id ] = data
+        ext[ :pieces ][ pack_id ] = data
       end
     end
 
-    def write_dest( sock )
-      if @closings.include?( sock )
-        close_dest( sock )
+    ##
+    # write dest
+    #
+    def write_dest( dest )
+      if @closings.include?( dest )
+        close_dest( dest )
         return
       end
 
-      info = @infos[ sock ]
-      data, from = get_buff( sock )
+      info = @infos[ dest ]
+      data, from = get_buff( dest )
 
       if data.empty?
-        # 流量已收全，关闭dest
-        if info[ :source_last_pack_id ] && ( info[ :source_last_pack_id ] == info[ :source_pcur ] )
-          add_closing( sock )
+        if info[ :tund ].closed?
+          add_closing( dest )
           return
         end
 
-        @writes.delete( sock )
-        @write_after_readables.delete( sock )
+        @writes.delete( dest )
         return
       end
 
       begin
-        written = sock.write_nonblock( data )
+        written = dest.write_nonblock( data )
       rescue IO::WaitWritable, Errno::EINTR => e
         return
-      rescue IO::WaitReadable => e
-        @writes.delete( sock )
-
-        unless @write_after_readables.include?( sock )
-          @write_after_readables << sock
-        end
       rescue Exception => e
-        add_closing( sock )
+        add_closing( dest )
         return
       end
 
@@ -524,53 +502,219 @@ module Girl
       info[ from ] = data
     end
 
-    def write_tund( sock )
-      if @closings.include?( sock )
-        close_tund( sock )
+    ##
+    # write tund
+    #
+    def write_tund( tund )
+      if @closings.include?( tund )
+        close_tund( tund )
         return
       end
 
-      if @roomd_info[ :queue ].size > QUEUE_LIMIT
-        unless @roomd_info[ :paused_tunds ].include?( sock )
-          # puts "debug pause #{ sock.object_id } #{ Time.new }"
-          @roomd_info[ :paused_tunds ] << sock
+      if @roomd_info[ :wmems_size ].size > WMEMS_LIMIT
+        unless @roomd_info[ :paused_tunds ].include?( tund )
+          puts "pause #{ tund.object_id } #{ Time.new } p#{ Process.pid }"
+          @roomd_info[ :paused_tunds ] << tund
         end
 
-        @writes.delete( sock )
+        @writes.delete( tund )
         return
       end
 
-      data, from = get_buff( sock )
+      data, from = get_buff( tund )
 
       if data.empty?
-        @writes.delete( sock )
+        @writes.delete( tund )
         return
       end
 
-      info = @infos[ sock ]
+      info = @infos[ tund ]
       len = data[ 0, 2 ].unpack( 'n' ).first
       pack = data[ 2, ( 8 + len ) ]
       dest_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
-      send_pack( sock, pack, info[ :tun_addr ], :traffic, [ dest_id, pack_id ] )
+      ext = info[ :dest_exts ][ dest_id ]
+
+      if ext
+        send_pack( tund, pack, info[ :tun_addr ] )
+        ext[ :biggest_pack_id ] = pack_id
+        ext[ :wmems ][ pack_id ] = [ pack, Time.new ]
+        @roomd_info[ :wmems_size ] += 1
+      end
+
       data = data[ ( 10 + len )..-1 ]
       info[ from ] = data
     end
 
-    def add_buff( sock, data, add_inst = true )
-      info = @infos[ sock ]
-      info[ :wbuff ] << data
+    def loop_expire
+      Thread.new do
+        loop do
+          sleep CHECK_EXPIRE_INTERVAL
 
-      if info[ :wbuff ].size >= CHUNK_SIZE
-        filename = [ info[ :filename ], info[ :chunk_seed ] ].join( '.' )
-        chunk_path = File.join( info[ :chunk_dir ], filename )
-        IO.binwrite( chunk_path, info[ :wbuff ] )
-        info[ :chunks ] << filename
-        info[ :chunk_seed ] += 1
-        info[ :wbuff ].clear
+          if @roomd_info[ :tunds ].any?
+            @mutex.synchronize do
+              now = Time.new
+
+              @roomd_info[ :tunds ].each do | tund |
+                unless tund.closed?
+                  info = @infos[ tund ]
+
+                  if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] > EXPIRE_AFTER )
+                    @ctlw.write( [ CTL_CLOSE_SOCK, [ tund.object_id ].pack( 'N' ) ].join )
+                  end
+                end
+              end
+            end
+          end
+        end
       end
+    end
 
-      if add_inst
-        add_write( sock )
+    def loop_send_status
+      Thread.new do
+        loop do
+          sleep STATUS_INTERVAL
+
+          if @roomd_info[ :tunds ].any?
+            @mutex.synchronize do
+              @roomd_info[ :tunds ].each do | tund |
+                unless tund.closed?
+                  tund_info = @infos[ tund ]
+
+                  if tund_info[ :tun_addr ] && tund_info[ :dest_exts ].any?
+                    tund_info[ :dest_exts ].each do | dest_id, ext |
+                      ctlmsg = [
+                        0,
+                        DEST_STATUS,
+                        dest_id,
+                        ext[ :biggest_pack_id ],
+                        ext[ :continue_source_pack_id ]
+                      ].pack( 'NCNNN' )
+
+                      send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
+                    end
+                  end
+                end
+              end
+            end
+          end
+
+          if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :wmems_size ].size < RESUME_BELOW )
+            @mutex.synchronize do
+              tund_ids = @roomd_info[ :paused_tunds ].map { | tund | tund.object_id }
+              puts "resume #{ Time.new } p#{ Process.pid }"
+              @ctlw.write( [ CTL_RESUME, [ tund_ids.size ].pack( 'n' ), tund_ids.pack( 'N*' ) ].join )
+              @roomd_info[ :paused_tunds ].clear
+            end
+          end
+        end
+      end
+    end
+
+    def loop_send_tund_port( tund, client )
+      tund_port = tund.local_address.ip_unpack.last
+
+      Thread.new do
+        loop do
+          break if tund.closed?
+
+          tund_info = @infos[ tund ]
+
+          if tund_info[ :tun_addr ]
+            # puts "debug break send tund port loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
+          @mutex.synchronize do
+            ctlmsg = [
+              0,
+              TUND_PORT,
+              tund_port
+            ].pack( 'NCn' )
+            # puts "debug send TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
+            send_pack( @roomd, ctlmsg, client )
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    def loop_send_fin1( tund, dest_id )
+      Thread.new do
+        loop do
+          break if tund.closed?
+
+          tund_info = @infos[ tund ]
+
+          unless tund_info[ :fin1s ].include?( dest_id )
+            # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
+          @mutex.synchronize do
+            ctlmsg = [
+              0,
+              FIN1,
+              dest_id
+            ].pack( 'NCN' )
+            # puts "debug send FIN1 #{ dest_id } #{ Time.new } p#{ Process.pid }"
+            send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    def loop_send_fin2( tund, dest_id )
+      Thread.new do
+        loop do
+          break if tund.closed?
+
+          tund_info = @infos[ tund ]
+
+          unless tund_info[ :fin2s ].include?( dest_id )
+            # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
+          @mutex.synchronize do
+            ctlmsg = [
+              0,
+              FIN2,
+              dest_id
+            ].pack( 'NCN' )
+            # puts "debug send FIN2 #{ dest_id } #{ Time.new } p#{ Process.pid }"
+            send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    def send_paired( tund, source_id, dest_id )
+      return if tund.closed?
+
+      tund_info = @infos[ tund ]
+      return unless tund_info[ :tun_addr ]
+
+      ctlmsg = [
+        0,
+        PAIRED,
+        source_id,
+        dest_id
+      ].pack( 'NCNN' )
+
+      # puts "debug send PAIRED #{ source_id } #{ dest_id } #{ Time.new } p#{ Process.pid }"
+      send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
+    end
+
+    def send_pack( sock, pack, target_sockaddr )
+      begin
+        sock.sendmsg( pack, 0, target_sockaddr )
+      rescue IO::WaitWritable, Errno::EINTR, Errno::EDESTADDRREQ => e
+        puts "sendmsg #{ e.class } #{ Time.new } p#{ Process.pid }"
       end
     end
 
@@ -595,45 +739,100 @@ module Girl
       [ data, from ]
     end
 
-    def send_pack( sock, pack, dest_sockaddr, mem_sym = nil, mem_id = nil, rcount = 0 )
-      begin
-        sock.sendmsg( pack, 0, dest_sockaddr )
-      rescue IO::WaitWritable, Errno::EINTR, IO::WaitReadable => e
-        puts "sendmsg #{ e.class }"
+    def add_buff( sock, data, is_add_write = true )
+      info = @infos[ sock ]
+      info[ :wbuff ] << data
+
+      if info[ :wbuff ].size >= CHUNK_SIZE
+        filename = [ info[ :filename ], info[ :chunk_seed ] ].join( '.' )
+        chunk_path = File.join( info[ :chunk_dir ], filename )
+        IO.binwrite( chunk_path, info[ :wbuff ] )
+        info[ :chunks ] << filename
+        info[ :chunk_seed ] += 1
+        info[ :wbuff ].clear
       end
 
-      if mem_sym
-        info = @infos[ sock ]
-
-        if rcount == 0
-          if mem_sym == :traffic
-            dest_id, pack_id = mem_id
-            packs = info[ :wmems ][ mem_sym ][ dest_id ]
-
-            if packs
-              packs[ pack_id ] = pack
-            end
-          else
-            info[ :wmems ][ mem_sym ][ mem_id ] = pack
-          end
-        end
-
-        @roomd_info[ :queue ] << [ sock, mem_sym, mem_id, Time.new, rcount ]
+      if is_add_write
+        add_write( sock )
       end
     end
 
-    def add_closing( sock )
-      unless @closings.include?( sock )
-        @reads.delete( sock )
-        @closings << sock
-      end
+    def add_read( sock )
+      return if sock.closed? || @reads.include?( sock )
 
-      add_write( sock )
+      @reads << sock
     end
 
     def add_write( sock )
-      unless @writes.include?( sock )
-        @writes << sock
+      return if sock.closed? || @writes.include?( sock )
+
+      @writes << sock
+    end
+
+    def add_closing( sock )
+      return if sock.closed? || @closings.include?( sock )
+
+      @reads.delete( sock )
+      @closings << sock
+      add_write( sock )
+    end
+
+    def del_dest_ext( tund, dest_id )
+      tund_info = @infos[ tund ]
+      ext = tund_info[ :dest_exts ].delete( dest_id )
+      return if ext.nil? || ext[ :wmems ].empty?
+
+      @roomd_info[ :wmems_size ] -= ext[ :wmems ].size
+      # puts "debug delete ext, wmems #{ @roomd_info[ :wmems_size ] } #{ Time.new } p#{ Process.pid }"
+    end
+
+    def close_tund( tund )
+      info = close_sock( tund )
+      info[ :dests ].each { | dest | add_closing( dest ) }
+      info[ :dest_exts ].each { | _, ext | @roomd_info[ :wmems_size ] -= ext[ :wmems ].size }
+      @roomd_info[ :tunds ].delete( tund )
+      @roomd_info[ :paused_tunds ].delete( tund )
+      @roomd_info[ :tund_clients ].delete( tund )
+    end
+
+    def close_dest( dest )
+      info = close_sock( dest )
+      tund = info[ :tund ]
+      return if tund.closed?
+
+      tund_info = @infos[ tund ]
+      tund_info[ :dests ].delete( dest )
+      dest_id = dest.object_id
+      ext = tund_info[ :dest_exts ][ dest_id ]
+
+      if ext
+        ext[ :pieces ].clear
+
+        if ext[ :is_source_closed ]
+          #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
+          #   2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
+          # > 2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
+          #   2-4. recv got_fin2 > break loop
+
+          # puts "debug 2-3. dest.close > ext.is_source_closed > del ext > loop send fin2 #{ Time.new } p#{ Process.pid }"
+          tund_info[ :src_dst ].delete( ext[ :source_id ] )
+          del_dest_ext( tund, dest_id )
+
+          unless tund_info[ :fin2s ].include?( dest_id )
+            tund_info[ :fin2s ] << dest_id
+            loop_send_fin2( tund, dest_id )
+          end
+        else
+          # > 1-1. dest.close > !ext.is_source_closed > send fin1 loop
+          #   1-2. recv got_fin1 > break loop
+          #   1-3. recv fin2 > send got_fin2 > del ext
+
+          # puts "debug 1-1. dest.close > !ext.is_source_closed > send fin1 loop #{ Time.new } p#{ Process.pid }"
+          unless tund_info[ :fin1s ].include?( dest_id )
+            tund_info[ :fin1s ] << dest_id
+            loop_send_fin1( tund, dest_id )
+          end
+        end
       end
     end
 
@@ -656,54 +855,6 @@ module Girl
       end
 
       info
-    end
-
-    def delete_wmem_traffic( tund_info, dest_id )
-      tund_info[ :wmems ][ :traffic ].delete( dest_id )
-      source_id = tund_info[ :dst_src ].delete( dest_id )
-      tund_info[ :src_dst ].delete( source_id )
-    end
-
-    def new_roomd
-      roomd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      roomd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      roomd.bind( Socket.sockaddr_in( @roomd_port, '0.0.0.0' ) )
-      roomd_info = {
-        clients: [],
-        tunds: {}, # tund => client
-        queue: [], # 重传队列
-        paused_tunds: [], # 暂停写的tunds
-        dest_fin2s: [] # 已被tun确认关闭的dest_ids [ [ tund, dest_id ], .. ]
-      }
-
-      @roomd = roomd
-      @roomd_info = roomd_info
-      @roles[ roomd ] = :roomd
-      @infos[ roomd ] = roomd_info
-      @reads << roomd
-    end
-
-    def close_dest( sock )
-      info = close_sock( sock )
-      tund = info[ :tund ]
-
-      unless tund.closed?
-        tund_info = @infos[ tund ]
-        tund_info[ :dests ].delete( info[ :id ] )
-
-        unless info[ :source_last_pack_id ]
-          ctlmsg = [ 0, DEST_FIN, info[ :id ], info[ :pcur ] ].pack( 'NCNN' )
-          send_pack( tund, ctlmsg, tund_info[ :tun_addr ], :dest_fin, info[ :id ] )
-        end
-      end
-    end
-
-    def close_tund( sock )
-      info = close_sock( sock )
-      info[ :dests ].each{ | _, dest | close_sock( dest ) }
-      @roomd_info[ :paused_tunds ].delete( sock )
-      client = @roomd_info[ :tunds ].delete( sock )
-      @roomd_info[ :clients ].delete( client )
     end
   end
 end
