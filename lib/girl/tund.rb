@@ -362,7 +362,7 @@ module Girl
 
           ( pack_id_begin..pack_id_end ).each do | pack_id |
             data, add_at = ext[ :wmems ][ pack_id ]
-            break if Time.new - add_at < 1
+            break if Time.new - add_at < STATUS_INTERVAL
 
             if data
               send_pack( tund, data, info[ :tun_addr ] )
@@ -390,9 +390,7 @@ module Girl
           ext = info[ :dest_exts ][ dest_id ]
           return unless ext
 
-          if !ext[ :is_source_closed ]
-            ext[ :is_source_closed ] = true
-          end
+          ext[ :is_source_closed ] = true
         when GOT_FIN1
           #   1-1. dest.close > !ext.is_source_closed > send fin1 loop
           # > 1-2. recv got_fin1 > break loop
@@ -614,7 +612,7 @@ module Girl
       tund_port = tund.local_address.ip_unpack.last
 
       Thread.new do
-        loop do
+        100.times do
           break if tund.closed?
 
           tund_info = @infos[ tund ]
@@ -641,7 +639,7 @@ module Girl
 
     def loop_send_fin1( tund, dest_id )
       Thread.new do
-        loop do
+        100.times do
           break if tund.closed?
 
           tund_info = @infos[ tund ]
@@ -668,7 +666,7 @@ module Girl
 
     def loop_send_fin2( tund, dest_id )
       Thread.new do
-        loop do
+        100.times do
           break if tund.closed?
 
           tund_info = @infos[ tund ]

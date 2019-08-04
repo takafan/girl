@@ -340,7 +340,7 @@ module Girl
 
           ( pack_id_begin..pack_id_end ).each do | pack_id |
             data, add_at = ext[ :wmems ][ pack_id ]
-            break if Time.new - add_at < 1
+            break if Time.new - add_at < STATUS_INTERVAL
 
             if data
               send_pack( tun, data, info[ :tund_addr ] )
@@ -610,7 +610,7 @@ module Girl
 
     def loop_send_hello
       Thread.new do
-        loop do
+        100.times do
           break if @tun.closed?
 
           if @tun_info[ :tund_addr ]
@@ -630,7 +630,7 @@ module Girl
 
     def loop_send_a_new_source( source_id, original_dst )
       Thread.new do
-        loop do
+        100.times do
           break if @tun.closed?
 
           if @tun_info[ :tund_addr ]
@@ -655,7 +655,7 @@ module Girl
 
     def loop_send_fin1( source_id )
       Thread.new do
-        loop do
+        100.times do
           if @tun.closed? || !@tun_info[ :fin1s ].include?( source_id )
             # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
             break
@@ -678,7 +678,7 @@ module Girl
 
     def loop_send_fin2( source_id )
       Thread.new do
-        loop do
+        100.times do
           if @tun.closed? || !@tun_info[ :fin2s ].include?( source_id )
             # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
             break
