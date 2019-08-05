@@ -523,10 +523,11 @@ module Girl
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
+      tun_id = tun.object_id
       tun_info = {
         wbuff: '',                                            # 写前缓存
         cache: '',                                            # 块读出缓存
-        filename: [ Process.pid, tun.object_id ].join( '-' ), # 块名
+        filename: [ Process.pid, tun_id ].join( '-' ), # 块名
         chunk_dir: @tun_chunk_dir,                            # 块目录
         chunks: [],                                           # 块文件名，wbuff每超过1.4M落一个块
         chunk_seed: 0,                                        # 块序号
@@ -542,6 +543,7 @@ module Girl
       }
 
       @tun = tun
+      @socks[ tun_id ] = tun
       @roles[ tun ] = :tun
       @tun_info = tun_info
       @infos[ tun ] = tun_info
