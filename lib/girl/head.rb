@@ -6,7 +6,7 @@ module Girl
   CHECK_EXPIRE_INTERVAL = 900              # 检查过期间隔
   EXPIRE_AFTER          = 1800             # 多久过期
   HEARTBEAT_INTERVAL    = 59               # 心跳间隔
-  STATUS_INTERVAL       = 0.5              # 发送状态间隔
+  STATUS_INTERVAL       = 0.3              # 发送状态间隔
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3

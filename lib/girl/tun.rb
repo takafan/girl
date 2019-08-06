@@ -25,18 +25,18 @@ require 'socket'
 #
 # 流量打包成udp，在tun-tund之间传输，包结构：
 #
-# N: 1+ source/dest_id -> N: pack_id          -> traffic
-#    0  ctlmsg         -> C:  1 tund port     -> n: tund port
+# Q>: 1+ source/dest_id -> Q>: pack_id        -> traffic
+#     0  ctlmsg         -> C:  1 tund port    -> n: tund port
 #                             2 heartbeat     -> C: random char
-#                             3 a new source  -> NnnN: source_id dst_family dst_port dst_host
-#                             4 paired        -> NN: source_id dest_id
-#                             5 dest status   -> NNN: dest_id biggest_dest_pack_id continue_source_pack_id
-#                             6 source status -> NNN: source_id biggest_source_pack_id continue_dest_pack_id
-#                             7 miss          -> NNN: source/dest_id pack_id_begin pack_id_end
-#                             8 fin1          -> N: source/dest_id
-#                             9 got fin1      -> N: source/dest_id
-#                            10 fin2          -> N: source/dest_id
-#                            11 got fin2      -> N: source/dest_id
+#                             3 a new source  -> Q>nnN: source_id dst_family dst_port dst_host
+#                             4 paired        -> Q>Q>: source_id dest_id
+#                             5 dest status   -> Q>Q>Q>: dest_id biggest_dest_pack_id continue_source_pack_id
+#                             6 source status -> Q>Q>Q>: source_id biggest_source_pack_id continue_dest_pack_id
+#                             7 miss          -> Q>Q>Q>: source/dest_id pack_id_begin pack_id_end
+#                             8 fin1          -> Q>: source/dest_id
+#                             9 got fin1      -> Q>: source/dest_id
+#                            10 fin2          -> Q>: source/dest_id
+#                            11 got fin2      -> Q>: source/dest_id
 #                            12 tund fin
 #                            13 tun fin
 #
@@ -137,7 +137,7 @@ module Girl
 
     def quit!
       if !@tun.closed? && @tun_info[ :tund_addr ]
-        ctlmsg = [ 0, TUN_FIN ].pack( 'NC' )
+        ctlmsg = [ 0, TUN_FIN ].pack( 'Q>C' )
         send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
       end
 
@@ -152,7 +152,7 @@ module Girl
     def read_ctlr( ctlr )
       case ctlr.read( 1 )
       when CTL_CLOSE_SOCK
-        sock_id = ctlr.read( 4 ).unpack( 'N' ).first
+        sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
         sock = @socks[ sock_id ]
 
         if sock
@@ -237,7 +237,7 @@ module Girl
         data = @hex.encode( data )
       end
 
-      prefix = [ data.bytesize, source.object_id, pack_id ].pack( 'nNN' )
+      prefix = [ data.bytesize, source.object_id, pack_id ].pack( 'nQ>Q>' )
       is_add_write = @tun_info[ :tund_addr ] && !@tun_info[ :paused ]
       add_buff( @tun, [ prefix, data ].join, is_add_write )
       info[ :pcur ] = pack_id
@@ -250,19 +250,19 @@ module Girl
       info = @infos[ tun ]
       data, addrinfo, rflags, *controls = tun.recvmsg
       info[ :last_coming_at ] = Time.new
-      dest_id = data[ 0, 4 ].unpack( 'N' ).first
+      dest_id = data[ 0, 8 ].unpack( 'Q>' ).first
 
       if dest_id == 0
-        case data[ 4 ].unpack( 'C' ).first
+        case data[ 8 ].unpack( 'C' ).first
         when TUND_PORT
-          tund_port = data[ 5, 2 ].unpack( 'n' ).first
+          tund_port = data[ 9, 2 ].unpack( 'n' ).first
           # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
 
           info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
           send_heartbeat
           add_write( tun )
         when PAIRED
-          source_id, dest_id = data[ 5, 8 ].unpack( 'NN' )
+          source_id, dest_id = data[ 9, 16 ].unpack( 'Q>Q>' )
           # puts "debug got PAIRED #{ source_id } #{ dest_id } #{ Time.new } p#{ Process.pid }"
 
           ext = info[ :source_exts ][ source_id ]
@@ -271,7 +271,7 @@ module Girl
           ext[ :dest_id ] = dest_id
           info[ :dst_src ][ dest_id ] = source_id
         when DEST_STATUS
-          dest_id, biggest_dest_pack_id, continue_source_pack_id  = data[ 5, 16 ].unpack( 'NNN' )
+          dest_id, biggest_dest_pack_id, continue_source_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
           source_id = info[ :dst_src ][ dest_id ]
           return unless source_id
 
@@ -328,13 +328,13 @@ module Girl
                 dest_id,
                 pack_id_begin,
                 pack_id_end
-              ].pack( 'NCNNN' )
+              ].pack( 'Q>CQ>Q>Q>' )
 
               send_pack( @tun, ctlmsg,  @tun_info[ :tund_addr ] )
             end
           end
         when MISS
-          source_id, pack_id_begin, pack_id_end = data[ 5, 12 ].unpack( 'NNN' )
+          source_id, pack_id_begin, pack_id_end = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
           ext = info[ :source_exts ][ source_id ]
           return unless ext
 
@@ -353,12 +353,12 @@ module Girl
           #   2-4. recv got_fin2 > break loop
 
           # puts "debug 2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true #{ Time.new } p#{ Process.pid }"
-          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
           ctlmsg = [
             0,
             GOT_FIN1,
             dest_id
-          ].pack( 'NCN' )
+          ].pack( 'Q>CQ>' )
 
           send_pack( tun, ctlmsg, info[ :tund_addr ] )
 
@@ -375,7 +375,7 @@ module Girl
           #   1-3. recv fin2 > send got_fin2 > del ext
 
           # puts "debug 1-2. recv got_fin1 > break loop #{ Time.new } p#{ Process.pid }"
-          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin1s ].delete( source_id )
         when FIN2
           #   1-1. source.close > !ext.is_dest_closed > send fin1 loop
@@ -383,12 +383,12 @@ module Girl
           # > 1-3. recv fin2 > send got_fin2 > del ext
 
           # puts "debug 1-3. recv fin2 > send got_fin2 > del ext #{ Time.new } p#{ Process.pid }"
-          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
           ctlmsg = [
             0,
             GOT_FIN2,
             dest_id
-          ].pack( 'NCN' )
+          ].pack( 'Q>CQ>' )
 
           send_pack( tun, ctlmsg, info[ :tund_addr ] )
 
@@ -403,7 +403,7 @@ module Girl
           # > 2-4. recv got_fin2 > break loop
 
           # puts "debug 2-4. recv got_fin2 > break loop #{ Time.new } p#{ Process.pid }"
-          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin2s ].delete( source_id )
         when TUND_FIN
           puts "tund fin #{ Time.new } p#{ Process.pid }"
@@ -419,10 +419,10 @@ module Girl
       ext = info[ :source_exts ][ source_id ]
       return if ext.nil? || ext[ :source ].closed?
 
-      pack_id = data[ 4, 4 ].unpack( 'N' ).first
+      pack_id = data[ 8, 8 ].unpack( 'Q>' ).first
       return if ( pack_id <= ext[ :continue_dest_pack_id ] ) || ext[ :pieces ].include?( pack_id )
 
-      data = data[ 8..-1 ]
+      data = data[ 16..-1 ]
 
       # 解混淆
       if pack_id == 1
@@ -504,8 +504,8 @@ module Girl
       end
 
       len = data[ 0, 2 ].unpack( 'n' ).first
-      pack = data[ 2, ( 8 + len ) ]
-      source_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
+      pack = data[ 2, ( 16 + len ) ]
+      source_id, pack_id = pack[ 0, 16 ].unpack( 'Q>Q>' )
       ext = info[ :source_exts ][ source_id ]
 
       if ext
@@ -515,7 +515,7 @@ module Girl
         info[ :wmems_size ] += 1
       end
 
-      data = data[ ( 10 + len )..-1 ]
+      data = data[ ( 18 + len )..-1 ]
       info[ from ] = data
     end
 
@@ -527,7 +527,7 @@ module Girl
       tun_info = {
         wbuff: '',                                            # 写前缓存
         cache: '',                                            # 块读出缓存
-        filename: [ Process.pid, tun_id ].join( '-' ), # 块名
+        filename: [ Process.pid, tun_id ].join( '-' ),        # 块名
         chunk_dir: @tun_chunk_dir,                            # 块目录
         chunks: [],                                           # 块文件名，wbuff每超过1.4M落一个块
         chunk_seed: 0,                                        # 块序号
@@ -559,7 +559,7 @@ module Girl
 
           @mutex.synchronize do
             if @tun_info[ :last_coming_at ] && ( Time.new - @tun_info[ :last_coming_at ] > EXPIRE_AFTER )
-              @ctlw.write( [ CTL_CLOSE_SOCK, [ @tun.object_id ].pack( 'N' ) ].join )
+              @ctlw.write( [ CTL_CLOSE_SOCK, [ @tun.object_id ].pack( 'Q>' ) ].join )
             end
           end
         end
@@ -592,7 +592,7 @@ module Girl
                   source_id,
                   ext[ :biggest_pack_id ],
                   ext[ :continue_dest_pack_id ]
-                ].pack( 'NCNNN' )
+                ].pack( 'Q>CQ>Q>Q>' )
 
                 send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
               end
@@ -644,7 +644,7 @@ module Girl
             end
 
             @mutex.synchronize do
-              ctlmsg = [ [ 0, A_NEW_SOURCE, source_id ].pack( 'NCN' ), original_dst ].join
+              ctlmsg = [ [ 0, A_NEW_SOURCE, source_id ].pack( 'Q>CQ>' ), original_dst ].join
               # puts "debug send a new source #{ Time.new } p#{ Process.pid }"
               send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
             end
@@ -668,7 +668,7 @@ module Girl
               0,
               FIN1,
               source_id
-            ].pack( 'NCN' )
+            ].pack( 'Q>CQ>' )
             # puts "debug send FIN1 #{ source_id } #{ Time.new } p#{ Process.pid }"
             send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
           end
@@ -691,7 +691,7 @@ module Girl
               0,
               FIN2,
               source_id
-            ].pack( 'NCN' )
+            ].pack( 'Q>CQ>' )
             # puts "debug send FIN2 #{ source_id } #{ Time.new } p#{ Process.pid }"
             send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
           end
@@ -704,7 +704,7 @@ module Girl
     def send_heartbeat
       return if @tun.closed? || @tun_info[ :tund_addr ].nil?
 
-      ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'NCC' )
+      ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
       send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
     end
 

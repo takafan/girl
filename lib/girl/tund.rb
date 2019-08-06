@@ -99,7 +99,7 @@ module Girl
     end
 
     def quit!
-      ctlmsg = [ 0, TUND_FIN ].pack( 'NC' )
+      ctlmsg = [ 0, TUND_FIN ].pack( 'Q>C' )
 
       @roomd_info[ :tunds ].each do | tund |
         unless tund.closed?
@@ -122,7 +122,7 @@ module Girl
     def read_ctlr( ctlr )
       case ctlr.read( 1 )
       when CTL_CLOSE_SOCK
-        sock_id = ctlr.read( 4 ).unpack( 'N' ).first
+        sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
         sock = @socks[ sock_id ]
 
         if sock
@@ -130,7 +130,7 @@ module Girl
         end
       when CTL_RESUME
         len = ctlr.read( 2 ).unpack( 'n' ).first
-        tund_ids = ctlr.read( 4 * len ).unpack( 'N*' )
+        tund_ids = ctlr.read( 8 * len ).unpack( 'Q>*' )
         tund_ids.each do | tund_id |
           puts "resume #{ tund_id } #{ Time.new } p#{ Process.pid }"
           tund = @socks[ tund_id ]
@@ -215,7 +215,7 @@ module Girl
         data = @hex.encode( data )
       end
 
-      prefix = [ data.bytesize, dest.object_id, pack_id ].pack( 'nNN' )
+      prefix = [ data.bytesize, dest.object_id, pack_id ].pack( 'nQ>Q>' )
       is_add_write = !@roomd_info[ :paused_tunds ].include?( tund )
       add_buff( tund, [ prefix, data ].join, is_add_write )
       info[ :pcur ] = pack_id
@@ -238,14 +238,14 @@ module Girl
       end
 
       info[ :last_coming_at ] = Time.new
-      source_id = data[ 0, 4 ].unpack( 'N' ).first
+      source_id = data[ 0, 8 ].unpack( 'Q>' ).first
 
       if source_id == 0
-        ctl_num = data[ 4 ].unpack( 'C' ).first
+        ctl_num = data[ 8 ].unpack( 'C' ).first
 
         case ctl_num
         when A_NEW_SOURCE
-          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           dest_id = info[ :src_dst ][ source_id ]
 
           if dest_id
@@ -253,7 +253,7 @@ module Girl
             return
           end
 
-          dst_family, dst_port, dst_host = data[ 9, 8 ].unpack( 'nnN' )
+          dst_family, dst_port, dst_host = data[ 17, 8 ].unpack( 'nnN' )
           dest = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
           dest.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
@@ -293,7 +293,7 @@ module Girl
           add_read( dest )
           send_paired( tund, source_id, dest_id )
         when SOURCE_STATUS
-          source_id, biggest_source_pack_id, continue_dest_pack_id  = data[ 5, 12 ].unpack( 'NNN' )
+          source_id, biggest_source_pack_id, continue_dest_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
           dest_id = info[ :src_dst ][ source_id ]
           return unless dest_id
 
@@ -350,13 +350,13 @@ module Girl
                 source_id,
                 pack_id_begin,
                 pack_id_end
-              ].pack( 'NCNNN' )
+              ].pack( 'Q>CQ>Q>Q>' )
 
               send_pack( tund, ctlmsg, info[ :tun_addr ] )
             end
           end
         when MISS
-          dest_id, pack_id_begin, pack_id_end = data[ 5, 12 ].unpack( 'NNN' )
+          dest_id, pack_id_begin, pack_id_end = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
           ext = info[ :dest_exts ][ dest_id ]
           return unless ext
 
@@ -375,12 +375,12 @@ module Girl
           #   2-4. recv got_fin2 > break loop
 
           # puts "debug 2-1. recv fin1 > send got_fin1 > ext.is_source_closed true #{ Time.new } p#{ Process.pid }"
-          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           ctlmsg = [
             0,
             GOT_FIN1,
             source_id
-          ].pack( 'NCN' )
+          ].pack( 'Q>CQ>' )
 
           send_pack( tund, ctlmsg, info[ :tun_addr ] )
 
@@ -397,7 +397,7 @@ module Girl
           #   1-3. recv fin2 > send got_fin2 > del ext
 
           # puts "debug 1-2. recv got_fin1 > break loop #{ Time.new } p#{ Process.pid }"
-          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin1s ].delete( dest_id )
         when FIN2
           #   1-1. dest.close > !ext.is_source_closed > send fin1 loop
@@ -405,12 +405,12 @@ module Girl
           # > 1-3. recv fin2 > send got_fin2 > del ext
 
           # puts "debug 1-3. recv fin2 > send got_fin2 > del ext #{ Time.new } p#{ Process.pid }"
-          source_id = data[ 5, 4 ].unpack( 'N' ).first
+          source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           ctlmsg = [
             0,
             GOT_FIN2,
             source_id
-          ].pack( 'NCN' )
+          ].pack( 'Q>CQ>' )
 
           send_pack( tund, ctlmsg, info[ :tun_addr ] )
 
@@ -425,7 +425,7 @@ module Girl
           # > 2-4. recv got_fin2 > break loop
 
           # puts "debug 2-4. recv got_fin2 > break loop #{ Time.new } p#{ Process.pid }"
-          dest_id = data[ 5, 4 ].unpack( 'N' ).first
+          dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin2s ].delete( dest_id )
         when TUN_FIN
           puts "tun fin #{ Time.new } p#{ Process.pid }"
@@ -441,10 +441,10 @@ module Girl
       ext = info[ :dest_exts ][ dest_id ]
       return if ext.nil? || ext[ :dest ].closed?
 
-      pack_id = data[ 4, 4 ].unpack( 'N' ).first
+      pack_id = data[ 8, 8 ].unpack( 'Q>' ).first
       return if ( pack_id <= ext[ :continue_source_pack_id ] ) || ext[ :pieces ].include?( pack_id )
 
-      data = data[ 8..-1 ]
+      data = data[ 16..-1 ]
 
       # 解混淆
       if pack_id == 1
@@ -509,7 +509,7 @@ module Girl
         return
       end
 
-      if @roomd_info[ :wmems_size ].size > WMEMS_LIMIT
+      if @roomd_info[ :wmems_size ] > WMEMS_LIMIT
         unless @roomd_info[ :paused_tunds ].include?( tund )
           puts "pause #{ tund.object_id } #{ Time.new } p#{ Process.pid }"
           @roomd_info[ :paused_tunds ] << tund
@@ -528,8 +528,8 @@ module Girl
 
       info = @infos[ tund ]
       len = data[ 0, 2 ].unpack( 'n' ).first
-      pack = data[ 2, ( 8 + len ) ]
-      dest_id, pack_id = pack[ 0, 8 ].unpack( 'NN' )
+      pack = data[ 2, ( 16 + len ) ]
+      dest_id, pack_id = pack[ 0, 16 ].unpack( 'Q>Q>' )
       ext = info[ :dest_exts ][ dest_id ]
 
       if ext
@@ -539,7 +539,7 @@ module Girl
         @roomd_info[ :wmems_size ] += 1
       end
 
-      data = data[ ( 10 + len )..-1 ]
+      data = data[ ( 18 + len )..-1 ]
       info[ from ] = data
     end
 
@@ -557,7 +557,7 @@ module Girl
                   info = @infos[ tund ]
 
                   if info[ :last_coming_at ] && ( now - info[ :last_coming_at ] > EXPIRE_AFTER )
-                    @ctlw.write( [ CTL_CLOSE_SOCK, [ tund.object_id ].pack( 'N' ) ].join )
+                    @ctlw.write( [ CTL_CLOSE_SOCK, [ tund.object_id ].pack( 'Q>' ) ].join )
                   end
                 end
               end
@@ -586,7 +586,7 @@ module Girl
                         dest_id,
                         ext[ :biggest_pack_id ],
                         ext[ :continue_source_pack_id ]
-                      ].pack( 'NCNNN' )
+                      ].pack( 'Q>CQ>Q>Q>' )
 
                       send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
                     end
@@ -600,7 +600,7 @@ module Girl
             @mutex.synchronize do
               tund_ids = @roomd_info[ :paused_tunds ].map { | tund | tund.object_id }
               puts "resume #{ Time.new } p#{ Process.pid }"
-              @ctlw.write( [ CTL_RESUME, [ tund_ids.size ].pack( 'n' ), tund_ids.pack( 'N*' ) ].join )
+              @ctlw.write( [ CTL_RESUME, [ tund_ids.size ].pack( 'n' ), tund_ids.pack( 'Q>*' ) ].join )
               @roomd_info[ :paused_tunds ].clear
             end
           end
@@ -627,7 +627,7 @@ module Girl
               0,
               TUND_PORT,
               tund_port
-            ].pack( 'NCn' )
+            ].pack( 'Q>Cn' )
             # puts "debug send TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
             send_pack( @roomd, ctlmsg, client )
           end
@@ -654,7 +654,7 @@ module Girl
               0,
               FIN1,
               dest_id
-            ].pack( 'NCN' )
+            ].pack( 'Q>CQ>' )
             # puts "debug send FIN1 #{ dest_id } #{ Time.new } p#{ Process.pid }"
             send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
           end
@@ -681,7 +681,7 @@ module Girl
               0,
               FIN2,
               dest_id
-            ].pack( 'NCN' )
+            ].pack( 'Q>CQ>' )
             # puts "debug send FIN2 #{ dest_id } #{ Time.new } p#{ Process.pid }"
             send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
           end
@@ -702,7 +702,7 @@ module Girl
         PAIRED,
         source_id,
         dest_id
-      ].pack( 'NCNN' )
+      ].pack( 'Q>CQ>Q>' )
 
       # puts "debug send PAIRED #{ source_id } #{ dest_id } #{ Time.new } p#{ Process.pid }"
       send_pack( tund, ctlmsg, tund_info[ :tun_addr ] )
