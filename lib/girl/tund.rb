@@ -321,7 +321,7 @@ module Girl
           #   2-4. recv got_fin2 > break loop
           if ext[ :is_source_closed ] && ( ext[ :biggest_source_pack_id ] == ext[ :continue_source_pack_id ] )
             # puts "debug 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest #{ Time.new } p#{ Process.pid }"
-            add_closing( ext[ :dest ] )
+            add_write( ext[ :dest ] )
             return
           end
 
@@ -478,7 +478,22 @@ module Girl
       data, from = get_buff( dest )
 
       if data.empty?
-        if info[ :tund ].closed?
+        tund = info[ :tund ]
+
+        if tund.closed?
+          add_closing( dest )
+          return
+        end
+
+        tund_info = @infos[ tund ]
+        ext = tund_info[ :dest_exts ][ dest.object_id ]
+
+        #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
+        # > 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
+        #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
+        #   2-4. recv got_fin2 > break loop
+        if ext[ :is_source_closed ] && ( ext[ :biggest_source_pack_id ] == ext[ :continue_source_pack_id ] )
+          # puts "debug 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest #{ Time.new } p#{ Process.pid }"
           add_closing( dest )
           return
         end

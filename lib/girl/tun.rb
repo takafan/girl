@@ -25,20 +25,20 @@ require 'socket'
 #
 # 流量打包成udp，在tun-tund之间传输，包结构：
 #
-# Q>: 1+ source/dest_id -> Q>: pack_id        -> traffic
-#     0  ctlmsg         -> C:  1 tund port    -> n: tund port
-#                             2 heartbeat     -> C: random char
-#                             3 a new source  -> Q>nnN: source_id dst_family dst_port dst_host
-#                             4 paired        -> Q>Q>: source_id dest_id
-#                             5 dest status   -> Q>Q>Q>: dest_id biggest_dest_pack_id continue_source_pack_id
-#                             6 source status -> Q>Q>Q>: source_id biggest_source_pack_id continue_dest_pack_id
-#                             7 miss          -> Q>Q>Q>: source/dest_id pack_id_begin pack_id_end
-#                             8 fin1          -> Q>: source/dest_id
-#                             9 got fin1      -> Q>: source/dest_id
-#                            10 fin2          -> Q>: source/dest_id
-#                            11 got fin2      -> Q>: source/dest_id
-#                            12 tund fin
-#                            13 tun fin
+# Q>: 1+ source/dest_id -> Q>: pack_id         -> traffic
+#     0  ctlmsg         -> C:  1 tund port     -> n: tund port
+#                              2 heartbeat     -> C: random char
+#                              3 a new source  -> Q>nnN: source_id dst_family dst_port dst_host
+#                              4 paired        -> Q>Q>: source_id dest_id
+#                              5 dest status   -> Q>Q>Q>: dest_id biggest_dest_pack_id continue_source_pack_id
+#                              6 source status -> Q>Q>Q>: source_id biggest_source_pack_id continue_dest_pack_id
+#                              7 miss          -> Q>Q>Q>: source/dest_id pack_id_begin pack_id_end
+#                              8 fin1          -> Q>: source/dest_id
+#                              9 got fin1      -> Q>: source/dest_id
+#                             10 fin2          -> Q>: source/dest_id
+#                             11 got fin2      -> Q>: source/dest_id
+#                             12 tund fin
+#                             13 tun fin
 #
 # 两套关闭
 # ========
@@ -293,13 +293,8 @@ module Girl
             ext[ :completed_pack_id ] = continue_source_pack_id
           end
 
-          #   2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true
-          # > 2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source
-          #   2-3. source.close > ext.is_dest_closed > del ext > loop send fin2
-          #   2-4. recv got_fin2 > break loop
           if ext[ :is_dest_closed ] && ( ext[ :biggest_dest_pack_id ] == ext[ :continue_dest_pack_id ] )
-            # puts "debug 2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source #{ Time.new } p#{ Process.pid }"
-            add_closing( ext[ :source ] )
+            add_write( ext[ :source ] )
             return
           end
 
@@ -456,6 +451,17 @@ module Girl
       data, from = get_buff( source )
 
       if data.empty?
+        ext = @tun_info[ :source_exts ][ source.object_id ]
+        #   2-1. recv fin1 > send got_fin1 > ext.is_dest_closed true
+        # > 2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source
+        #   2-3. source.close > ext.is_dest_closed > del ext > loop send fin2
+        #   2-4. recv got_fin2 > break loop
+        if ext[ :is_dest_closed ] && ( ext[ :biggest_dest_pack_id ] == ext[ :continue_dest_pack_id ] )
+          # puts "debug 2-2. ext.biggest_dest_pack_id equals ext.continue_dest_pack_id > add closing source #{ Time.new } p#{ Process.pid }"
+          add_closing( source )
+          return
+        end
+
         @writes.delete( source )
         return
       end
