@@ -10,14 +10,14 @@ require 'socket'
 # 两套关闭
 # ========
 #
-# 1-1. dest.close > !ext.is_source_closed > send fin1 loop
-# 1-2. recv got_fin1 > break loop
-# 1-3. recv fin2 > send got_fin2 > del ext
+# 1-1. dest.close -> ext.is_source_closed ? no -> send fin1 loop
+# 1-2. recv got_fin1 -> break loop
+# 1-3. recv fin2 -> send got_fin2 -> del ext
 #
-# 2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
-# 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
-# 2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
-# 2-4. recv got_fin2 > break loop
+# 2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
+# 2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
+# 2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2
+# 2-4. recv got_fin2 -> break loop
 #
 module Girl
   class Tund
@@ -315,12 +315,7 @@ module Girl
             ext[ :completed_pack_id ] = continue_dest_pack_id
           end
 
-          #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
-          # > 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
-          #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
-          #   2-4. recv got_fin2 > break loop
           if ext[ :is_source_closed ] && ( ext[ :biggest_source_pack_id ] == ext[ :continue_source_pack_id ] )
-            # puts "debug 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest #{ Time.new } p#{ Process.pid }"
             add_write( ext[ :dest ] )
             return
           end
@@ -369,12 +364,12 @@ module Girl
             end
           end
         when FIN1
-          # > 2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
-          #   2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
-          #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
-          #   2-4. recv got_fin2 > break loop
+          # > 2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
+          #   2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
+          #   2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2
+          #   2-4. recv got_fin2 -> break loop
 
-          # puts "debug 2-1. recv fin1 > send got_fin1 > ext.is_source_closed true #{ Time.new } p#{ Process.pid }"
+          # puts "debug 2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true #{ Time.new } p#{ Process.pid }"
           source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           ctlmsg = [
             0,
@@ -392,19 +387,19 @@ module Girl
 
           ext[ :is_source_closed ] = true
         when GOT_FIN1
-          #   1-1. dest.close > !ext.is_source_closed > send fin1 loop
-          # > 1-2. recv got_fin1 > break loop
-          #   1-3. recv fin2 > send got_fin2 > del ext
+          #   1-1. dest.close -> ext.is_source_closed ? no -> send fin1 loop
+          # > 1-2. recv got_fin1 -> break loop
+          #   1-3. recv fin2 -> send got_fin2 -> del ext
 
-          # puts "debug 1-2. recv got_fin1 > break loop #{ Time.new } p#{ Process.pid }"
+          # puts "debug 1-2. recv got_fin1 -> break loop #{ Time.new } p#{ Process.pid }"
           dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin1s ].delete( dest_id )
         when FIN2
-          #   1-1. dest.close > !ext.is_source_closed > send fin1 loop
-          #   1-2. recv got_fin1 > break loop
-          # > 1-3. recv fin2 > send got_fin2 > del ext
+          #   1-1. dest.close -> ext.is_source_closed ? no -> send fin1 loop
+          #   1-2. recv got_fin1 -> break loop
+          # > 1-3. recv fin2 -> send got_fin2 -> del ext
 
-          # puts "debug 1-3. recv fin2 > send got_fin2 > del ext #{ Time.new } p#{ Process.pid }"
+          # puts "debug 1-3. recv fin2 -> send got_fin2 -> del ext #{ Time.new } p#{ Process.pid }"
           source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           ctlmsg = [
             0,
@@ -419,12 +414,12 @@ module Girl
 
           del_dest_ext( tund, dest_id )
         when GOT_FIN2
-          #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
-          #   2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
-          #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
-          # > 2-4. recv got_fin2 > break loop
+          #   2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
+          #   2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
+          #   2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2
+          # > 2-4. recv got_fin2 -> break loop
 
-          # puts "debug 2-4. recv got_fin2 > break loop #{ Time.new } p#{ Process.pid }"
+          # puts "debug 2-4. recv got_fin2 -> break loop #{ Time.new } p#{ Process.pid }"
           dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin2s ].delete( dest_id )
         when TUN_FIN
@@ -488,12 +483,12 @@ module Girl
         tund_info = @infos[ tund ]
         ext = tund_info[ :dest_exts ][ dest.object_id ]
 
-        #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
-        # > 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
-        #   2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
-        #   2-4. recv got_fin2 > break loop
+        #   2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
+        # > 2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
+        #   2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2
+        #   2-4. recv got_fin2 -> break loop
         if ext[ :is_source_closed ] && ( ext[ :biggest_source_pack_id ] == ext[ :continue_source_pack_id ] )
-          # puts "debug 2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest #{ Time.new } p#{ Process.pid }"
+          # puts "debug 2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest #{ Time.new } p#{ Process.pid }"
           add_closing( dest )
           return
         end
@@ -726,7 +721,7 @@ module Girl
     def send_pack( sock, pack, target_sockaddr )
       begin
         sock.sendmsg( pack, 0, target_sockaddr )
-      rescue IO::WaitWritable, Errno::EINTR, Errno::EDESTADDRREQ => e
+      rescue IO::WaitWritable, Errno::EINTR => e
         puts "sendmsg #{ e.class } #{ Time.new } p#{ Process.pid }"
       end
     end
@@ -822,12 +817,12 @@ module Girl
         ext[ :pieces ].clear
 
         if ext[ :is_source_closed ]
-          #   2-1. recv fin1 > send got_fin1 > ext.is_source_closed true
-          #   2-2. ext.biggest_source_pack_id equals ext.continue_source_pack_id > add closing dest
-          # > 2-3. dest.close > ext.is_source_closed > del ext > loop send fin2
-          #   2-4. recv got_fin2 > break loop
+          #   2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
+          #   2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
+          # > 2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2
+          #   2-4. recv got_fin2 -> break loop
 
-          # puts "debug 2-3. dest.close > ext.is_source_closed > del ext > loop send fin2 #{ Time.new } p#{ Process.pid }"
+          # puts "debug 2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2 #{ Time.new } p#{ Process.pid }"
           tund_info[ :src_dst ].delete( ext[ :source_id ] )
           del_dest_ext( tund, dest_id )
 
@@ -836,11 +831,11 @@ module Girl
             loop_send_fin2( tund, dest_id )
           end
         else
-          # > 1-1. dest.close > !ext.is_source_closed > send fin1 loop
-          #   1-2. recv got_fin1 > break loop
-          #   1-3. recv fin2 > send got_fin2 > del ext
+          # > 1-1. dest.close -> ext.is_source_closed ? no -> send fin1 loop
+          #   1-2. recv got_fin1 -> break loop
+          #   1-3. recv fin2 -> send got_fin2 -> del ext
 
-          # puts "debug 1-1. dest.close > !ext.is_source_closed > send fin1 loop #{ Time.new } p#{ Process.pid }"
+          # puts "debug 1-1. dest.close -> ext.is_source_closed ? no -> send fin1 loop #{ Time.new } p#{ Process.pid }"
           unless tund_info[ :fin1s ].include?( dest_id )
             tund_info[ :fin1s ] << dest_id
             loop_send_fin1( tund, dest_id )
