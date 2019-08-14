@@ -207,7 +207,8 @@ module Girl
         dest_id: nil,              # 对面id
         is_dest_closed: false,     # 对面是否已关闭
         biggest_dest_pack_id: 0,   # 对面发到几
-        completed_pack_id: 0       # 完成到几（对面收到几）
+        completed_pack_id: 0,      # 完成到几（对面收到几）
+        last_traffic_at: nil       # 有流量发出，或者有更新收到几，时间戳
       }
 
       add_read( source )
@@ -249,7 +250,8 @@ module Girl
     def read_tun( tun )
       info = @infos[ tun ]
       data, addrinfo, rflags, *controls = tun.recvmsg
-      info[ :last_coming_at ] = Time.new
+      now = Time.new
+      info[ :last_coming_at ] = now
       dest_id = data[ 0, 8 ].unpack( 'Q>' ).first
 
       if dest_id == 0
@@ -335,10 +337,11 @@ module Girl
 
           ( pack_id_begin..pack_id_end ).each do | pack_id |
             data, add_at = ext[ :wmems ][ pack_id ]
-            break if Time.new - add_at < STATUS_INTERVAL
+            break if now - add_at < STATUS_INTERVAL
 
             if data
               send_pack( tun, data, info[ :tund_addr ] )
+              ext[ :last_traffic_at ] = now
             end
           end
         when FIN1
@@ -432,6 +435,7 @@ module Girl
         end
 
         ext[ :continue_dest_pack_id ] = pack_id
+        ext[ :last_traffic_at ] = now
         add_buff( ext[ :source ], data )
       else
         ext[ :pieces ][ pack_id ] = data
@@ -516,8 +520,10 @@ module Girl
 
       if ext
         send_pack( tun, pack, info[ :tund_addr ] )
+        now = Time.new
         ext[ :biggest_pack_id ] = pack_id
-        ext[ :wmems ][ pack_id ] = [ pack, Time.new ]
+        ext[ :wmems ][ pack_id ] = [ pack, now ]
+        ext[ :last_traffic_at ] = now
         info[ :wmems_size ] += 1
       end
 
@@ -591,16 +597,20 @@ module Girl
 
           if !@tun.closed? && @tun_info[ :tund_addr ] && @tun_info[ :source_exts ].any?
             @mutex.synchronize do
-              @tun_info[ :source_exts ].each do | source_id, ext |
-                ctlmsg = [
-                  0,
-                  SOURCE_STATUS,
-                  source_id,
-                  ext[ :biggest_pack_id ],
-                  ext[ :continue_dest_pack_id ]
-                ].pack( 'Q>CQ>Q>Q>' )
+              now = Time.new
 
-                send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+              @tun_info[ :source_exts ].each do | source_id, ext |
+                if ext[ :last_traffic_at ] && ( now - ext[ :last_traffic_at ] < SEND_STATUS_UNTIL )
+                  ctlmsg = [
+                    0,
+                    SOURCE_STATUS,
+                    source_id,
+                    ext[ :biggest_pack_id ],
+                    ext[ :continue_dest_pack_id ]
+                  ].pack( 'Q>CQ>Q>Q>' )
+
+                  send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+                end
               end
             end
           end
