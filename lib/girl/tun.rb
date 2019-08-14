@@ -156,6 +156,7 @@ module Girl
         sock = @socks[ sock_id ]
 
         if sock
+          puts "expire tun #{ Time.new } p#{ Process.pid }"
           add_closing( sock )
         end
       when CTL_RESUME
