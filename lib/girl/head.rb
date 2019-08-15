@@ -7,7 +7,7 @@ module Girl
   EXPIRE_AFTER          = 1800             # 多久过期
   HEARTBEAT_INTERVAL    = 59               # 心跳间隔
   STATUS_INTERVAL       = 0.3              # 发送状态间隔
-  SEND_STATUS_UNTIL     = 5                # 持续的告之对面状态，直到没有流量往来，持续多少秒
+  SEND_STATUS_UNTIL     = 10               # 持续的告之对面状态，直到没有流量往来，持续多少秒
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3

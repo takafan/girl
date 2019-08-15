@@ -201,15 +201,16 @@ module Girl
       @tun_info[ :sources ] << source
       @tun_info[ :source_exts ][ source_id ] = {
         source: source,
-        wmems: {},                 # 写后缓存 pack_id => [ data, add_at ]
-        biggest_pack_id: 0,        # 发到几
-        continue_dest_pack_id: 0,  # 收到几
-        pieces: {},                # 跳号包 dest_pack_id => data
-        dest_id: nil,              # 对面id
-        is_dest_closed: false,     # 对面是否已关闭
-        biggest_dest_pack_id: 0,   # 对面发到几
-        completed_pack_id: 0,      # 完成到几（对面收到几）
-        last_traffic_at: nil       # 有流量发出，或者有更新收到几，时间戳
+        wmems: {},                # 写后缓存 pack_id => data
+        send_ats: {},             # 上一次发出时间 pack_id => send_at
+        biggest_pack_id: 0,       # 发到几
+        continue_dest_pack_id: 0, # 收到几
+        pieces: {},               # 跳号包 dest_pack_id => data
+        dest_id: nil,             # 对面id
+        is_dest_closed: false,    # 对面是否已关闭
+        biggest_dest_pack_id: 0,  # 对面发到几
+        completed_pack_id: 0,     # 完成到几（对面收到几）
+        last_traffic_at: nil      # 有流量发出，或者有更新收到几，时间戳
       }
 
       add_read( source )
@@ -288,9 +289,13 @@ module Girl
 
           # 更新对面收到几，释放写后
           if continue_source_pack_id > ext[ :completed_pack_id ]
-            wmems = ext[ :wmems ]
-            pack_ids = wmems.keys.select { | pack_id | pack_id <= continue_source_pack_id }
-            pack_ids.each { | pack_id | wmems.delete( pack_id ) }
+            pack_ids = ext[ :wmems ].keys.select { | pack_id | pack_id <= continue_source_pack_id }
+
+            pack_ids.each do | pack_id |
+              ext[ :wmems ].delete( pack_id )
+              ext[ :send_ats ].delete( pack_id )
+            end
+
             info[ :wmems_size ] -= pack_ids.size
             # puts "debug completed #{ continue_source_pack_id } wmems #{ info[ :wmems_size ] }"
             ext[ :completed_pack_id ] = continue_source_pack_id
@@ -337,10 +342,11 @@ module Girl
           return unless ext
 
           ( pack_id_begin..pack_id_end ).each do | pack_id |
-            data, add_at = ext[ :wmems ][ pack_id ]
-            break if now - add_at < STATUS_INTERVAL
+            data = ext[ :wmems ][ pack_id ]
 
             if data
+              break if now - ext[ :send_ats ][ pack_id ] < STATUS_INTERVAL
+
               send_pack( tun, data, info[ :tund_addr ] )
               ext[ :last_traffic_at ] = now
             end
@@ -523,7 +529,8 @@ module Girl
         send_pack( tun, pack, info[ :tund_addr ] )
         now = Time.new
         ext[ :biggest_pack_id ] = pack_id
-        ext[ :wmems ][ pack_id ] = [ pack, now ]
+        ext[ :wmems ][ pack_id ] = pack
+        ext[ :send_ats ][ pack_id ] = now
         ext[ :last_traffic_at ] = now
         info[ :wmems_size ] += 1
       end
@@ -538,21 +545,21 @@ module Girl
 
       tun_id = tun.object_id
       tun_info = {
-        wbuff: '',                                            # 写前缓存
-        cache: '',                                            # 块读出缓存
-        filename: [ Process.pid, tun_id ].join( '-' ),        # 块名
-        chunk_dir: @tun_chunk_dir,                            # 块目录
-        chunks: [],                                           # 块文件名，wbuff每超过1.4M落一个块
-        chunk_seed: 0,                                        # 块序号
-        tund_addr: nil,                                       # 远端地址
-        dst_src: {},                                          # dest_id => source_id
-        sources: [],                                          # 开着的source
-        source_exts: {},                                      # 传输相关 source_id => {}
-        fin1s: [],                                            # fin1: source已关闭，等待对面收完流量 source_id
-        fin2s: [],                                            # fin2: 流量已收完 source_id
-        last_coming_at: nil,                                  # 上一次来流量的时间
-        wmems_size: 0,                                        # 写后缓存总个数
-        paused: false                                         # 是否暂停写
+        wbuff: '',                                     # 写前缓存
+        cache: '',                                     # 块读出缓存
+        filename: [ Process.pid, tun_id ].join( '-' ), # 块名
+        chunk_dir: @tun_chunk_dir,                     # 块目录
+        chunks: [],                                    # 块文件名，wbuff每超过1.4M落一个块
+        chunk_seed: 0,                                 # 块序号
+        tund_addr: nil,                                # 远端地址
+        dst_src: {},                                   # dest_id => source_id
+        sources: [],                                   # 开着的source
+        source_exts: {},                               # 传输相关 source_id => {}
+        fin1s: [],                                     # fin1: source已关闭，等待对面收完流量 source_id
+        fin2s: [],                                     # fin2: 流量已收完 source_id
+        last_coming_at: nil,                           # 上一次来流量的时间
+        wmems_size: 0,                                 # 写后缓存总个数
+        paused: false                                  # 是否暂停写
       }
 
       @tun = tun
@@ -618,7 +625,6 @@ module Girl
 
           if !@tun.closed? && @tun_info[ :paused ] && ( @tun_info[ :wmems_size ].size < RESUME_BELOW )
             @mutex.synchronize do
-              puts "resume #{ Time.new } p#{ Process.pid }"
               @ctlw.write( CTL_RESUME )
               @tun_info[ :paused ] = false
             end

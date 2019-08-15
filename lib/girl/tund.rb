@@ -282,15 +282,16 @@ module Girl
           info[ :dests ] << dest
           info[ :dest_exts ][ dest_id ] = {
             dest: dest,
-            wmems: {},                   # 写后缓存 pack_id => [ data, add_at ]
-            biggest_pack_id: 0,          # 发到几
-            continue_source_pack_id: 0,  # 收到几
-            pieces: {},                  # 跳号包 source_pack_id => data
-            source_id: source_id,        # 对面id
-            is_source_closed: false,     # 对面是否已关闭
-            biggest_source_pack_id: 0,   # 对面发到几
-            completed_pack_id: 0,        # 完成到几（对面收到几）
-            last_traffic_at: nil         # 有流量发出，或者有更新收到几，时间戳
+            wmems: {},                  # 写后缓存 pack_id => data
+            send_ats: {},               # 上一次发出时间 pack_id => send_at
+            biggest_pack_id: 0,         # 发到几
+            continue_source_pack_id: 0, # 收到几
+            pieces: {},                 # 跳号包 source_pack_id => data
+            source_id: source_id,       # 对面id
+            is_source_closed: false,    # 对面是否已关闭
+            biggest_source_pack_id: 0,  # 对面发到几
+            completed_pack_id: 0,       # 完成到几（对面收到几）
+            last_traffic_at: nil        # 有流量发出，或者有更新收到几，时间戳
           }
           info[ :src_dst ][ source_id ] = dest_id
           add_read( dest )
@@ -310,9 +311,13 @@ module Girl
 
           # 更新对面收到几，释放写后
           if continue_dest_pack_id > ext[ :completed_pack_id ]
-            wmems = ext[ :wmems ]
-            pack_ids = wmems.keys.select { | pack_id | pack_id <= continue_dest_pack_id }
-            pack_ids.each { | pack_id | wmems.delete( pack_id ) }
+            pack_ids = ext[ :wmems ].keys.select { | pack_id | pack_id <= continue_dest_pack_id }
+
+            pack_ids.each do | pack_id |
+              ext[ :wmems ].delete( pack_id )
+              ext[ :send_ats ].delete( pack_id )
+            end
+
             @roomd_info[ :wmems_size ] -= pack_ids.size
             # puts "debug completed #{ continue_dest_pack_id } wmems #{ @roomd_info[ :wmems_size ] }"
             ext[ :completed_pack_id ] = continue_dest_pack_id
@@ -359,10 +364,11 @@ module Girl
           return unless ext
 
           ( pack_id_begin..pack_id_end ).each do | pack_id |
-            data, add_at = ext[ :wmems ][ pack_id ]
-            break if now - add_at < STATUS_INTERVAL
+            data = ext[ :wmems ][ pack_id ]
 
             if data
+              break if now - ext[ :send_ats ][ pack_id ] < STATUS_INTERVAL
+
               send_pack( tund, data, info[ :tun_addr ] )
               ext[ :last_traffic_at ] = now
             end
@@ -551,7 +557,8 @@ module Girl
         send_pack( tund, pack, info[ :tun_addr ] )
         now = Time.new
         ext[ :biggest_pack_id ] = pack_id
-        ext[ :wmems ][ pack_id ] = [ pack, now ]
+        ext[ :wmems ][ pack_id ] = pack
+        ext[ :send_ats ][ pack_id ] = now
         ext[ :last_traffic_at ] = now
         @roomd_info[ :wmems_size ] += 1
       end
@@ -620,7 +627,6 @@ module Girl
           if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :wmems_size ].size < RESUME_BELOW )
             @mutex.synchronize do
               tund_ids = @roomd_info[ :paused_tunds ].map { | tund | tund.object_id }
-              puts "resume #{ Time.new } p#{ Process.pid }"
               @ctlw.write( [ CTL_RESUME, [ tund_ids.size ].pack( 'n' ), tund_ids.pack( 'Q>*' ) ].join )
               @roomd_info[ :paused_tunds ].clear
             end
