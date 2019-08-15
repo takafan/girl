@@ -853,7 +853,7 @@ module Girl
           #   1-3. recv fin2 -> send got_fin2 -> del ext
 
           # puts "debug 1-1. dest.close -> ext.is_source_closed ? no -> send fin1 loop #{ Time.new } p#{ Process.pid }"
-          unless tund_info[ :fin1s ].include?( dest_id )
+          if tund_info[ :tun_addr ] && !tund_info[ :fin1s ].include?( dest_id )
             tund_info[ :fin1s ] << dest_id
             loop_send_fin1( tund, dest_id )
           end
