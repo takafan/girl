@@ -19,7 +19,9 @@ module Girl
 
     def initialize( port = 1717, nameservers = [], resolvd_host = nil, resolvd_port = nil, custom_domains = [] )
       @reads = []
-      @roles = {} # sock => :redir / :resolv / :pub
+      @writes = []
+      @socks = {} # object_id => sock
+      @roles = {} # sock => :ctlr / :redir / :resolv / :pub
       @infos = {} # redir => {}
       @hex = Girl::Hex.new
       @mutex = Mutex.new
@@ -50,22 +52,33 @@ module Girl
       @roles[ redir ] = :redir
       @infos[ redir ] = redir_info
       @reads << redir
+
+      ctlr, ctlw = IO.pipe
+      @ctlw = ctlw
+      @roles[ ctlr ] = :ctlr
+      @reads << ctlr
     end
 
     def looping
       loop_expire
 
       loop do
-        rs, _ = IO.select( @reads )
+        rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
           rs.each do | sock |
             case @roles[ sock ]
+            when :ctlr
+              read_ctlr( sock )
             when :redir
               read_redir( sock )
             when :resolv, :pub
               read_sock( sock )
             end
+          end
+
+          ws.each do | sock |
+            close_sock( sock )
           end
         end
       end
@@ -76,6 +89,19 @@ module Girl
     end
 
     private
+
+    def read_ctlr( ctlr )
+      sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
+      sock = @socks[ sock_id ]
+
+      if sock
+        # puts "debug expire #{ @roles[ sock ] } #{ sock_id } #{ Time.new }"
+
+        unless @writes.include?( sock )
+          @writes << sock
+        end
+      end
+    end
 
     def read_redir( redir )
       # https://tools.ietf.org/html/rfc1035#page-26
@@ -111,6 +137,8 @@ module Girl
         sock = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         sock.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+
+        @socks[ sock.object_id ] = sock
 
         if info[ :resolvd_addr ] && ( info[ :custom_qnames ].any? { | custom | qname.include?( custom ) } )
           @roles[ sock ] = :resolv
@@ -197,6 +225,17 @@ module Girl
       @redir_info[ :caches ][ question ] = [ data, *ttls.sort_by{ | _, exp | exp }.first ]
     end
 
+    def close_sock( sock )
+      sock.close
+      @reads.delete( sock )
+      @writes.delete( sock )
+      @socks.delete( sock.object_id )
+      @roles.delete( sock )
+      @redir_info[ :last_coming_ats ].delete( sock )
+      src_addr = @redir_info[ :socks ].delete( sock )
+      @redir_info[ :src_addrs ].delete( src_addr )
+    end
+
     def loop_expire
       Thread.new do
         loop do
@@ -208,13 +247,7 @@ module Girl
 
             socks.each do | sock |
               if now - @redir_info[ :last_coming_ats ][ sock ] > 30
-                # puts "debug close #{ @roles[ sock ] } #{ sock.object_id } #{ Time.new }"
-                sock.close
-                @reads.delete( sock )
-                @roles.delete( sock )
-                @redir_info[ :last_coming_ats ].delete( sock )
-                src_addr = @redir_info[ :socks ].delete( sock )
-                @redir_info[ :src_addrs ].delete( src_addr )
+                @ctlw.write( [ sock.object_id ].pack( 'Q>' ) )
               end
             end
           end

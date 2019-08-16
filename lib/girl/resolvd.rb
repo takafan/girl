@@ -10,7 +10,9 @@ module Girl
 
     def initialize( port = 7070, nameservers = [] )
       @reads = []
-      @roles = {} # sock => :resolvd / :pub
+      @writes = []
+      @socks = {} # object_id => sock
+      @roles = {} # sock => :ctlr / :resolvd / :pub
       @infos = {} # resolvd => {}
       @hex = Girl::Hex.new
       @mutex = Mutex.new
@@ -34,22 +36,33 @@ module Girl
       @roles[ resolvd ] = :resolvd
       @infos[ resolvd ] = resolvd_info
       @reads << resolvd
+
+      ctlr, ctlw = IO.pipe
+      @ctlw = ctlw
+      @roles[ ctlr ] = :ctlr
+      @reads << ctlr
     end
 
     def looping
       loop_expire
 
       loop do
-        rs, _ = IO.select( @reads )
+        rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
           rs.each do | sock |
             case @roles[ sock ]
+            when :ctlr
+              read_ctlr( sock )
             when :resolvd
               read_resolvd( sock )
             when :pub
               read_pub( sock )
             end
+          end
+
+          ws.each do | sock |
+            close_sock( sock )
           end
         end
       end
@@ -60,6 +73,19 @@ module Girl
     end
 
     private
+
+    def read_ctlr( ctlr )
+      sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
+      sock = @socks[ sock_id ]
+
+      if sock
+        # puts "debug expire pub #{ sock_id } #{ Time.new }"
+
+        unless @writes.include?( sock )
+          @writes << sock
+        end
+      end
+    end
 
     def read_resolvd( resolvd )
       data, addrinfo, rflags, *controls = resolvd.recvmsg
@@ -76,6 +102,7 @@ module Girl
         pub.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
         # puts "debug a new pub bound on #{ pub.local_address.ip_unpack.last } #{ Time.new }"
 
+        @socks[ pub.object_id ] = pub
         @roles[ pub ] = :pub
         @reads << pub
         info[ :resolv_addrs ][ resolv_addr ] = pub
@@ -102,6 +129,17 @@ module Girl
       @resolvd.sendmsg( data, 0, resolv_addr )
     end
 
+    def close_sock( sock )
+      sock.close
+      @reads.delete( sock )
+      @writes.delete( sock )
+      @socks.delete( sock.object_id )
+      @roles.delete( sock )
+      @resolvd_info[ :last_coming_ats ].delete( sock )
+      resolv_addr = @resolvd_info[ :pubs ].delete( sock )
+      @resolvd_info[ :resolv_addrs ].delete( resolv_addr )
+    end
+
     def loop_expire
       Thread.new do
         loop do
@@ -113,13 +151,7 @@ module Girl
 
             pubs.each do | pub |
               if now - @resolvd_info[ :last_coming_ats ][ pub ] > 30
-                # puts "debug close pub #{ pub.object_id } #{ now }"
-                pub.close
-                @reads.delete( pub )
-                @roles.delete( pub )
-                @resolvd_info[ :last_coming_ats ].delete( pub )
-                resolv_addr = @resolvd_info[ :pubs ].delete( pub )
-                @resolvd_info[ :resolv_addrs ].delete( resolv_addr )
+                @ctlw.write( [ pub.object_id ].pack( 'Q>' ) )
               end
             end
           end
