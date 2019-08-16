@@ -189,13 +189,10 @@ module Girl
       ix = 17 + qname_len
       ttls = []
 
-      ( ancount + nscount ).times do | i |
-        unless data[ ix ]
-          puts "nil answer? #{ i } of #{ ancount + nscount } RR #{ data.inspect } #{ Time.new }"
-          break
-        end
+      ( ancount + nscount ).times do
+        break unless data[ ix ]
 
-        loop do
+        while data[ ix ]
           if data[ ix ].unpack( 'B8' ).first[ 0, 2 ] == '11' # pointer
             # move to TTL
             ix += 6
