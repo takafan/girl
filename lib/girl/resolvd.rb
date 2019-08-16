@@ -9,25 +9,48 @@ module Girl
   class Resolvd
 
     def initialize( port = 7070, nameservers = [] )
+      @reads = []
+      @roles = {} # sock => :resolvd / :pub
+      @infos = {} # resolvd => {}
+      @hex = Girl::Hex.new
+      @mutex = Mutex.new
+
       resolvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       resolvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       resolvd.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
-      puts "resolvd bound on #{ port }"
+      puts "resolvd bound on #{ port } #{ Time.new }"
 
       nameservers = nameservers.select{ | ns | Addrinfo.udp( ns, 53 ).ipv4? }
 
+      resolvd_info = {
+        resolv_addrs: {},    # resolv_addr => pub
+        pubs: {},            # pub => src_addr
+        last_coming_ats: {}, # pub => now
+        pubd_addrs: nameservers.map{ | ns | Socket.sockaddr_in( 53, ns ) }
+      }
+
       @resolvd = resolvd
-      @pub_addrs = nameservers.map{ | ns | Socket.sockaddr_in( 53, ns ) }
-      @ids = {}
-      @hex = Girl::Hex.new
+      @resolvd_info = resolvd_info
+      @roles[ resolvd ] = :resolvd
+      @infos[ resolvd ] = resolvd_info
+      @reads << resolvd
     end
 
     def looping
-      loop do
-        rs, _ = IO.select( [ @resolvd ] )
+      loop_expire
 
-        rs.each do | sock |
-          read_sock( sock )
+      loop do
+        rs, _ = IO.select( @reads )
+
+        @mutex.synchronize do
+          rs.each do | sock |
+            case @roles[ sock ]
+            when :resolvd
+              read_resolvd( sock )
+            when :pub
+              read_pub( sock )
+            end
+          end
         end
       end
     end
@@ -36,43 +59,71 @@ module Girl
       exit
     end
 
-    def read_sock( sock )
-      data, addrinfo, rflags, *controls = sock.recvmsg
-      # puts "debug recvmsg #{ data.inspect }"
+    private
 
-      if data.size <= 12
-        # heartbeat
-        return
+    def read_resolvd( resolvd )
+      data, addrinfo, rflags, *controls = resolvd.recvmsg
+      return if data.size <= 12
+
+      data = @hex.decode( data )
+      info = @infos[ resolvd ]
+      resolv_addr = addrinfo.to_sockaddr
+      pub = info[ :resolv_addrs ][ resolv_addr ]
+
+      unless pub
+        pub = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+        pub.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        pub.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+        # puts "debug a new pub bound on #{ pub.local_address.ip_unpack.last } #{ Time.new }"
+
+        @roles[ pub ] = :pub
+        @reads << pub
+        info[ :resolv_addrs ][ resolv_addr ] = pub
+        info[ :pubs ][ pub ] = resolv_addr
+        info[ :last_coming_ats ][ pub ] = Time.new
       end
 
-      src = addrinfo.to_sockaddr
-
-      unless @pub_addrs.include?( src )
-        data = @hex.decode( data )
+      info[ :pubd_addrs ].each do | pubd_addr |
+        pub.sendmsg( data, 0, pubd_addr )
       end
+    end
 
-      id = data[ 0, 2 ]
-      qr = data[ 2, 2 ].unpack( 'B16' ).first[ 0 ]
-      qname_len = data[ 12..-1 ].index( [ 0 ].pack( 'C' ) )
+    def read_pub( pub )
+      data, addrinfo, rflags, *controls = pub.recvmsg
+      return if data.size <= 12
 
-      unless qname_len
-        puts 'missing qname?'
-        return
-      end
+      resolv_addr = @resolvd_info[ :pubs ][ pub ]
+      return unless resolv_addr
 
-      if qr == '0'
-        qname = data[ 12, qname_len ]
+      # puts "debug pub recvmsg #{ data.inspect }"
+      @resolvd_info[ :last_coming_ats ][ pub ] = Time.new
+      data = @hex.encode( data )
+      # puts "debug resolvd sendmsg #{ data.inspect }"
+      @resolvd.sendmsg( data, 0, resolv_addr )
+    end
 
-        @pub_addrs.each do | pub_addr |
-          sock.sendmsg( data, 0, pub_addr )
+    def loop_expire
+      Thread.new do
+        loop do
+          sleep 10
+
+          @mutex.synchronize do
+            now = Time.new
+            pubs = @resolvd_info[ :pubs ].keys
+
+            pubs.each do | pub |
+              if now - @resolvd_info[ :last_coming_ats ][ pub ] > 30
+                # puts "debug close pub #{ pub.object_id } #{ now }"
+                pub.close
+                @reads.delete( pub )
+                @roles.delete( pub )
+                @resolvd_info[ :last_coming_ats ].delete( pub )
+                resolv_addr = @resolvd_info[ :pubs ].delete( pub )
+                @resolvd_info[ :resolv_addrs ].delete( resolv_addr )
+              end
+            end
+          end
         end
-
-        @ids[ id ] = src
-      elsif qr == '1' && @ids.include?( id )
-        # relay the fastest response, ignore followings
-        src = @ids.delete( id )
-        data = @hex.encode( data )
-        sock.sendmsg( data, 0, src )
       end
     end
 
