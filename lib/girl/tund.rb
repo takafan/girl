@@ -6,7 +6,6 @@ require 'socket'
 ##
 # Girl::Tund - tcp流量正常的到达目的地。远端。
 #
-##
 # 两套关闭
 # ========
 #
@@ -178,7 +177,8 @@ module Girl
         dest_exts: {},                                  # 传输相关 dest_id => {}
         fin1s: [],                                      # fin1: dest已关闭，等待对面收完流量 dest_id
         fin2s: [],                                      # fin2: 流量已收完 dest_id
-        last_coming_at: nil                             # 上一次来流量的时间
+        last_coming_at: nil,                            # 上一次来流量的时间
+        resendings: []                                  # [ dest_id, pack_id ]
       }
 
       info[ :tunds ] << tund
@@ -364,15 +364,16 @@ module Girl
           return unless ext
 
           ( pack_id_begin..pack_id_end ).each do | pack_id |
-            data = ext[ :wmems ][ pack_id ]
+            send_at = ext[ :send_ats ][ pack_id ]
 
-            if data
-              break if now - ext[ :send_ats ][ pack_id ] < STATUS_INTERVAL
+            if send_at
+              break if now - send_at < STATUS_INTERVAL
 
-              send_pack( tund, data, info[ :tun_addr ] )
-              ext[ :last_traffic_at ] = now
+              info[ :resendings ] << [ dest_id, pack_id ]
             end
           end
+
+          add_write( tund )
         when FIN1
           # > 2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
           #   2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
@@ -530,6 +531,24 @@ module Girl
         return
       end
 
+      now = Time.new
+      info = @infos[ tund ]
+
+      while info[ :resendings ].any?
+        dest_id, pack_id = info[ :resendings ].shift
+        ext = info[ :dest_exts ][ dest_id ]
+
+        if ext
+          pack = ext[ :wmems ][ pack_id ]
+
+          if pack
+            send_pack( tund, pack, info[ :tun_addr ] )
+            ext[ :last_traffic_at ] = now
+            return
+          end
+        end
+      end
+
       if @roomd_info[ :wmems_size ] > WMEMS_LIMIT
         unless @roomd_info[ :paused_tunds ].include?( tund )
           puts "pause #{ tund.object_id } #{ Time.new } p#{ Process.pid }"
@@ -547,7 +566,6 @@ module Girl
         return
       end
 
-      info = @infos[ tund ]
       len = data[ 0, 2 ].unpack( 'n' ).first
       pack = data[ 2, ( 16 + len ) ]
       dest_id, pack_id = pack[ 0, 16 ].unpack( 'Q>Q>' )
@@ -555,7 +573,6 @@ module Girl
 
       if ext
         send_pack( tund, pack, info[ :tun_addr ] )
-        now = Time.new
         ext[ :biggest_pack_id ] = pack_id
         ext[ :wmems ][ pack_id ] = pack
         ext[ :send_ats ][ pack_id ] = now

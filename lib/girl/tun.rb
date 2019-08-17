@@ -6,7 +6,6 @@ require 'socket'
 ##
 # Girl::Tun - tcp流量正常的到达目的地。近端。
 #
-##
 # usage
 # =====
 #
@@ -333,7 +332,7 @@ module Girl
                 pack_id_end
               ].pack( 'Q>CQ>Q>Q>' )
 
-              send_pack( @tun, ctlmsg,  @tun_info[ :tund_addr ] )
+              send_pack( tun, ctlmsg,  info[ :tund_addr ] )
             end
           end
         when MISS
@@ -342,15 +341,16 @@ module Girl
           return unless ext
 
           ( pack_id_begin..pack_id_end ).each do | pack_id |
-            data = ext[ :wmems ][ pack_id ]
+            send_at = ext[ :send_ats ][ pack_id ]
 
-            if data
-              break if now - ext[ :send_ats ][ pack_id ] < STATUS_INTERVAL
+            if send_at
+              break if now - send_at < STATUS_INTERVAL
 
-              send_pack( tun, data, info[ :tund_addr ] )
-              ext[ :last_traffic_at ] = now
+              info[ :resendings ] << [ source_id, pack_id ]
             end
           end
+
+          add_write( tun )
         when FIN1
           # > 2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true
           #   2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source
@@ -500,7 +500,23 @@ module Girl
         return
       end
 
+      now = Time.new
       info = @infos[ tun ]
+
+      while info[ :resendings ].any?
+        source_id, pack_id = info[ :resendings ].shift
+        ext = info[ :source_exts ][ source_id ]
+
+        if ext
+          pack = ext[ :wmems ][ pack_id ]
+
+          if pack
+            send_pack( tun, pack, info[ :tund_addr ] )
+            ext[ :last_traffic_at ] = now
+            return
+          end
+        end
+      end
 
       # 写后缓存超过上限，中断写
       if info[ :wmems_size ] > WMEMS_LIMIT
@@ -527,7 +543,6 @@ module Girl
 
       if ext
         send_pack( tun, pack, info[ :tund_addr ] )
-        now = Time.new
         ext[ :biggest_pack_id ] = pack_id
         ext[ :wmems ][ pack_id ] = pack
         ext[ :send_ats ][ pack_id ] = now
@@ -559,7 +574,8 @@ module Girl
         fin2s: [],                                     # fin2: 流量已收完 source_id
         last_coming_at: nil,                           # 上一次来流量的时间
         wmems_size: 0,                                 # 写后缓存总个数
-        paused: false                                  # 是否暂停写
+        paused: false,                                 # 是否暂停写
+        resendings: []                                 # [ source_id, pack_id ]
       }
 
       @tun = tun
