@@ -879,13 +879,15 @@ module Girl
       @writes.delete( sock )
       @closings.delete( sock )
       @socks.delete( sock.object_id )
-      @roles.delete( sock )
+      role = @roles.delete( sock )
       info = @infos.delete( sock )
 
       if info
+        chunk_dir = ( role == :source ? @source_chunk_dir : @tun_chunk_dir )
+
         info[ :chunks ].each do | filename |
           begin
-            File.delete( File.join( info[ :chunk_dir ], filename ) )
+            File.delete( File.join( chunk_dir, filename ) )
           rescue Errno::ENOENT
           end
         end
