@@ -46,10 +46,9 @@ module Girl
       roomd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       roomd.bind( Socket.sockaddr_in( roomd_port, '0.0.0.0' ) )
       roomd_info = {
-        tunds: [],        # tund
-        paused_tunds: [], # 暂停写的tunds
-        tund_clients: {}, # tund => sockaddr
-        wmems_size: 0     # 写后缓存总个数
+        tunds: [],
+        paused_tunds: [], # 暂停的tunds
+        tund_clients: {}  # tund => sockaddr
       }
 
       @roomd = roomd
@@ -165,20 +164,18 @@ module Girl
       @socks[ tund_id ] = tund
       @roles[ tund ] = :tund
       @infos[ tund ] = {
-        wbuff: '',                                      # 写前缓存
-        cache: '',                                      # 块读出缓存
-        filename: [ Process.pid, tund_id ].join( '-' ), # 块名
-        chunk_dir: @tund_chunk_dir,                     # 块目录
-        chunks: [],                                     # 块文件名，wbuff每超过1.4M落一个块
-        chunk_seed: 0,                                  # 块序号
-        tun_addr: nil,                                  # 近端地址
-        src_dst: {},                                    # source_id => dest_id
-        dests: [],                                      # 开着的dest
-        dest_exts: {},                                  # 传输相关 dest_id => {}
-        fin1s: [],                                      # fin1: dest已关闭，等待对面收完流量 dest_id
-        fin2s: [],                                      # fin2: 流量已收完 dest_id
-        last_coming_at: nil,                            # 上一次来流量的时间
-        resendings: []                                  # [ dest_id, pack_id ]
+        wbuffs: [],          # 写前缓存 [ dest_id, data ]
+        caches: [],          # 块读出缓存 [ dest_id, data ]
+        chunks: [],          # 块队列 filename
+        spring: 0,           # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
+        tun_addr: nil,       # 近端地址
+        src_dst: {},         # source_id => dest_id
+        dests: [],           # 开着的dest
+        dest_exts: {},       # 传输相关 dest_id => {}
+        fin1s: [],           # fin1: dest已关闭，等待对面收完流量 dest_id
+        fin2s: [],           # fin2: 流量已收完 dest_id
+        last_coming_at: nil, # 上一次来流量的时间
+        resendings: []       # 重传队列 [ dest_id, pack_id ]
       }
 
       info[ :tunds ] << tund
@@ -210,16 +207,22 @@ module Girl
         return
       end
 
-      pack_id = info[ :pcur ] + 1
+      tund_info = @infos[ tund ]
+      tund_info[ :wbuffs ] << [ dest.object_id, data ]
 
-      if pack_id == 1
-        data = @hex.encode( data )
+      if tund_info[ :wbuffs ].size >= WBUFFS_LIMIT
+        spring = tund_info[ :chunks ].size > 0 ? ( tund_info[ :spring ] + 1 ) : 0
+        filename = "#{ Process.pid }-#{ tund.object_id }.#{ spring }"
+        chunk_path = File.join( @tund_chunk_dir, filename )
+        IO.binwrite( chunk_path, tund_info[ :wbuffs ].map{ | dest_id, data | "#{ [ dest_id, data.bytesize ].pack( 'Q>n' ) }#{ data }" }.join )
+        tund_info[ :chunks ] << filename
+        tund_info[ :spring ] = spring
+        tund_info[ :wbuffs ].clear
       end
 
-      prefix = [ data.bytesize, dest.object_id, pack_id ].pack( 'nQ>Q>' )
-      is_add_write = !@roomd_info[ :paused_tunds ].include?( tund )
-      add_buff( tund, [ prefix, data ].join, is_add_write )
-      info[ :pcur ] = pack_id
+      unless @roomd_info[ :paused_tunds ].include?( tund )
+        add_write( tund )
+      end
     end
 
     ##
@@ -269,13 +272,10 @@ module Girl
           @socks[ dest_id ] = dest
           @roles[ dest ] = :dest
           @infos[ dest ] = {
-            wbuff: '',
-            cache: '',
-            filename: [ Process.pid, dest_id ].join( '-' ),
-            chunk_dir: @dest_chunk_dir,
-            chunks: [],
-            chunk_seed: 0,
-            pcur: 0, # 打包光标
+            wbuff: '',  # 写前缓存
+            cache: '',  # 块读出缓存
+            chunks: [], # 块队列，写前达到块大小时结一个块 filename
+            spring: 0,  # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
             tund: tund
           }
 
@@ -318,8 +318,7 @@ module Girl
               ext[ :send_ats ].delete( pack_id )
             end
 
-            @roomd_info[ :wmems_size ] -= pack_ids.size
-            # puts "debug completed #{ continue_dest_pack_id } wmems #{ @roomd_info[ :wmems_size ] }"
+            # puts "debug completed #{ continue_dest_pack_id }"
             ext[ :completed_pack_id ] = continue_dest_pack_id
           end
 
@@ -423,7 +422,7 @@ module Girl
           dest_id = info[ :src_dst ].delete( source_id )
           return unless dest_id
 
-          del_dest_ext( tund, dest_id )
+          info[ :dest_exts ].delete( dest_id )
         when GOT_FIN2
           #   2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
           #   2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
@@ -466,7 +465,21 @@ module Girl
 
         ext[ :continue_source_pack_id ] = pack_id
         ext[ :last_traffic_at ] = now
-        add_buff( ext[ :dest ], data )
+
+        dest_info = @infos[ ext[ :dest ] ]
+        dest_info[ :wbuff ] << data
+
+        if dest_info[ :wbuff ].bytesize >= CHUNK_SIZE
+          spring = dest_info[ :chunks ].size > 0 ? ( dest_info[ :spring ] + 1 ) : 0
+          filename = "#{ Process.pid }-#{ dest_id }.#{ spring }"
+          chunk_path = File.join( @dest_chunk_dir, filename )
+          IO.binwrite( chunk_path, dest_info[ :wbuff ] )
+          dest_info[ :chunks ] << filename
+          dest_info[ :spring ] = spring
+          dest_info[ :wbuff ].clear
+        end
+
+        add_write( ext[ :dest ] )
       else
         ext[ :pieces ][ pack_id ] = data
       end
@@ -482,7 +495,27 @@ module Girl
       end
 
       info = @infos[ dest ]
-      data, from = get_buff( dest )
+
+      # 取写前
+      data = info[ :cache ]
+      from = :cache
+
+      if data.empty?
+        if info[ :chunks ].any?
+          path = File.join( @dest_chunk_dir, info[ :chunks ].shift )
+
+          begin
+            data = IO.binread( path )
+            File.delete( path )
+          rescue Errno::ENOENT
+            add_closing( dest )
+            return
+          end
+        else
+          data = info[ :wbuff ]
+          from = :wbuff
+        end
+      end
 
       if data.empty?
         tund = info[ :tund ]
@@ -512,6 +545,7 @@ module Girl
       begin
         written = dest.write_nonblock( data )
       rescue IO::WaitWritable, Errno::EINTR => e
+        info[ from ] = data
         return
       rescue Exception => e
         add_closing( dest )
@@ -534,6 +568,7 @@ module Girl
       now = Time.new
       info = @infos[ tund ]
 
+      # 重传
       while info[ :resendings ].any?
         dest_id, pack_id = info[ :resendings ].shift
         ext = info[ :dest_exts ][ dest_id ]
@@ -549,7 +584,8 @@ module Girl
         end
       end
 
-      if @roomd_info[ :wmems_size ] > WMEMS_LIMIT
+      # 若写后到达上限，暂停取写前
+      if info[ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum >= WMEMS_LIMIT
         unless @roomd_info[ :paused_tunds ].include?( tund )
           puts "pause #{ tund.object_id } #{ Time.new } p#{ Process.pid }"
           @roomd_info[ :paused_tunds ] << tund
@@ -559,29 +595,53 @@ module Girl
         return
       end
 
-      data, from = get_buff( tund )
+      # 取写前
+      if info[ :caches ].any?
+        dest_id, data = info[ :caches ].shift
+      elsif info[ :chunks ].any?
+        path = File.join( @tund_chunk_dir, info[ :chunks ].shift )
 
-      if data.empty?
+        begin
+          data = IO.binread( path )
+          File.delete( path )
+        rescue Errno::ENOENT
+          add_closing( tund )
+          return
+        end
+
+        caches = []
+
+        until data.empty?
+          dest_id, pack_size = data[ 0, 10 ].unpack( 'Q>n' )
+          caches << [ dest_id, data[ 10, pack_size ] ]
+          data = data[ ( 10 + pack_size )..-1 ]
+        end
+
+        dest_id, data = caches.shift
+        info[ :caches ] = caches
+      elsif info[ :wbuffs ].any?
+        dest_id, data = info[ :wbuffs ].shift
+      else
         @writes.delete( tund )
         return
       end
 
-      len = data[ 0, 2 ].unpack( 'n' ).first
-      pack = data[ 2, ( 16 + len ) ]
-      dest_id, pack_id = pack[ 0, 16 ].unpack( 'Q>Q>' )
       ext = info[ :dest_exts ][ dest_id ]
 
       if ext
+        pack_id = ext[ :biggest_pack_id ] + 1
+
+        if pack_id == 1
+          data = @hex.encode( data )
+        end
+
+        pack = "#{ [ dest_id, pack_id ].pack( 'Q>Q>' ) }#{ data }"
         send_pack( tund, pack, info[ :tun_addr ] )
         ext[ :biggest_pack_id ] = pack_id
         ext[ :wmems ][ pack_id ] = pack
         ext[ :send_ats ][ pack_id ] = now
         ext[ :last_traffic_at ] = now
-        @roomd_info[ :wmems_size ] += 1
       end
-
-      data = data[ ( 18 + len )..-1 ]
-      info[ from ] = data
     end
 
     def loop_expire
@@ -641,11 +701,15 @@ module Girl
             end
           end
 
-          if @roomd_info[ :paused_tunds ].any? && ( @roomd_info[ :wmems_size ].size < RESUME_BELOW )
+          if @roomd_info[ :paused_tunds ].any?
             @mutex.synchronize do
-              tund_ids = @roomd_info[ :paused_tunds ].map { | tund | tund.object_id }
-              @ctlw.write( [ CTL_RESUME, [ tund_ids.size ].pack( 'n' ), tund_ids.pack( 'Q>*' ) ].join )
-              @roomd_info[ :paused_tunds ].clear
+              resume_tunds = @roomd_info[ :paused_tunds ].select{ | tund | @infos[ tund ][ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW }
+
+              if resume_tunds.size > 0
+                tund_ids = resume_tunds.map{ | tund | tund.object_id }
+                @ctlw.write( [ CTL_RESUME, [ tund_ids.size ].pack( 'n' ), tund_ids.pack( 'Q>*' ) ].join )
+                @roomd_info[ :paused_tunds ] -= resume_tunds
+              end
             end
           end
         end
@@ -760,45 +824,6 @@ module Girl
       end
     end
 
-    def get_buff( sock )
-      info = @infos[ sock ]
-      data, from = info[ :cache ], :cache
-
-      if data.empty?
-        if info[ :chunks ].any?
-          path = File.join( info[ :chunk_dir ], info[ :chunks ].shift )
-          data = info[ :cache ] = IO.binread( path )
-
-          begin
-            File.delete( path )
-          rescue Errno::ENOENT
-          end
-        else
-          data, from = info[ :wbuff ], :wbuff
-        end
-      end
-
-      [ data, from ]
-    end
-
-    def add_buff( sock, data, is_add_write = true )
-      info = @infos[ sock ]
-      info[ :wbuff ] << data
-
-      if info[ :wbuff ].size >= CHUNK_SIZE
-        filename = [ info[ :filename ], info[ :chunk_seed ] ].join( '.' )
-        chunk_path = File.join( info[ :chunk_dir ], filename )
-        IO.binwrite( chunk_path, info[ :wbuff ] )
-        info[ :chunks ] << filename
-        info[ :chunk_seed ] += 1
-        info[ :wbuff ].clear
-      end
-
-      if is_add_write
-        add_write( sock )
-      end
-    end
-
     def add_read( sock )
       return if sock.closed? || @reads.include?( sock )
 
@@ -819,19 +844,9 @@ module Girl
       add_write( sock )
     end
 
-    def del_dest_ext( tund, dest_id )
-      tund_info = @infos[ tund ]
-      ext = tund_info[ :dest_exts ].delete( dest_id )
-      return if ext.nil? || ext[ :wmems ].empty?
-
-      @roomd_info[ :wmems_size ] -= ext[ :wmems ].size
-      # puts "debug delete ext, wmems #{ @roomd_info[ :wmems_size ] } #{ Time.new } p#{ Process.pid }"
-    end
-
     def close_tund( tund )
       info = close_sock( tund )
       info[ :dests ].each { | dest | add_closing( dest ) }
-      info[ :dest_exts ].each { | _, ext | @roomd_info[ :wmems_size ] -= ext[ :wmems ].size }
       @roomd_info[ :tunds ].delete( tund )
       @roomd_info[ :paused_tunds ].delete( tund )
       @roomd_info[ :tund_clients ].delete( tund )
@@ -858,7 +873,7 @@ module Girl
 
           # puts "debug 2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2 #{ Time.new } p#{ Process.pid }"
           tund_info[ :src_dst ].delete( ext[ :source_id ] )
-          del_dest_ext( tund, dest_id )
+          tund_info[ :dest_exts ].delete( dest_id )
 
           unless tund_info[ :fin2s ].include?( dest_id )
             tund_info[ :fin2s ] << dest_id

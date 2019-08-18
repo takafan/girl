@@ -189,13 +189,10 @@ module Girl
       @socks[ source_id ] = source
       @roles[ source ] = :source
       @infos[ source ] = {
-        wbuff: '',
-        cache: '',
-        filename: [ Process.pid, source_id ].join( '-' ),
-        chunk_dir: @source_chunk_dir,
-        chunks: [],
-        chunk_seed: 0,
-        pcur: 0
+        wbuff: '',  # 写前缓存
+        cache: '',  # 块读出缓存
+        chunks: [], # 块队列，写前达到块大小时结一个块 filename
+        spring: 0   # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
       }
       @tun_info[ :sources ] << source
       @tun_info[ :source_exts ][ source_id ] = {
@@ -230,19 +227,21 @@ module Girl
       end
 
       # puts "debug read source #{ data.inspect } #{ Time.new } p#{ Process.pid }"
-      info = @infos[ source ]
-      pack_id = info[ :pcur ] + 1
+      @tun_info[ :wbuffs ] << [ source.object_id, data ]
 
-      # ssh的第一段流量是明文版本号，https的第一段流量含明文域名，如果需要，混淆它。
-      # 覆盖encode方法自定义混淆。
-      if pack_id == 1
-        data = @hex.encode( data )
+      if @tun_info[ :wbuffs ].size >= WBUFFS_LIMIT
+        spring = @tun_info[ :chunks ].size > 0 ? ( @tun_info[ :spring ] + 1 ) : 0
+        filename = "#{ Process.pid }-#{ @tun.object_id }.#{ spring }"
+        chunk_path = File.join( @tun_chunk_dir, filename )
+        IO.binwrite( chunk_path, @tun_info[ :wbuffs ].map{ | source_id, data | "#{ [ source_id, data.bytesize ].pack( 'Q>n' ) }#{ data }" }.join )
+        @tun_info[ :chunks ] << filename
+        @tun_info[ :spring ] = spring
+        @tun_info[ :wbuffs ].clear
       end
 
-      prefix = [ data.bytesize, source.object_id, pack_id ].pack( 'nQ>Q>' )
-      is_add_write = @tun_info[ :tund_addr ] && !@tun_info[ :paused ]
-      add_buff( @tun, [ prefix, data ].join, is_add_write )
-      info[ :pcur ] = pack_id
+      if @tun_info[ :tund_addr ] && !@tun_info[ :paused ]
+        add_write( @tun )
+      end
     end
 
     ##
@@ -295,8 +294,7 @@ module Girl
               ext[ :send_ats ].delete( pack_id )
             end
 
-            info[ :wmems_size ] -= pack_ids.size
-            # puts "debug completed #{ continue_source_pack_id } wmems #{ info[ :wmems_size ] }"
+            # puts "debug completed #{ continue_source_pack_id }"
             ext[ :completed_pack_id ] = continue_source_pack_id
           end
 
@@ -400,7 +398,7 @@ module Girl
           source_id = info[ :dst_src ].delete( dest_id )
           return unless source_id
 
-          del_source_ext( source_id )
+          info[ :source_exts ].delete( source_id )
         when GOT_FIN2
           #   2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true
           #   2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source
@@ -443,7 +441,20 @@ module Girl
 
         ext[ :continue_dest_pack_id ] = pack_id
         ext[ :last_traffic_at ] = now
-        add_buff( ext[ :source ], data )
+        source_info = @infos[ ext[ :source ] ]
+        source_info[ :wbuff ] << data
+
+        if source_info[ :wbuff ].bytesize >= CHUNK_SIZE
+          spring = source_info[ :chunks ].size > 0 ? ( source_info[ :spring ] + 1 ) : 0
+          filename = "#{ Process.pid }-#{ source_id }.#{ spring }"
+          chunk_path = File.join( @source_chunk_dir, filename )
+          IO.binwrite( chunk_path, source_info[ :wbuff ] )
+          source_info[ :chunks ] << filename
+          source_info[ :spring ] = spring
+          source_info[ :wbuff ].clear
+        end
+
+        add_write( ext[ :source ] )
       else
         ext[ :pieces ][ pack_id ] = data
       end
@@ -459,7 +470,27 @@ module Girl
       end
 
       info = @infos[ source ]
-      data, from = get_buff( source )
+
+      # 取写前
+      data = info[ :cache ]
+      from = :cache
+
+      if data.empty?
+        if info[ :chunks ].any?
+          path = File.join( @source_chunk_dir, info[ :chunks ].shift )
+
+          begin
+            data = IO.binread( path )
+            File.delete( path )
+          rescue Errno::ENOENT
+            add_closing( source )
+            return
+          end
+        else
+          data = info[ :wbuff ]
+          from = :wbuff
+        end
+      end
 
       if data.empty?
         ext = @tun_info[ :source_exts ][ source.object_id ]
@@ -480,6 +511,7 @@ module Girl
       begin
         written = source.write_nonblock( data )
       rescue IO::WaitWritable, Errno::EINTR => e
+        info[ from ] = data
         return
       rescue Exception => e
         add_closing( source )
@@ -503,6 +535,7 @@ module Girl
       now = Time.new
       info = @infos[ tun ]
 
+      # 重传
       while info[ :resendings ].any?
         source_id, pack_id = info[ :resendings ].shift
         ext = info[ :source_exts ][ source_id ]
@@ -518,8 +551,8 @@ module Girl
         end
       end
 
-      # 写后缓存超过上限，中断写
-      if info[ :wmems_size ] > WMEMS_LIMIT
+      # 若写后达到上限，暂停取写前
+      if info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum >= WMEMS_LIMIT
         unless info[ :paused ]
           puts "pause #{ Time.new } p#{ Process.pid }"
           info[ :paused ] = true
@@ -529,29 +562,53 @@ module Girl
         return
       end
 
-      data, from = get_buff( tun )
+      # 取写前
+      if info[ :caches ].any?
+        source_id, data = info[ :caches ].shift
+      elsif info[ :chunks ].any?
+        path = File.join( @tun_chunk_dir, info[ :chunks ].shift )
 
-      if data.empty?
+        begin
+          data = IO.binread( path )
+          File.delete( path )
+        rescue Errno::ENOENT
+          add_closing( tun )
+          return
+        end
+
+        caches = []
+
+        until data.empty?
+          source_id, pack_size = data[ 0, 10 ].unpack( 'Q>n' )
+          caches << [ source_id, data[ 10, pack_size ] ]
+          data = data[ ( 10 + pack_size )..-1 ]
+        end
+
+        source_id, data = caches.shift
+        info[ :caches ] = caches
+      elsif info[ :wbuffs ].any?
+        source_id, data = info[ :wbuffs ].shift
+      else
         @writes.delete( tun )
         return
       end
 
-      len = data[ 0, 2 ].unpack( 'n' ).first
-      pack = data[ 2, ( 16 + len ) ]
-      source_id, pack_id = pack[ 0, 16 ].unpack( 'Q>Q>' )
       ext = info[ :source_exts ][ source_id ]
 
       if ext
+        pack_id = ext[ :biggest_pack_id ] + 1
+
+        if pack_id == 1
+          data = @hex.encode( data )
+        end
+
+        pack = "#{ [ source_id, pack_id ].pack( 'Q>Q>' ) }#{ data }"
         send_pack( tun, pack, info[ :tund_addr ] )
         ext[ :biggest_pack_id ] = pack_id
         ext[ :wmems ][ pack_id ] = pack
         ext[ :send_ats ][ pack_id ] = now
         ext[ :last_traffic_at ] = now
-        info[ :wmems_size ] += 1
       end
-
-      data = data[ ( 18 + len )..-1 ]
-      info[ from ] = data
     end
 
     def new_tun
@@ -560,22 +617,19 @@ module Girl
 
       tun_id = tun.object_id
       tun_info = {
-        wbuff: '',                                     # 写前缓存
-        cache: '',                                     # 块读出缓存
-        filename: [ Process.pid, tun_id ].join( '-' ), # 块名
-        chunk_dir: @tun_chunk_dir,                     # 块目录
-        chunks: [],                                    # 块文件名，wbuff每超过1.4M落一个块
-        chunk_seed: 0,                                 # 块序号
-        tund_addr: nil,                                # 远端地址
-        dst_src: {},                                   # dest_id => source_id
-        sources: [],                                   # 开着的source
-        source_exts: {},                               # 传输相关 source_id => {}
-        fin1s: [],                                     # fin1: source已关闭，等待对面收完流量 source_id
-        fin2s: [],                                     # fin2: 流量已收完 source_id
-        last_coming_at: nil,                           # 上一次来流量的时间
-        wmems_size: 0,                                 # 写后缓存总个数
-        paused: false,                                 # 是否暂停写
-        resendings: []                                 # [ source_id, pack_id ]
+        wbuffs: [],          # 写前缓存 [ source_id, data ]
+        caches: [],          # 块读出缓存 [ source_id, data ]
+        chunks: [],          # 块队列 filename
+        spring: 0,           # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
+        tund_addr: nil,      # 远端地址
+        dst_src: {},         # dest_id => source_id
+        sources: [],         # 开着的source
+        source_exts: {},     # 传输相关 source_id => {}
+        fin1s: [],           # fin1: source已关闭，等待对面收完流量 source_id
+        fin2s: [],           # fin2: 流量已收完 source_id
+        last_coming_at: nil, # 上一次来流量的时间
+        paused: false,       # 是否暂停写
+        resendings: []       # 重传队列 [ source_id, pack_id ]
       }
 
       @tun = tun
@@ -639,7 +693,7 @@ module Girl
             end
           end
 
-          if !@tun.closed? && @tun_info[ :paused ] && ( @tun_info[ :wmems_size ].size < RESUME_BELOW )
+          if !@tun.closed? && @tun_info[ :paused ] && ( @tun_info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
             @mutex.synchronize do
               @ctlw.write( CTL_RESUME )
               @tun_info[ :paused ] = false
@@ -755,45 +809,6 @@ module Girl
       end
     end
 
-    def get_buff( sock )
-      info = @infos[ sock ]
-      data, from = info[ :cache ], :cache
-
-      if data.empty?
-        if info[ :chunks ].any?
-          path = File.join( info[ :chunk_dir ], info[ :chunks ].shift )
-          data = info[ :cache ] = IO.binread( path )
-
-          begin
-            File.delete( path )
-          rescue Errno::ENOENT
-          end
-        else
-          data, from = info[ :wbuff ], :wbuff
-        end
-      end
-
-      [ data, from ]
-    end
-
-    def add_buff( sock, data, is_add_write = true )
-      info = @infos[ sock ]
-      info[ :wbuff ] << data
-
-      if info[ :wbuff ].size >= CHUNK_SIZE
-        filename = [ info[ :filename ], info[ :chunk_seed ] ].join( '.' )
-        chunk_path = File.join( info[ :chunk_dir ], filename )
-        IO.binwrite( chunk_path, info[ :wbuff ] )
-        info[ :chunks ] << filename
-        info[ :chunk_seed ] += 1
-        info[ :wbuff ].clear
-      end
-
-      if is_add_write
-        add_write( sock )
-      end
-    end
-
     def add_read( sock )
       return if sock.closed? || @reads.include?( sock )
 
@@ -812,14 +827,6 @@ module Girl
       @reads.delete( sock )
       @closings << sock
       add_write( sock )
-    end
-
-    def del_source_ext( source_id )
-      ext = @tun_info[ :source_exts ].delete( source_id )
-      return if ext.nil? || ext[ :wmems ].empty?
-
-      @tun_info[ :wmems_size ] -= ext[ :wmems ].size
-      # puts "debug delete ext, wmems #{ @tun_info[ :wmems_size ] } #{ Time.new } p#{ Process.pid }"
     end
 
     def close_tun
@@ -846,7 +853,7 @@ module Girl
 
           # puts "debug 2-3. source.close -> ext.is_dest_closed ? yes -> del ext -> loop send fin2 #{ Time.new } p#{ Process.pid }"
           @tun_info[ :dst_src ].delete( ext[ :dest_id ] )
-          del_source_ext( source_id )
+          @tun_info[ :source_exts ].delete( source_id )
 
           unless @tun_info[ :fin2s ].include?( source_id )
             @tun_info[ :fin2s ] << source_id

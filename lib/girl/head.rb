@@ -1,7 +1,8 @@
 module Girl
   PACK_SIZE             = 1448             # 包大小 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(source/dest id) - 8(pack id) = 1448
   CHUNK_SIZE            = PACK_SIZE * 1000 # 块大小
-  WMEMS_LIMIT           = 100_000          # 写后缓存上限，到达上限暂停写
+  WBUFFS_LIMIT          = 1000             # 写前上限，超过上限结一个块
+  WMEMS_LIMIT           = 100_000          # 写后上限，到达上限暂停写
   RESUME_BELOW          = 50_000           # 降到多少以下恢复写
   CHECK_EXPIRE_INTERVAL = 900              # 检查过期间隔
   EXPIRE_AFTER          = 1800             # 多久过期
