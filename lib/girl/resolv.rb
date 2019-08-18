@@ -41,7 +41,6 @@ module Girl
         src_addrs: {},       # src_addr => resolv_or_pub
         socks: {},           # resolv_or_pub => src_addr
         last_coming_ats: {}, # resolv_or_pub => now
-        caches: {},          # question => [ cache, ttl_ix, expire ]
         pubd_addrs: nameservers.map{ | ns | Socket.sockaddr_in( 53, ns ) },
         resolvd_addr: ( resolvd_host && resolvd_port ) ? Socket.sockaddr_in( resolvd_port, resolvd_host ) : nil,
         custom_qnames: custom_domains.map{ | dom | dom.split( '.' ).map{ | sub | [ sub.size ].pack( 'C' ) + sub }.join }
@@ -115,22 +114,6 @@ module Girl
       now = Time.new
       info = @infos[ redir ]
       src_addr = addrinfo.to_sockaddr
-      qname = data[ 12, qname_len ]
-      question = data[ 12, qname_len + 5 ]
-      cache, ttl_ix, expire = info[ :caches ][ question ]
-
-      if cache
-        if expire > now
-          cache[ 0, 2 ] = id
-          cache[ ttl_ix, 4 ] = [ ( expire - now ).to_i ].pack( 'N' )
-          # puts "debug send cache #{ Time.new }"
-          redir.sendmsg( cache, 0, src_addr )
-          return
-        else
-          info[ :caches ].delete( question )
-        end
-      end
-
       sock = info[ :src_addrs ][ src_addr ]
 
       unless sock
@@ -139,6 +122,7 @@ module Girl
         sock.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
         @socks[ sock.object_id ] = sock
+        qname = data[ 12, qname_len ]
 
         if info[ :resolvd_addr ] && ( info[ :custom_qnames ].any? { | custom | qname.include?( custom ) } )
           @roles[ sock ] = :resolv
@@ -170,56 +154,11 @@ module Girl
         data = @hex.decode( data )
       end
 
-      qname_len = data[ 12..-1 ].index([ 0 ].pack( 'C' ))
-      return unless qname_len
-
       src_addr = @redir_info[ :socks ][ sock ]
       return unless src_addr
 
-      now = Time.new
-      @redir_info[ :last_coming_ats ][ sock ] = now
+      @redir_info[ :last_coming_ats ][ sock ] = Time.new
       @redir.sendmsg( data, 0, src_addr )
-
-      ancount = data[ 6, 2 ].unpack( 'n' ).first
-      nscount = data[ 8, 2 ].unpack( 'n' ).first
-      qname = data[ 12, qname_len ]
-      return if ancount == 0 && nscount == 0
-
-      # move to first RR = Header (12) + QNAME + 0x00 + QTYPE (2) + QCLASS (2)
-      ix = 17 + qname_len
-      ttls = []
-
-      ( ancount + nscount ).times do
-        break unless data[ ix ]
-
-        while data[ ix ]
-          if data[ ix ].unpack( 'B8' ).first[ 0, 2 ] == '11' # pointer
-            # move to TTL
-            ix += 6
-            break
-          else
-            len = data[ ix ].unpack( 'C' ).first
-            if len == 0
-              # move to TTL
-              ix += 5
-              break
-            end
-            # move to next label
-            ix += ( len + 1 )
-          end
-        end
-
-        ttls << [ ix, now + data[ ix, 4 ].unpack( 'N' ).first ]
-
-        # move to next RR = TTL(4) + RDLENGTH(2) + RDATA
-        ix += ( 6 + data[ ix + 4, 2 ].unpack( 'n' ).first )
-      end
-
-      return if ttls.empty?
-
-      # cache data and set expire by shortest TTL
-      question = qname + data[ 12 + qname_len, 5 ]
-      @redir_info[ :caches ][ question ] = [ data, *ttls.sort_by{ | _, exp | exp }.first ]
     end
 
     def close_sock( sock )

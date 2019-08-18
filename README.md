@@ -69,8 +69,8 @@ gem install girl
 
 ```
     dns query -> resolv ---- default -------------------> 114.114.114.114
-                   ,    \                     
-               cache     `-- hit list --> encode --> resolvd ---> 8.8.8.8
+                        \
+                         `-- hit list --> encode --> resolvd ---> 8.8.8.8
 ```
 
 远端：
@@ -112,7 +112,7 @@ end
 
 ```
     tcp traffic -> iptables ---- cn ip -------------------------------> 微博
-                            \                        
+                            \
                              `-- not cn --> tun --> encode --> tund --> 谷歌
                                                               ,
                                                           cache
