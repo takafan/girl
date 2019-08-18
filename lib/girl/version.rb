@@ -1,3 +1,3 @@
 module Girl
-  VERSION = '0.46.3'.freeze
+  VERSION = '0.46.4'.freeze
 end
