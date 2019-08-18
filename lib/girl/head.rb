@@ -1,5 +1,5 @@
 module Girl
-  PACK_SIZE             = 1448             # 包大小 1492(PPPoE MTU) - 20(IPv4 head) - 8(UDP head) - 8(source/dest id) - 8(pack id) = 1448
+  PACK_SIZE             = 1356             # 包大小 1400(console MTU) - 20(IPv4 head) - 8(UDP head) - 8(source/dest id) - 8(pack id) = 1356
   CHUNK_SIZE            = PACK_SIZE * 1000 # 块大小
   WBUFFS_LIMIT          = 1000             # 写前上限，超过上限结一个块
   WMEMS_LIMIT           = 100_000          # 写后上限，到达上限暂停写
