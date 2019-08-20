@@ -18,7 +18,7 @@ body {
 }
 
 .mw300 {
-  max-width: 300px;
+  max-width: 90%;
 }
 
 .mw600 {
@@ -93,7 +93,7 @@ body {
 
 #footer {
   margin-top: 736px;
-  max-width: 414px;
+  max-width: 621px;
 }
 
 #footer img {

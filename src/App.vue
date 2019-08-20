@@ -32,7 +32,7 @@
                 v-model="enableds.tun"
                 @change="check_tun">
                 开机自启
-              </el-checkbox>
+              </el-checkbox>&nbsp;&nbsp;
               <el-button
                 @click="editing = null">
                 取消
@@ -83,7 +83,7 @@
                 v-model="enableds.resolv"
                 @change="check_resolv">
                 开机自启
-              </el-checkbox>
+              </el-checkbox>&nbsp;&nbsp;
               <el-button
                 @click="editing = null">
                 取消
@@ -134,7 +134,7 @@
                 v-model="enableds.hostapd"
                 @change="check_hostapd">
                 开机自启
-              </el-checkbox>
+              </el-checkbox>&nbsp;&nbsp;
               <el-button
                 @click="editing = null">
                 取消
