@@ -67,6 +67,7 @@ module Girl
 
       @tund_ip = tund_ip
       @roomd_addr = Socket.sockaddr_in( roomd_port, tund_ip )
+      @redir_port = redir_port
       @source_chunk_dir = source_chunk_dir
       @tun_chunk_dir = tun_chunk_dir
       @hex = Girl::Hex.new
@@ -76,31 +77,19 @@ module Girl
       @closings = []
       @socks = {} # object_id => sock
       @roles = {} # sock => :ctlr / :redir / :source / :tun
-      @infos = {}
+      @infos = {} # sock => {}
 
       ctlr, ctlw = IO.pipe
       @ctlw = ctlw
       @roles[ ctlr ] = :ctlr
       @reads << ctlr
-
-      redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
-      redir.listen( 511 )
-      @roles[ redir ] = :redir
-      @reads << redir
-
-      new_tun
     end
 
     def looping
       puts 'looping'
 
-      loop_expire
-      loop_send_heartbeat
-      loop_send_status
+      new_redir
+      new_tun
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -135,7 +124,7 @@ module Girl
     end
 
     def quit!
-      if !@tun.closed? && @tun_info[ :tund_addr ]
+      if @tun && !@tun.closed? && @tun_info[ :tund_addr ]
         ctlmsg = [ 0, TUN_FIN ].pack( 'Q>C' )
         send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
       end
@@ -149,18 +138,23 @@ module Girl
     # read ctlr
     #
     def read_ctlr( ctlr )
-      case ctlr.read( 1 )
-      when CTL_CLOSE_SOCK
+      case ctlr.read( 1 ).unpack( 'C' ).first
+      when CTL_CLOSE
         sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
         sock = @socks[ sock_id ]
 
         if sock
-          puts "expire tun #{ Time.new } p#{ Process.pid }"
+          puts "ctlr close #{ sock_id } #{ Time.new } p#{ Process.pid }"
           add_closing( sock )
         end
       when CTL_RESUME
-        puts "resume tun #{ Time.new } p#{ Process.pid }"
-        add_write( @tun )
+        sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
+        sock = @socks[ sock_id ]
+
+        if sock
+          puts "ctlr resume #{ sock_id } #{ Time.new } p#{ Process.pid }"
+          add_write( sock )
+        end
       end
     end
 
@@ -189,14 +183,15 @@ module Girl
       @socks[ source_id ] = source
       @roles[ source ] = :source
       @infos[ source ] = {
-        wbuff: '',  # 写前缓存
-        cache: '',  # 块读出缓存
-        chunks: [], # 块队列，写前达到块大小时结一个块 filename
-        spring: 0   # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
+        tun: @tun
       }
-      @tun_info[ :sources ] << source
+
       @tun_info[ :source_exts ][ source_id ] = {
         source: source,
+        wbuff: '',                # 写前缓存
+        cache: '',                # 块读出缓存
+        chunks: [],               # 块队列，写前达到块大小时结一个块 filename
+        spring: 0,                # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
         wmems: {},                # 写后缓存 pack_id => data
         send_ats: {},             # 上一次发出时间 pack_id => send_at
         biggest_pack_id: 0,       # 发到几
@@ -206,11 +201,11 @@ module Girl
         is_dest_closed: false,    # 对面是否已关闭
         biggest_dest_pack_id: 0,  # 对面发到几
         completed_pack_id: 0,     # 完成到几（对面收到几）
-        last_traffic_at: nil      # 有流量发出，或者有更新收到几，时间戳
+        last_traffic_at: nil      # 有收到有效流量，或者发出流量的时间戳
       }
 
       add_read( source )
-      loop_send_a_new_source( source_id, option.data )
+      loop_send_a_new_source( source, option.data )
     end
 
     ##
@@ -227,20 +222,29 @@ module Girl
       end
 
       # puts "debug read source #{ data.inspect } #{ Time.new } p#{ Process.pid }"
-      @tun_info[ :wbuffs ] << [ source.object_id, data ]
+      info = @infos[ source ]
+      tun = info[ :tun ]
 
-      if @tun_info[ :wbuffs ].size >= WBUFFS_LIMIT
-        spring = @tun_info[ :chunks ].size > 0 ? ( @tun_info[ :spring ] + 1 ) : 0
-        filename = "#{ Process.pid }-#{ @tun.object_id }.#{ spring }"
-        chunk_path = File.join( @tun_chunk_dir, filename )
-        IO.binwrite( chunk_path, @tun_info[ :wbuffs ].map{ | source_id, data | "#{ [ source_id, data.bytesize ].pack( 'Q>n' ) }#{ data }" }.join )
-        @tun_info[ :chunks ] << filename
-        @tun_info[ :spring ] = spring
-        @tun_info[ :wbuffs ].clear
+      if tun.closed?
+        add_closing( source )
+        return
       end
 
-      if @tun_info[ :tund_addr ] && !@tun_info[ :paused ]
-        add_write( @tun )
+      tun_info = @infos[ tun ]
+      tun_info[ :wbuffs ] << [ source.object_id, data ]
+
+      if tun_info[ :wbuffs ].size >= WBUFFS_LIMIT
+        spring = tun_info[ :chunks ].size > 0 ? ( tun_info[ :spring ] + 1 ) : 0
+        filename = "#{ Process.pid }-#{ tun.object_id }.#{ spring }"
+        chunk_path = File.join( @tun_chunk_dir, filename )
+        IO.binwrite( chunk_path, tun_info[ :wbuffs ].map{ | source_id, data | "#{ [ source_id, data.bytesize ].pack( 'Q>n' ) }#{ data }" }.join )
+        tun_info[ :chunks ] << filename
+        tun_info[ :spring ] = spring
+        tun_info[ :wbuffs ].clear
+      end
+
+      if tun_info[ :tund_addr ] && !tun_info[ :paused ]
+        add_write( tun )
       end
     end
 
@@ -248,22 +252,31 @@ module Girl
     # read tun
     #
     def read_tun( tun )
-      info = @infos[ tun ]
       data, addrinfo, rflags, *controls = tun.recvmsg
+      sockaddr = addrinfo.to_sockaddr
       now = Time.new
-      info[ :last_coming_at ] = now
+      info = @infos[ tun ]
       dest_id = data[ 0, 8 ].unpack( 'Q>' ).first
 
       if dest_id == 0
         case data[ 8 ].unpack( 'C' ).first
         when TUND_PORT
-          tund_port = data[ 9, 2 ].unpack( 'n' ).first
-          # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
+          return if sockaddr != @roomd_addr
 
-          info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
-          send_heartbeat
-          add_write( tun )
+          unless info[ :tund_addr ]
+            # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
+            tund_port = data[ 9, 2 ].unpack( 'n' ).first
+            info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
+            info[ :last_traffic_at ] = now
+            add_write( tun )
+            loop_send_status( tun )
+          end
+
+          ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
+          send_pack( tun, ctlmsg, info[ :tund_addr ] )
         when PAIRED
+          return if sockaddr != info[ :tund_addr ]
+
           source_id, dest_id = data[ 9, 16 ].unpack( 'Q>Q>' )
           # puts "debug got PAIRED #{ source_id } #{ dest_id } #{ Time.new } p#{ Process.pid }"
 
@@ -271,10 +284,12 @@ module Girl
           return if ext.nil? || ext[ :dest_id ]
 
           ext[ :dest_id ] = dest_id
-          info[ :dst_src ][ dest_id ] = source_id
+          info[ :dest_ids ][ dest_id ] = source_id
         when DEST_STATUS
+          return if sockaddr != info[ :tund_addr ]
+
           dest_id, biggest_dest_pack_id, continue_source_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
-          source_id = info[ :dst_src ][ dest_id ]
+          source_id = info[ :dest_ids ][ dest_id ]
           return unless source_id
 
           ext = info[ :source_exts ][ source_id ]
@@ -334,6 +349,8 @@ module Girl
             end
           end
         when MISS
+          return if sockaddr != info[ :tund_addr ]
+
           source_id, pack_id_begin, pack_id_end = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
           ext = info[ :source_exts ][ source_id ]
           return unless ext
@@ -350,10 +367,7 @@ module Girl
 
           add_write( tun )
         when FIN1
-          # > 2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true
-          #   2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source
-          #   2-3. source.close -> ext.is_dest_closed ? yes -> del ext -> loop send fin2
-          #   2-4. recv got_fin2 -> break loop
+          return if sockaddr != info[ :tund_addr ]
 
           # puts "debug 2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true #{ Time.new } p#{ Process.pid }"
           dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
@@ -365,7 +379,7 @@ module Girl
 
           send_pack( tun, ctlmsg, info[ :tund_addr ] )
 
-          source_id = info[ :dst_src ][ dest_id ]
+          source_id = info[ :dest_ids ][ dest_id ]
           return unless source_id
 
           ext = info[ :source_exts ][ source_id ]
@@ -373,17 +387,13 @@ module Girl
 
           ext[ :is_dest_closed ] = true
         when GOT_FIN1
-          #   1-1. source.close -> ext.is_dest_closed ? no -> send fin1 loop
-          # > 1-2. recv got_fin1 -> break loop
-          #   1-3. recv fin2 -> send got_fin2 -> del ext
+          return if sockaddr != info[ :tund_addr ]
 
           # puts "debug 1-2. recv got_fin1 -> break loop #{ Time.new } p#{ Process.pid }"
           source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin1s ].delete( source_id )
         when FIN2
-          #   1-1. source.close -> ext.is_dest_closed ? no -> send fin1 loop
-          #   1-2. recv got_fin1 -> break loop
-          # > 1-3. recv fin2 -> send got_fin2 -> del ext
+          return if sockaddr != info[ :tund_addr ]
 
           # puts "debug 1-3. recv fin2 -> send got_fin2 -> del ext #{ Time.new } p#{ Process.pid }"
           dest_id = data[ 9, 8 ].unpack( 'Q>' ).first
@@ -395,28 +405,28 @@ module Girl
 
           send_pack( tun, ctlmsg, info[ :tund_addr ] )
 
-          source_id = info[ :dst_src ].delete( dest_id )
+          source_id = info[ :dest_ids ].delete( dest_id )
           return unless source_id
 
-          info[ :source_exts ].delete( source_id )
+          # info[ :source_exts ].delete( source_id )
+          del_source_ext( info, source_id )
         when GOT_FIN2
-          #   2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true
-          #   2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source
-          #   2-3. source.close -> ext.is_dest_closed ? yes -> del ext -> loop send fin2
-          # > 2-4. recv got_fin2 -> break loop
+          return if sockaddr != info[ :tund_addr ]
 
           # puts "debug 2-4. recv got_fin2 -> break loop #{ Time.new } p#{ Process.pid }"
           source_id = data[ 9, 8 ].unpack( 'Q>' ).first
           info[ :fin2s ].delete( source_id )
         when TUND_FIN
-          puts "tund fin #{ Time.new } p#{ Process.pid }"
+          return if sockaddr != info[ :tund_addr ]
+
+          puts "recv tund fin #{ Time.new } p#{ Process.pid }"
           add_closing( tun )
         end
 
         return
       end
 
-      source_id = info[ :dst_src ][ dest_id ]
+      source_id = info[ :dest_ids ][ dest_id ]
       return unless source_id
 
       ext = info[ :source_exts ][ source_id ]
@@ -440,21 +450,21 @@ module Girl
         end
 
         ext[ :continue_dest_pack_id ] = pack_id
-        ext[ :last_traffic_at ] = now
-        source_info = @infos[ ext[ :source ] ]
-        source_info[ :wbuff ] << data
+        ext[ :wbuff ] << data
 
-        if source_info[ :wbuff ].bytesize >= CHUNK_SIZE
-          spring = source_info[ :chunks ].size > 0 ? ( source_info[ :spring ] + 1 ) : 0
+        if ext[ :wbuff ].bytesize >= CHUNK_SIZE
+          spring = ext[ :chunks ].size > 0 ? ( ext[ :spring ] + 1 ) : 0
           filename = "#{ Process.pid }-#{ source_id }.#{ spring }"
           chunk_path = File.join( @source_chunk_dir, filename )
-          IO.binwrite( chunk_path, source_info[ :wbuff ] )
-          source_info[ :chunks ] << filename
-          source_info[ :spring ] = spring
-          source_info[ :wbuff ].clear
+          IO.binwrite( chunk_path, ext[ :wbuff ] )
+          ext[ :chunks ] << filename
+          ext[ :spring ] = spring
+          ext[ :wbuff ].clear
         end
 
         add_write( ext[ :source ] )
+        ext[ :last_traffic_at ] = now
+        info[ :last_traffic_at ] = now
       else
         ext[ :pieces ][ pack_id ] = data
       end
@@ -470,14 +480,23 @@ module Girl
       end
 
       info = @infos[ source ]
+      tun = info[ :tun ]
+
+      if tun.closed?
+        add_closing( source )
+        return
+      end
+
+      tun_info = @infos[ tun ]
+      ext = tun_info[ :source_exts ][ source.object_id ]
 
       # 取写前
-      data = info[ :cache ]
+      data = ext[ :cache ]
       from = :cache
 
       if data.empty?
-        if info[ :chunks ].any?
-          path = File.join( @source_chunk_dir, info[ :chunks ].shift )
+        if ext[ :chunks ].any?
+          path = File.join( @source_chunk_dir, ext[ :chunks ].shift )
 
           begin
             data = IO.binread( path )
@@ -487,17 +506,12 @@ module Girl
             return
           end
         else
-          data = info[ :wbuff ]
+          data = ext[ :wbuff ]
           from = :wbuff
         end
       end
 
       if data.empty?
-        ext = @tun_info[ :source_exts ][ source.object_id ]
-        #   2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true
-        # > 2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source
-        #   2-3. source.close -> ext.is_dest_closed ? yes -> del ext -> loop send fin2
-        #   2-4. recv got_fin2 -> break loop
         if ext[ :is_dest_closed ] && ( ext[ :biggest_dest_pack_id ] == ext[ :continue_dest_pack_id ] )
           # puts "debug 2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source #{ Time.new } p#{ Process.pid }"
           add_closing( source )
@@ -511,7 +525,7 @@ module Girl
       begin
         written = source.write_nonblock( data )
       rescue IO::WaitWritable, Errno::EINTR => e
-        info[ from ] = data
+        ext[ from ] = data
         return
       rescue Exception => e
         add_closing( source )
@@ -519,7 +533,7 @@ module Girl
       end
 
       data = data[ written..-1 ]
-      info[ from ] = data
+      ext[ from ] = data
     end
 
     ##
@@ -527,7 +541,7 @@ module Girl
     #
     def write_tun( tun )
       if @closings.include?( tun )
-        close_tun
+        close_tun( tun )
         new_tun
         return
       end
@@ -546,6 +560,7 @@ module Girl
           if pack
             send_pack( tun, pack, info[ :tund_addr ] )
             ext[ :last_traffic_at ] = now
+            info[ :last_traffic_at ] = now
             return
           end
         end
@@ -554,7 +569,7 @@ module Girl
       # 若写后达到上限，暂停取写前
       if info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum >= WMEMS_LIMIT
         unless info[ :paused ]
-          puts "pause #{ Time.new } p#{ Process.pid }"
+          puts "pause #{ tun.object_id } #{ Time.new } p#{ Process.pid }"
           info[ :paused ] = true
         end
 
@@ -608,76 +623,92 @@ module Girl
         ext[ :wmems ][ pack_id ] = pack
         ext[ :send_ats ][ pack_id ] = now
         ext[ :last_traffic_at ] = now
+        info[ :last_traffic_at ] = now
       end
+    end
+
+    def new_redir
+      redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      redir.bind( Socket.sockaddr_in( @redir_port, '0.0.0.0' ) )
+      redir.listen( 511 )
+
+      @roles[ redir ] = :redir
+      @reads << redir
     end
 
     def new_tun
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
-      tun_id = tun.object_id
       tun_info = {
         wbuffs: [],          # 写前缓存 [ source_id, data ]
         caches: [],          # 块读出缓存 [ source_id, data ]
         chunks: [],          # 块队列 filename
         spring: 0,           # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
         tund_addr: nil,      # 远端地址
-        dst_src: {},         # dest_id => source_id
-        sources: [],         # 开着的source
-        source_exts: {},     # 传输相关 source_id => {}
+        dest_ids: {},        # dest_id => source_id
+        source_exts: {},     # 长命信息 source_id => {}
         fin1s: [],           # fin1: source已关闭，等待对面收完流量 source_id
         fin2s: [],           # fin2: 流量已收完 source_id
-        last_coming_at: nil, # 上一次来流量的时间
         paused: false,       # 是否暂停写
-        resendings: []       # 重传队列 [ source_id, pack_id ]
+        resendings: [],      # 重传队列 [ source_id, pack_id ]
+        last_traffic_at: nil # 有收到有效流量，或者发出流量的时间戳
       }
 
       @tun = tun
-      @socks[ tun_id ] = tun
-      @roles[ tun ] = :tun
       @tun_info = tun_info
+      @socks[ tun.object_id ] = tun
+      @roles[ tun ] = :tun
       @infos[ tun ] = tun_info
 
+      send_pack( tun, @hex.hello, @roomd_addr )
       add_read( tun )
-      loop_send_hello
+      loop_expire( tun )
     end
 
-    def loop_expire
+    def loop_expire( tun )
       Thread.new do
         loop do
-          sleep CHECK_EXPIRE_INTERVAL
+          sleep 30
 
-          @mutex.synchronize do
-            if @tun_info[ :last_coming_at ] && ( Time.new - @tun_info[ :last_coming_at ] > EXPIRE_AFTER )
-              @ctlw.write( [ CTL_CLOSE_SOCK, [ @tun.object_id ].pack( 'Q>' ) ].join )
+          break if tun.closed?
+
+          tun_info = @infos[ tun ]
+
+          if tun_info[ :tund_addr ].nil? || ( Time.new - tun_info[ :last_traffic_at ] > EXPIRE_AFTER )
+            @mutex.synchronize do
+              @ctlw.write( [ CTL_CLOSE, tun.object_id ].pack( 'CQ>' ) )
+            end
+          else
+            @mutex.synchronize do
+              ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
+              send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
             end
           end
         end
       end
     end
 
-    def loop_send_heartbeat
-      Thread.new do
-        loop do
-          sleep HEARTBEAT_INTERVAL
-
-          @mutex.synchronize do
-            send_heartbeat
-          end
-        end
-      end
-    end
-
-    def loop_send_status
+    def loop_send_status( tun )
       Thread.new do
         loop do
           sleep STATUS_INTERVAL
 
-          if !@tun.closed? && @tun_info[ :tund_addr ] && @tun_info[ :source_exts ].any?
+          if tun.closed?
+            # puts "debug tun is closed, break send status loop #{ Time.new }"
+            break
+          end
+
+          tun_info = @infos[ tun ]
+
+          if tun_info[ :source_exts ].any?
             @mutex.synchronize do
               now = Time.new
 
-              @tun_info[ :source_exts ].each do | source_id, ext |
+              tun_info[ :source_exts ].each do | source_id, ext |
                 if ext[ :last_traffic_at ] && ( now - ext[ :last_traffic_at ] < SEND_STATUS_UNTIL )
                   ctlmsg = [
                     0,
@@ -687,49 +718,35 @@ module Girl
                     ext[ :continue_dest_pack_id ]
                   ].pack( 'Q>CQ>Q>Q>' )
 
-                  send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+                  send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
                 end
               end
             end
           end
 
-          if !@tun.closed? && @tun_info[ :paused ] && ( @tun_info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
+          if tun_info[ :paused ] && ( tun_info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
             @mutex.synchronize do
-              @ctlw.write( CTL_RESUME )
-              @tun_info[ :paused ] = false
+              @ctlw.write( [ CTL_RESUME, tun.object_id ].pack( 'CQ>' ) )
+              tun_info[ :paused ] = false
             end
           end
         end
       end
     end
 
-    def loop_send_hello
+    def loop_send_a_new_source( source, original_dst )
       Thread.new do
         100.times do
-          break if @tun.closed?
+          break if source.closed?
 
-          if @tun_info[ :tund_addr ]
-            # puts "debug already got tund addr, break hello loop #{ Time.new } p#{ Process.pid }"
-            break
-          end
+          source_info = @infos[ source ]
+          tun = source_info[ :tun ]
+          break if tun.closed?
 
-          @mutex.synchronize do
-            # puts "debug send hello #{ Time.new } p#{ Process.pid }"
-            send_pack( @tun, @hex.hello, @roomd_addr )
-          end
+          tun_info = @infos[ tun ]
 
-          sleep 1
-        end
-      end
-    end
-
-    def loop_send_a_new_source( source_id, original_dst )
-      Thread.new do
-        100.times do
-          break if @tun.closed?
-
-          if @tun_info[ :tund_addr ]
-            ext = @tun_info[ :source_exts ][ source_id ]
+          if tun_info[ :tund_addr ]
+            ext = tun_info[ :source_exts ][ source.object_id ]
 
             if ext.nil? || ext[ :dest_id ]
               # puts "debug break a new source loop #{ Time.new } p#{ Process.pid }"
@@ -737,9 +754,9 @@ module Girl
             end
 
             @mutex.synchronize do
-              ctlmsg = [ [ 0, A_NEW_SOURCE, source_id ].pack( 'Q>CQ>' ), original_dst ].join
+              ctlmsg = "#{ [ 0, A_NEW_SOURCE, source.object_id ].pack( 'Q>CQ>' ) }#{ original_dst }"
               # puts "debug send a new source #{ Time.new } p#{ Process.pid }"
-              send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+              send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
             end
           end
 
@@ -748,10 +765,15 @@ module Girl
       end
     end
 
-    def loop_send_fin1( source_id )
+    def loop_send_fin1( tun, source_id )
       Thread.new do
         100.times do
-          if @tun.closed? || !@tun_info[ :fin1s ].include?( source_id )
+          break if tun.closed?
+
+          tun_info = @infos[ tun ]
+          break unless tun_info[ :tund_addr ]
+
+          unless tun_info[ :fin1s ].include?( source_id )
             # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
             break
           end
@@ -762,8 +784,9 @@ module Girl
               FIN1,
               source_id
             ].pack( 'Q>CQ>' )
+
             # puts "debug send FIN1 #{ source_id } #{ Time.new } p#{ Process.pid }"
-            send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+            send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
           end
 
           sleep 1
@@ -771,10 +794,15 @@ module Girl
       end
     end
 
-    def loop_send_fin2( source_id )
+    def loop_send_fin2( tun, source_id )
       Thread.new do
         100.times do
-          if @tun.closed? || !@tun_info[ :fin2s ].include?( source_id )
+          break if tun.closed?
+
+          tun_info = @infos[ tun ]
+          break unless tun_info[ :tund_addr ]
+
+          unless tun_info[ :fin2s ].include?( source_id )
             # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
             break
           end
@@ -785,20 +813,14 @@ module Girl
               FIN2,
               source_id
             ].pack( 'Q>CQ>' )
+
             # puts "debug send FIN2 #{ source_id } #{ Time.new } p#{ Process.pid }"
-            send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
+            send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
           end
 
           sleep 1
         end
       end
-    end
-
-    def send_heartbeat
-      return if @tun.closed? || @tun_info[ :tund_addr ].nil?
-
-      ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
-      send_pack( @tun, ctlmsg, @tun_info[ :tund_addr ] )
     end
 
     def send_pack( sock, data, target_sockaddr )
@@ -829,47 +851,41 @@ module Girl
       add_write( sock )
     end
 
-    def close_tun
-      close_sock( @tun )
-      @tun_info[ :sources ].each { | source | add_closing( source ) }
+    def close_tun( tun )
+      info = close_sock( tun )
+
+      info[ :chunks ].each do | filename |
+        begin
+          File.delete( File.join( @tun_chunk_dir, filename ) )
+        rescue Errno::ENOENT
+        end
+      end
+
+      info[ :source_exts ].each{ | _, ext | add_closing( ext[ :source ] ) }
     end
 
     def close_source( source )
-      close_sock( source )
-      return if @tun.closed?
+      info = close_sock( source )
+      tun = info[ :tun ]
+      return if tun.closed?
 
-      @tun_info[ :sources ].delete( source )
       source_id = source.object_id
-      ext = @tun_info[ :source_exts ][ source_id ]
+      tun_info = @infos[ tun ]
+      ext = tun_info[ :source_exts ][ source_id ]
+      return unless ext
 
-      if ext
-        ext[ :pieces ].clear
+      if ext[ :is_dest_closed ]
+        del_source_ext( tun_info, source_id )
 
-        if ext[ :is_dest_closed ]
-          #   2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true
-          #   2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source
-          # > 2-3. source.close -> ext.is_dest_closed ? yes -> del ext -> loop send fin2
-          #   2-4. recv got_fin2 -> break loop
-
+        unless tun_info[ :fin2s ].include?( source_id )
           # puts "debug 2-3. source.close -> ext.is_dest_closed ? yes -> del ext -> loop send fin2 #{ Time.new } p#{ Process.pid }"
-          @tun_info[ :dst_src ].delete( ext[ :dest_id ] )
-          @tun_info[ :source_exts ].delete( source_id )
-
-          unless @tun_info[ :fin2s ].include?( source_id )
-            @tun_info[ :fin2s ] << source_id
-            loop_send_fin2( source_id )
-          end
-        else
-          # > 1-1. source.close -> ext.is_dest_closed ? no -> send fin1 loop
-          #   1-2. recv got_fin1 -> break loop
-          #   1-3. recv fin2 -> send got_fin2 -> del ext
-
-          # puts "debug 1-1. source.close -> ext.is_dest_closed ? no -> send fin1 loop #{ Time.new } p#{ Process.pid }"
-          if @tun_info[ :tund_addr ] && !@tun_info[ :fin1s ].include?( source_id )
-            @tun_info[ :fin1s ] << source_id
-            loop_send_fin1( source_id )
-          end
+          tun_info[ :fin2s ] << source_id
+          loop_send_fin2( tun, source_id )
         end
+      elsif !tun_info[ :fin1s ].include?( source_id )
+        # puts "debug 1-1. source.close -> ext.is_dest_closed ? no -> send fin1 loop #{ Time.new } p#{ Process.pid }"
+        tun_info[ :fin1s ] << source_id
+        loop_send_fin1( tun, source_id )
       end
     end
 
@@ -879,21 +895,24 @@ module Girl
       @writes.delete( sock )
       @closings.delete( sock )
       @socks.delete( sock.object_id )
-      role = @roles.delete( sock )
-      info = @infos.delete( sock )
+      @roles.delete( sock )
+      @infos.delete( sock )
+    end
 
-      if info
-        chunk_dir = ( role == :source ? @source_chunk_dir : @tun_chunk_dir )
+    def del_source_ext( tun_info, source_id )
+      ext = tun_info[ :source_exts ].delete( source_id )
 
-        info[ :chunks ].each do | filename |
+      if ext
+        tun_info[ :dest_ids ].delete( ext[ :dest_id ] )
+
+        ext[ :chunks ].each do | filename |
           begin
-            File.delete( File.join( chunk_dir, filename ) )
+            File.delete( File.join( @source_chunk_dir, filename ) )
           rescue Errno::ENOENT
           end
         end
       end
-
-      info
     end
+
   end
 end

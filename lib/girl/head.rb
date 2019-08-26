@@ -4,11 +4,9 @@ module Girl
   WBUFFS_LIMIT          = 1000             # 写前上限，超过上限结一个块
   WMEMS_LIMIT           = 100_000          # 写后上限，到达上限暂停写
   RESUME_BELOW          = 50_000           # 降到多少以下恢复写
-  CHECK_EXPIRE_INTERVAL = 900              # 检查过期间隔
   EXPIRE_AFTER          = 1800             # 多久过期
-  HEARTBEAT_INTERVAL    = 59               # 心跳间隔
   STATUS_INTERVAL       = 0.3              # 发送状态间隔
-  SEND_STATUS_UNTIL     = 10               # 持续的告之对面状态，直到没有流量往来，持续多少秒
+  SEND_STATUS_UNTIL     = 20               # 持续的告之对面状态，直到没有流量往来，持续多少秒
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3
@@ -22,6 +20,6 @@ module Girl
   GOT_FIN2              = 11
   TUND_FIN              = 12
   TUN_FIN               = 13
-  CTL_CLOSE_SOCK        = [ 1 ].pack( 'C' )
-  CTL_RESUME            = [ 2 ].pack( 'C' )
+  CTL_CLOSE             = 1
+  CTL_RESUME            = 2
 end
