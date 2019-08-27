@@ -264,8 +264,8 @@ module Girl
           return if sockaddr != @roomd_addr
 
           unless info[ :tund_addr ]
-            # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
             tund_port = data[ 9, 2 ].unpack( 'n' ).first
+            # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
             info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
             info[ :last_traffic_at ] = now
             add_write( tun )
