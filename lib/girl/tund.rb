@@ -154,7 +154,7 @@ module Girl
         fin2s: [],           # fin2: 流量已收完 dest_id
         paused: false,       # 是否暂停写
         resendings: [],      # 重传队列 [ dest_id, pack_id ]
-        last_traffic_at: nil # 有收到有效流量，或者发出流量的时间戳
+        last_traffic_at: nil # 收到有效流量，或者发出流量的时间戳
       }
 
       puts "#{ info[ :tunds ].size } tunds #{ Time.new } p#{ Process.pid }"
@@ -224,7 +224,6 @@ module Girl
       if info[ :tun_addr ].nil?
         info[ :tun_addr ] = sockaddr
         info[ :last_traffic_at ] = now
-        add_write( tund )
         loop_send_status( tund )
       elsif info[ :tun_addr ] != sockaddr
         puts "tun addr not match? #{ Addrinfo.new( info[ :tun_addr ] ).ip_unpack.inspect } #{ addrinfo.ip_unpack.inspect } #{ Time.new } p#{ Process.pid }"
@@ -274,7 +273,7 @@ module Girl
               is_source_closed: false,    # 对面是否已关闭
               biggest_source_pack_id: 0,  # 对面发到几
               completed_pack_id: 0,       # 完成到几（对面收到几）
-              last_traffic_at: nil        # 有收到有效流量，或者发出流量的时间戳
+              last_traffic_at: nil        # 收到有效流量，或者发出流量的时间戳
             }
 
             info[ :source_ids ][ source_id ] = dest_id
@@ -452,9 +451,9 @@ module Girl
           ext[ :wbuff ].clear
         end
 
-        add_write( ext[ :dest ] )
         ext[ :last_traffic_at ] = now
         info[ :last_traffic_at ] = now
+        add_write( ext[ :dest ] )
       else
         ext[ :pieces ][ pack_id ] = data
       end

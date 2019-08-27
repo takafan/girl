@@ -186,6 +186,7 @@ module Girl
         tun: @tun
       }
 
+      @tun_info[ :waitings ][ source_id ] = []
       @tun_info[ :source_exts ][ source_id ] = {
         source: source,
         wbuff: '',                # 写前缓存
@@ -201,7 +202,7 @@ module Girl
         is_dest_closed: false,    # 对面是否已关闭
         biggest_dest_pack_id: 0,  # 对面发到几
         completed_pack_id: 0,     # 完成到几（对面收到几）
-        last_traffic_at: nil      # 有收到有效流量，或者发出流量的时间戳
+        last_traffic_at: nil      # 收到有效流量，或者发出流量的时间戳
       }
 
       add_read( source )
@@ -230,8 +231,21 @@ module Girl
         return
       end
 
+      source_id = source.object_id
       tun_info = @infos[ tun ]
-      tun_info[ :wbuffs ] << [ source.object_id, data ]
+      ext = tun_info[ :source_exts ][ source_id ]
+
+      unless ext
+        add_closing( source )
+        return
+      end
+
+      if tun_info[ :tund_addr ].nil? || ext[ :dest_id ].nil?
+        tun_info[ :waitings ][ source_id ] << data
+        return
+      end
+
+      tun_info[ :wbuffs ] << [ source_id, data ]
 
       if tun_info[ :wbuffs ].size >= WBUFFS_LIMIT
         spring = tun_info[ :chunks ].size > 0 ? ( tun_info[ :spring ] + 1 ) : 0
@@ -243,7 +257,7 @@ module Girl
         tun_info[ :wbuffs ].clear
       end
 
-      if tun_info[ :tund_addr ] && !tun_info[ :paused ]
+      unless tun_info[ :paused ]
         add_write( tun )
       end
     end
@@ -268,12 +282,9 @@ module Girl
             # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
             info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
             info[ :last_traffic_at ] = now
-            add_write( tun )
+            send_heartbeat( tun )
             loop_send_status( tun )
           end
-
-          ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
-          send_pack( tun, ctlmsg, info[ :tund_addr ] )
         when PAIRED
           return if sockaddr != info[ :tund_addr ]
 
@@ -285,6 +296,18 @@ module Girl
 
           ext[ :dest_id ] = dest_id
           info[ :dest_ids ][ dest_id ] = source_id
+          buffs = info[ :waitings ][ source_id ]
+
+          if buffs.any?
+            # puts "debug move #{ buffs.size } waiting buffs to wbuffs #{ Time.new } p#{ Process.pid }"
+
+            buffs.each do | buff |
+              info[ :wbuffs ] << [ source_id, buff ]
+            end
+
+            buffs.clear
+            add_write( tun )
+          end
         when DEST_STATUS
           return if sockaddr != info[ :tund_addr ]
 
@@ -462,9 +485,9 @@ module Girl
           ext[ :wbuff ].clear
         end
 
-        add_write( ext[ :source ] )
         ext[ :last_traffic_at ] = now
         info[ :last_traffic_at ] = now
+        add_write( ext[ :source ] )
       else
         ext[ :pieces ][ pack_id ] = data
       end
@@ -644,6 +667,7 @@ module Girl
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
       tun_info = {
+        waitings: {},        # 还没连上tund，或者还没配上dest，暂存流量 source_id => buffs[]
         wbuffs: [],          # 写前缓存 [ source_id, data ]
         caches: [],          # 块读出缓存 [ source_id, data ]
         chunks: [],          # 块队列 filename
@@ -655,7 +679,7 @@ module Girl
         fin2s: [],           # fin2: 流量已收完 source_id
         paused: false,       # 是否暂停写
         resendings: [],      # 重传队列 [ source_id, pack_id ]
-        last_traffic_at: nil # 有收到有效流量，或者发出流量的时间戳
+        last_traffic_at: nil # 收到有效流量，或者发出流量的时间戳
       }
 
       @tun = tun
@@ -684,8 +708,7 @@ module Girl
             end
           else
             @mutex.synchronize do
-              ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
-              send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
+              send_heartbeat( tun )
             end
           end
         end
@@ -823,6 +846,12 @@ module Girl
       end
     end
 
+    def send_heartbeat( tun )
+      info = @infos[ tun ]
+      ctlmsg = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
+      send_pack( tun, ctlmsg, info[ :tund_addr ] )
+    end
+
     def send_pack( sock, data, target_sockaddr )
       begin
         sock.sendmsg( data, 0, target_sockaddr )
@@ -900,6 +929,7 @@ module Girl
     end
 
     def del_source_ext( tun_info, source_id )
+      tun_info[ :waitings ].delete( source_id )
       ext = tun_info[ :source_exts ].delete( source_id )
 
       if ext
