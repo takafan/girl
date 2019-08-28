@@ -198,7 +198,6 @@ module Girl
         biggest_pack_id: 0,       # 发到几
         continue_dest_pack_id: 0, # 收到几
         pieces: {},               # 跳号包 dest_pack_id => data
-        dest_id: nil,             # 对面id
         is_dest_closed: false,    # 对面是否已关闭
         biggest_dest_pack_id: 0,  # 对面发到几
         completed_pack_id: 0,     # 完成到几（对面收到几）
@@ -233,14 +232,9 @@ module Girl
 
       source_id = source.object_id
       tun_info = @infos[ tun ]
-      ext = tun_info[ :source_exts ][ source_id ]
+      dest_id = tun_info[ :source_ids ][ source_id ]
 
-      unless ext
-        add_closing( source )
-        return
-      end
-
-      if tun_info[ :tund_addr ].nil? || ext[ :dest_id ].nil?
+      if tun_info[ :tund_addr ].nil? || dest_id.nil?
         tun_info[ :waitings ][ source_id ] << data
         return
       end
@@ -289,12 +283,10 @@ module Girl
           return if sockaddr != info[ :tund_addr ]
 
           source_id, dest_id = data[ 9, 16 ].unpack( 'Q>Q>' )
+          return if info[ :source_ids ].include?( source_id )
+
           # puts "debug got PAIRED #{ source_id } #{ dest_id } #{ Time.new } p#{ Process.pid }"
-
-          ext = info[ :source_exts ][ source_id ]
-          return if ext.nil? || ext[ :dest_id ]
-
-          ext[ :dest_id ] = dest_id
+          info[ :source_ids ][ source_id ] = dest_id
           info[ :dest_ids ][ dest_id ] = source_id
           buffs = info[ :waitings ][ source_id ]
 
@@ -428,10 +420,9 @@ module Girl
 
           send_pack( tun, ctlmsg, info[ :tund_addr ] )
 
-          source_id = info[ :dest_ids ].delete( dest_id )
+          source_id = info[ :dest_ids ][ dest_id ]
           return unless source_id
 
-          # info[ :source_exts ].delete( source_id )
           del_source_ext( info, source_id )
         when GOT_FIN2
           return if sockaddr != info[ :tund_addr ]
@@ -448,6 +439,8 @@ module Girl
 
         return
       end
+
+      return if sockaddr != info[ :tund_addr ]
 
       source_id = info[ :dest_ids ][ dest_id ]
       return unless source_id
@@ -673,8 +666,9 @@ module Girl
         chunks: [],          # 块队列 filename
         spring: 0,           # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
         tund_addr: nil,      # 远端地址
-        dest_ids: {},        # dest_id => source_id
         source_exts: {},     # 长命信息 source_id => {}
+        source_ids: {},      # source_id => dest_id
+        dest_ids: {},        # dest_id => source_id
         fin1s: [],           # fin1: source已关闭，等待对面收完流量 source_id
         fin2s: [],           # fin2: 流量已收完 source_id
         paused: false,       # 是否暂停写
@@ -769,15 +763,16 @@ module Girl
           tun_info = @infos[ tun ]
 
           if tun_info[ :tund_addr ]
-            ext = tun_info[ :source_exts ][ source.object_id ]
+            source_id = source.object_id
+            dest_id = tun_info[ :source_ids ][ source_id ]
 
-            if ext.nil? || ext[ :dest_id ]
+            if dest_id
               # puts "debug break a new source loop #{ Time.new } p#{ Process.pid }"
               break
             end
 
             @mutex.synchronize do
-              ctlmsg = "#{ [ 0, A_NEW_SOURCE, source.object_id ].pack( 'Q>CQ>' ) }#{ original_dst }"
+              ctlmsg = "#{ [ 0, A_NEW_SOURCE, source_id ].pack( 'Q>CQ>' ) }#{ original_dst }"
               # puts "debug send a new source #{ Time.new } p#{ Process.pid }"
               send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
             end
@@ -933,14 +928,18 @@ module Girl
       ext = tun_info[ :source_exts ].delete( source_id )
 
       if ext
-        tun_info[ :dest_ids ].delete( ext[ :dest_id ] )
-
         ext[ :chunks ].each do | filename |
           begin
             File.delete( File.join( @source_chunk_dir, filename ) )
           rescue Errno::ENOENT
           end
         end
+      end
+
+      dest_id = tun_info[ :source_ids ].delete( source_id )
+
+      if dest_id
+        tun_info[ :dest_ids ].delete( dest_id )
       end
     end
 

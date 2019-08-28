@@ -148,8 +148,9 @@ module Girl
         chunks: [],          # 块队列 filename
         spring: 0,           # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
         tun_addr: nil,       # 近端地址
-        source_ids: {},      # source_id => dest_id
         dest_exts: {},       # 长命信息 dest_id => {}
+        dest_ids: {},        # dest_id => source_id
+        source_ids: {},      # source_id => dest_id
         fin1s: [],           # fin1: dest已关闭，等待对面收完流量 dest_id
         fin2s: [],           # fin2: 流量已收完 dest_id
         paused: false,       # 是否暂停写
@@ -157,8 +158,8 @@ module Girl
         last_traffic_at: nil # 收到有效流量，或者发出流量的时间戳
       }
 
-      puts "#{ info[ :tunds ].size } tunds #{ Time.new } p#{ Process.pid }"
       info[ :tunds ][ tund ] = sockaddr
+      puts "#{ info[ :tunds ].size } tunds #{ Time.new } p#{ Process.pid }"
       tund_port = tund.local_address.ip_unpack.last
 
       ctlmsg = [
@@ -221,13 +222,22 @@ module Girl
       now = Time.new
       info = @infos[ tund ]
 
-      if info[ :tun_addr ].nil?
+      if info[ :tun_addr ]
+        if sockaddr != info[ :tun_addr ]
+          puts "coming traffic not match tun addr? #{ addrinfo.ip_unpack.inspect } #{ Addrinfo.new( info[ :tun_addr ] ).ip_unpack.inspect } #{ Time.new } p#{ Process.pid }"
+          return
+        end
+      else
+        client = @roomd_info[ :tunds ][ tund ]
+
+        if sockaddr != client
+          puts "first traffic not match client addr?  #{ addrinfo.ip_unpack.inspect } #{ Addrinfo.new( client ).ip_unpack.inspect } #{ Time.new } p#{ Process.pid }"
+          return
+        end
+
         info[ :tun_addr ] = sockaddr
         info[ :last_traffic_at ] = now
         loop_send_status( tund )
-      elsif info[ :tun_addr ] != sockaddr
-        puts "tun addr not match? #{ Addrinfo.new( info[ :tun_addr ] ).ip_unpack.inspect } #{ addrinfo.ip_unpack.inspect } #{ Time.new } p#{ Process.pid }"
-        return
       end
 
       source_id = data[ 0, 8 ].unpack( 'Q>' ).first
@@ -269,13 +279,13 @@ module Girl
               biggest_pack_id: 0,         # 发到几
               continue_source_pack_id: 0, # 收到几
               pieces: {},                 # 跳号包 source_pack_id => data
-              source_id: source_id,       # 对面id
               is_source_closed: false,    # 对面是否已关闭
               biggest_source_pack_id: 0,  # 对面发到几
               completed_pack_id: 0,       # 完成到几（对面收到几）
               last_traffic_at: nil        # 收到有效流量，或者发出流量的时间戳
             }
 
+            info[ :dest_ids ][ dest_id ] = source_id
             info[ :source_ids ][ source_id ] = dest_id
             add_read( dest )
           end
@@ -399,7 +409,7 @@ module Girl
 
           send_pack( tund, ctlmsg, info[ :tun_addr ] )
 
-          dest_id = info[ :source_ids ].delete( source_id )
+          dest_id = info[ :source_ids ][ source_id ]
           return unless dest_id
 
           del_dest_ext( info, dest_id )
@@ -787,7 +797,6 @@ module Girl
       end
 
       info[ :dest_exts ].each{ | _, ext | add_closing( ext[ :dest ] ) }
-
       @roomd_info[ :tunds ].delete( tund )
     end
 
@@ -830,14 +839,18 @@ module Girl
       ext = tund_info[ :dest_exts ].delete( dest_id )
 
       if ext
-        tund_info[ :source_ids ].delete( ext[ :source_id ] )
-
         ext[ :chunks ].each do | filename |
           begin
             File.delete( File.join( @dest_chunk_dir, filename ) )
           rescue Errno::ENOENT
           end
         end
+      end
+
+      source_id = tund_info[ :dest_ids ].delete( dest_id )
+
+      if source_id
+        tund_info[ :source_ids ].delete( source_id )
       end
     end
 
