@@ -689,7 +689,7 @@ module Girl
 
     def check_expire( tun )
       Thread.new do
-        sleep 5
+        sleep HEARTBEAT_INTERVAL
 
         unless tun.closed?
           tun_info = @infos[ tun ]
@@ -722,7 +722,7 @@ module Girl
             send_heartbeat( tun )
           end
 
-          sleep 5
+          sleep HEARTBEAT_INTERVAL
         end
       end
     end

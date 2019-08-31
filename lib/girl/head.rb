@@ -5,6 +5,7 @@ module Girl
   WMEMS_LIMIT           = 100_000          # 写后上限，到达上限暂停写
   RESUME_BELOW          = 50_000           # 降到多少以下恢复写
   EXPIRE_AFTER          = 1800             # 多久过期
+  HEARTBEAT_INTERVAL    = 3                # 心跳间隔
   STATUS_INTERVAL       = 0.3              # 发送状态间隔
   SEND_STATUS_UNTIL     = 10               # 持续的告之对面状态，直到没有流量往来，持续多少秒
   TUND_PORT             = 1

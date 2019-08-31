@@ -643,7 +643,7 @@ module Girl
 
     def check_expire( tund )
       Thread.new do
-        sleep 5
+        sleep HEARTBEAT_INTERVAL
 
         unless tund.closed?
           tund_info = @infos[ tund ]
@@ -660,7 +660,7 @@ module Girl
     def loop_check_expire( tund )
       Thread.new do
         loop do
-          sleep 5
+          sleep 60
           break if tund.closed?
 
           tund_info = @infos[ tund ]
