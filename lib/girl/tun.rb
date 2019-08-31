@@ -283,6 +283,8 @@ module Girl
           return if sockaddr != info[ :tund_addr ]
 
           source_id, dest_id = data[ 9, 16 ].unpack( 'Q>Q>' )
+          return unless info[ :source_exts ].include?( source_id )
+
           return if info[ :source_ids ].include?( source_id )
 
           # puts "debug got PAIRED #{ source_id } #{ dest_id } #{ Time.new } p#{ Process.pid }"
