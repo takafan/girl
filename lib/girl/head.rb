@@ -6,7 +6,7 @@ module Girl
   RESUME_BELOW          = 50_000           # 降到多少以下恢复写
   EXPIRE_AFTER          = 1800             # 多久过期
   STATUS_INTERVAL       = 0.3              # 发送状态间隔
-  SEND_STATUS_UNTIL     = 20               # 持续的告之对面状态，直到没有流量往来，持续多少秒
+  SEND_STATUS_UNTIL     = 10               # 持续的告之对面状态，直到没有流量往来，持续多少秒
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3

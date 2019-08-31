@@ -171,7 +171,7 @@ module Girl
       # puts "debug send TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
       send_pack( roomd, ctlmsg, sockaddr )
       add_read( tund )
-      loop_expire( tund )
+      check_expire( tund )
     end
 
     ##
@@ -237,6 +237,7 @@ module Girl
 
         info[ :tun_addr ] = sockaddr
         info[ :last_traffic_at ] = now
+        loop_check_expire( tund )
         loop_send_status( tund )
       end
 
@@ -640,19 +641,36 @@ module Girl
       @reads << roomd
     end
 
-    def loop_expire( tund )
+    def check_expire( tund )
       Thread.new do
-        loop do
-          sleep 30
+        sleep 5
 
-          break if tund.closed?
+        unless tund.closed?
+          tund_info = @infos[ tund ]
 
-          info = @infos[ tund ]
-
-          if Time.new - info[ :last_traffic_at ] > EXPIRE_AFTER
+          unless tund_info[ :tun_addr ]
             @mutex.synchronize do
               @ctlw.write( [ CTL_CLOSE, tund.object_id ].pack( 'CQ>' ) )
             end
+          end
+        end
+      end
+    end
+
+    def loop_check_expire( tund )
+      Thread.new do
+        loop do
+          sleep 5
+          break if tund.closed?
+
+          tund_info = @infos[ tund ]
+
+          if Time.new - tund_info[ :last_traffic_at ] > EXPIRE_AFTER
+            @mutex.synchronize do
+              @ctlw.write( [ CTL_CLOSE, tund.object_id ].pack( 'CQ>' ) )
+            end
+
+            break
           end
         end
       end

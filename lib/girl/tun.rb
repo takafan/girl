@@ -276,7 +276,7 @@ module Girl
             # puts "debug got TUND_PORT #{ tund_port } #{ Time.new } p#{ Process.pid }"
             info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
             info[ :last_traffic_at ] = now
-            send_heartbeat( tun )
+            loop_send_heartbeat( tun )
             loop_send_status( tun )
           end
         when PAIRED
@@ -684,27 +684,45 @@ module Girl
 
       send_pack( tun, @hex.hello, @roomd_addr )
       add_read( tun )
-      loop_expire( tun )
+      check_expire( tun )
     end
 
-    def loop_expire( tun )
+    def check_expire( tun )
+      Thread.new do
+        sleep 5
+
+        unless tun.closed?
+          tun_info = @infos[ tun ]
+
+          unless tun_info[ :tund_addr ]
+            @mutex.synchronize do
+              @ctlw.write( [ CTL_CLOSE, tun.object_id ].pack( 'CQ>' ) )
+            end
+          end
+        end
+      end
+    end
+
+    def loop_send_heartbeat( tun )
       Thread.new do
         loop do
-          sleep 30
-
           break if tun.closed?
 
           tun_info = @infos[ tun ]
 
-          if tun_info[ :tund_addr ].nil? || ( Time.new - tun_info[ :last_traffic_at ] > EXPIRE_AFTER )
+          if Time.new - tun_info[ :last_traffic_at ] > EXPIRE_AFTER
             @mutex.synchronize do
               @ctlw.write( [ CTL_CLOSE, tun.object_id ].pack( 'CQ>' ) )
             end
-          else
-            @mutex.synchronize do
-              send_heartbeat( tun )
-            end
+
+            break
           end
+
+          @mutex.synchronize do
+            send_heartbeat( tun )
+          end
+
+          sleep 5
         end
       end
     end
