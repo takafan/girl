@@ -107,7 +107,6 @@ module Girl
         sock = @socks[ sock_id ]
 
         if sock
-          puts "ctlr close #{ sock_id } #{ Time.new } p#{ Process.pid }"
           add_closing( sock )
         end
       when CTL_RESUME
@@ -115,7 +114,6 @@ module Girl
         sock = @socks[ sock_id ]
 
         if sock
-          puts "ctlr resume #{ sock_id } #{ Time.new } p#{ Process.pid }"
           add_write( sock )
         end
       end
@@ -271,6 +269,8 @@ module Girl
 
             info[ :dest_exts ][ dest_id ] = {
               dest: dest,
+              created_at: now,
+              last_recv_at: nil,          # 上一次收到流量的时间
               wbuff: '',                  # 写前缓存
               cache: '',                  # 块读出缓存
               chunks: [],                 # 块队列，写前达到块大小时结一个块 filename
@@ -468,6 +468,8 @@ module Girl
       else
         ext[ :pieces ][ pack_id ] = data
       end
+
+      ext[ :last_recv_at ] = now
     end
 
     ##
@@ -663,14 +665,28 @@ module Girl
           sleep 60
           break if tund.closed?
 
+          now = Time.new
           tund_info = @infos[ tund ]
 
-          if Time.new - tund_info[ :last_traffic_at ] > EXPIRE_AFTER
+          if now - tund_info[ :last_traffic_at ] > EXPIRE_AFTER
             @mutex.synchronize do
               @ctlw.write( [ CTL_CLOSE, tund.object_id ].pack( 'CQ>' ) )
             end
 
             break
+          end
+
+          exts = tund_info[ :dest_exts ].select{ | _, ext | now - ext[ :created_at ] > 5 }
+
+          if exts.any?
+            @mutex.synchronize do
+              exts.each do | dest_id, ext |
+                if ext[ :last_recv_at ].nil? || ( now - ext[ :last_recv_at ] > EXPIRE_AFTER )
+                  # puts "debug ctlw close dest #{ dest_id } #{ Time.new } p#{ Process.pid }"
+                  @ctlw.write( [ CTL_CLOSE, dest_id ].pack( 'CQ>' ) )
+                end
+              end
+            end
           end
         end
       end
@@ -710,6 +726,7 @@ module Girl
 
           if tund_info[ :paused ] && ( tund_info[ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
             @mutex.synchronize do
+              puts "ctlw resume #{ tund.object_id } #{ Time.new } p#{ Process.pid }"
               @ctlw.write( [ CTL_RESUME, tund.object_id ].pack( 'CQ>' ) )
               tund_info[ :paused ] = false
             end

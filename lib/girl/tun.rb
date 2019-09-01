@@ -144,7 +144,6 @@ module Girl
         sock = @socks[ sock_id ]
 
         if sock
-          puts "ctlr close #{ sock_id } #{ Time.new } p#{ Process.pid }"
           add_closing( sock )
         end
       when CTL_RESUME
@@ -152,7 +151,6 @@ module Girl
         sock = @socks[ sock_id ]
 
         if sock
-          puts "ctlr resume #{ sock_id } #{ Time.new } p#{ Process.pid }"
           add_write( sock )
         end
       end
@@ -189,6 +187,8 @@ module Girl
       @tun_info[ :waitings ][ source_id ] = []
       @tun_info[ :source_exts ][ source_id ] = {
         source: source,
+        created_at: Time.new,
+        last_recv_at: nil,        # 上一次收到流量的时间
         wbuff: '',                # 写前缓存
         cache: '',                # 块读出缓存
         chunks: [],               # 块队列，写前达到块大小时结一个块 filename
@@ -277,6 +277,7 @@ module Girl
             info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @tund_ip )
             info[ :last_traffic_at ] = now
             loop_send_heartbeat( tun )
+            loop_check_expire( tun )
             loop_send_status( tun )
           end
         when PAIRED
@@ -486,6 +487,8 @@ module Girl
       else
         ext[ :pieces ][ pack_id ] = data
       end
+
+      ext[ :last_recv_at ] = now
     end
 
     ##
@@ -710,21 +713,45 @@ module Girl
         loop do
           break if tun.closed?
 
+          @mutex.synchronize do
+            send_heartbeat( tun )
+          end
+
+          sleep HEARTBEAT_INTERVAL
+        end
+      end
+    end
+
+    def loop_check_expire( tun )
+      Thread.new do
+        loop do
+          sleep 60
+          break if tun.closed?
+
+          now = Time.new
           tun_info = @infos[ tun ]
 
-          if Time.new - tun_info[ :last_traffic_at ] > EXPIRE_AFTER
+          if now - tun_info[ :last_traffic_at ] > EXPIRE_AFTER
             @mutex.synchronize do
+              # puts "debug ctlw close tun #{ tun.object_id } #{ Time.new } p#{ Process.pid }"
               @ctlw.write( [ CTL_CLOSE, tun.object_id ].pack( 'CQ>' ) )
             end
 
             break
           end
 
-          @mutex.synchronize do
-            send_heartbeat( tun )
-          end
+          exts = tun_info[ :source_exts ].select{ | _, ext | now - ext[ :created_at ] > 5 }
 
-          sleep HEARTBEAT_INTERVAL
+          if exts.any?
+            @mutex.synchronize do
+              exts.each do | source_id, ext |
+                if ext[ :last_recv_at ].nil? || ( now - ext[ :last_recv_at ] > EXPIRE_AFTER )
+                  # puts "debug ctlw close source #{ source_id } #{ Time.new } p#{ Process.pid }"
+                  @ctlw.write( [ CTL_CLOSE, source_id ].pack( 'CQ>' ) )
+                end
+              end
+            end
+          end
         end
       end
     end
@@ -763,6 +790,7 @@ module Girl
 
           if tun_info[ :paused ] && ( tun_info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
             @mutex.synchronize do
+              puts "ctlw resume #{ tun.object_id } #{ Time.new } p#{ Process.pid }"
               @ctlw.write( [ CTL_RESUME, tun.object_id ].pack( 'CQ>' ) )
               tun_info[ :paused ] = false
             end
