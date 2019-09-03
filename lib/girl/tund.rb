@@ -34,9 +34,10 @@ module Girl
       @reads = []
       @writes = []
       @closings = []
-      @socks = {} # object_id => sock
       @roles = {} # sock => :ctlr / :roomd / :dest / :tund
       @infos = {} # sock => {}
+      @socks = {} # sock => sock_id
+      @sock_ids = {} # sock_id => sock
 
       ctlr, ctlw = IO.pipe
       @ctlw = ctlw
@@ -104,14 +105,14 @@ module Girl
       case ctlr.read( 1 ).unpack( 'C' ).first
       when CTL_CLOSE
         sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
-        sock = @socks[ sock_id ]
+        sock = @sock_ids[ sock_id ]
 
         if sock
           add_closing( sock )
         end
       when CTL_RESUME
         sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
-        sock = @socks[ sock_id ]
+        sock = @sock_ids[ sock_id ]
 
         if sock
           add_write( sock )
@@ -137,10 +138,11 @@ module Girl
 
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+      tund_id = @hex.gen_random_num
 
-      @socks[ tund.object_id ] = tund
       @roles[ tund ] = :tund
       @infos[ tund ] = {
+        id: tund_id,
         wbuffs: [],          # 写前缓存 [ dest_id, data ]
         caches: [],          # 块读出缓存 [ dest_id, data ]
         chunks: [],          # 块队列 filename
@@ -155,6 +157,8 @@ module Girl
         resendings: [],      # 重传队列 [ dest_id, pack_id ]
         last_traffic_at: nil # 收到有效流量，或者发出流量的时间戳
       }
+      @socks[ tund ] = tund_id
+      @sock_ids[ tund_id ] = tund
 
       info[ :tunds ][ tund ] = sockaddr
       puts "#{ info[ :tunds ].size } tunds #{ Time.new } p#{ Process.pid }"
@@ -194,11 +198,13 @@ module Girl
       end
 
       tund_info = @infos[ tund ]
-      tund_info[ :wbuffs ] << [ dest.object_id, data ]
+      dest_id = @socks[ dest ]
+      tund_info[ :wbuffs ] << [ dest_id, data ]
 
       if tund_info[ :wbuffs ].size >= WBUFFS_LIMIT
+        tund_id = @socks[ tund ]
         spring = tund_info[ :chunks ].size > 0 ? ( tund_info[ :spring ] + 1 ) : 0
-        filename = "#{ Process.pid }-#{ tund.object_id }.#{ spring }"
+        filename = "#{ Process.pid }-#{ tund_id }.#{ spring }"
         chunk_path = File.join( @tund_chunk_dir, filename )
         IO.binwrite( chunk_path, tund_info[ :wbuffs ].map{ | dest_id, data | "#{ [ dest_id, data.bytesize ].pack( 'Q>n' ) }#{ data }" }.join )
         tund_info[ :chunks ] << filename
@@ -259,13 +265,14 @@ module Girl
             rescue IO::WaitWritable, Errno::EINTR
             end
 
-            dest_id = dest.object_id
-
-            @socks[ dest_id ] = dest
+            dest_id = @hex.gen_random_num
             @roles[ dest ] = :dest
             @infos[ dest ] = {
+              id: dest_id,
               tund: tund
             }
+            @socks[ dest ] = dest_id
+            @sock_ids[ dest_id ] = dest
 
             info[ :dest_exts ][ dest_id ] = {
               dest: dest,
@@ -490,7 +497,8 @@ module Girl
       end
 
       tund_info = @infos[ tund ]
-      ext = tund_info[ :dest_exts ][ dest.object_id ]
+      dest_id = @socks[ dest ]
+      ext = tund_info[ :dest_exts ][ dest_id ]
 
       # 取写前
       data = ext[ :cache ]
@@ -570,7 +578,7 @@ module Girl
       # 若写后到达上限，暂停取写前
       if info[ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum >= WMEMS_LIMIT
         unless info[ :paused ]
-          puts "pause #{ tund.object_id } #{ Time.new } p#{ Process.pid }"
+          puts "pause #{ @socks[ tund ] } #{ Time.new } p#{ Process.pid }"
           info[ :paused ] = true
         end
 
@@ -652,7 +660,8 @@ module Girl
 
           unless tund_info[ :tun_addr ]
             @mutex.synchronize do
-              @ctlw.write( [ CTL_CLOSE, tund.object_id ].pack( 'CQ>' ) )
+              tund_id = @socks[ tund ]
+              @ctlw.write( [ CTL_CLOSE, tund_id ].pack( 'CQ>' ) )
             end
           end
         end
@@ -670,7 +679,8 @@ module Girl
 
           if now - tund_info[ :last_traffic_at ] > EXPIRE_AFTER
             @mutex.synchronize do
-              @ctlw.write( [ CTL_CLOSE, tund.object_id ].pack( 'CQ>' ) )
+              tund_id = @socks[ tund ]
+              @ctlw.write( [ CTL_CLOSE, tund_id ].pack( 'CQ>' ) )
             end
 
             break
@@ -726,8 +736,9 @@ module Girl
 
           if tund_info[ :paused ] && ( tund_info[ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
             @mutex.synchronize do
-              puts "ctlw resume #{ tund.object_id } #{ Time.new } p#{ Process.pid }"
-              @ctlw.write( [ CTL_RESUME, tund.object_id ].pack( 'CQ>' ) )
+              tund_id = @socks[ tund ]
+              puts "ctlw resume #{ tund_id } #{ Time.new } p#{ Process.pid }"
+              @ctlw.write( [ CTL_RESUME, tund_id ].pack( 'CQ>' ) )
               tund_info[ :paused ] = false
             end
           end
@@ -840,7 +851,7 @@ module Girl
       tund = info[ :tund ]
       return if tund.closed?
 
-      dest_id = dest.object_id
+      dest_id = info[ :id ]
       tund_info = @infos[ tund ]
       ext = tund_info[ :dest_exts ][ dest_id ]
       return unless ext
@@ -865,9 +876,12 @@ module Girl
       @reads.delete( sock )
       @writes.delete( sock )
       @closings.delete( sock )
-      @socks.delete( sock.object_id )
       @roles.delete( sock )
-      @infos.delete( sock )
+      info = @infos.delete( sock )
+      sock_id = @socks.delete( sock )
+      @sock_ids.delete( sock_id )
+
+      info
     end
 
     def del_dest_ext( tund_info, dest_id )

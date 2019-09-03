@@ -9,13 +9,14 @@ module Girl
   class Resolvd
 
     def initialize( port = 7070, nameservers = [] )
-      @reads = []
-      @writes = []
-      @socks = {} # object_id => sock
-      @roles = {} # sock => :ctlr / :resolvd / :pub
-      @infos = {} # resolvd => {}
       @hex = Girl::Hex.new
       @mutex = Mutex.new
+      @reads = []
+      @writes = []
+      @roles = {} # sock => :ctlr / :resolvd / :pub
+      @infos = {} # resolvd => {}
+      @socks = {} # sock => sock_id
+      @sock_ids = {} # sock_id => sock
 
       resolvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       resolvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
@@ -25,9 +26,9 @@ module Girl
       nameservers = nameservers.select{ | ns | Addrinfo.udp( ns, 53 ).ipv4? }
 
       resolvd_info = {
-        resolv_addrs: {},    # resolv_addr => pub
-        pubs: {},            # pub => src_addr
-        last_coming_ats: {}, # pub => now
+        resolv_addrs: {},  # resolv_addr => pub
+        pubs: {},          # pub => src_addr
+        last_recv_ats: {}, # pub => now
         pubd_addrs: nameservers.map{ | ns | Socket.sockaddr_in( 53, ns ) }
       }
 
@@ -76,7 +77,7 @@ module Girl
 
     def read_ctlr( ctlr )
       sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
-      sock = @socks[ sock_id ]
+      sock = @sock_ids[ sock_id ]
 
       if sock
         # puts "debug expire pub #{ sock_id } #{ Time.new }"
@@ -102,12 +103,15 @@ module Girl
         pub.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
         # puts "debug a new pub bound on #{ pub.local_address.ip_unpack.last } #{ Time.new }"
 
-        @socks[ pub.object_id ] = pub
         @roles[ pub ] = :pub
+        pub_id = @hex.gen_random_num
+        @socks[ pub ] = pub_id
+        @sock_ids[ pub_id ] = pub
         @reads << pub
+
         info[ :resolv_addrs ][ resolv_addr ] = pub
         info[ :pubs ][ pub ] = resolv_addr
-        info[ :last_coming_ats ][ pub ] = Time.new
+        info[ :last_recv_ats ][ pub ] = Time.new
       end
 
       info[ :pubd_addrs ].each do | pubd_addr |
@@ -123,7 +127,7 @@ module Girl
       return unless resolv_addr
 
       # puts "debug pub recvmsg #{ data.inspect }"
-      @resolvd_info[ :last_coming_ats ][ pub ] = Time.new
+      @resolvd_info[ :last_recv_ats ][ pub ] = Time.new
       data = @hex.encode( data )
       # puts "debug resolvd sendmsg #{ data.inspect }"
       @resolvd.sendmsg( data, 0, resolv_addr )
@@ -133,9 +137,10 @@ module Girl
       sock.close
       @reads.delete( sock )
       @writes.delete( sock )
-      @socks.delete( sock.object_id )
       @roles.delete( sock )
-      @resolvd_info[ :last_coming_ats ].delete( sock )
+      sock_id = @socks.delete( sock )
+      @sock_ids.delete( sock_id )
+      @resolvd_info[ :last_recv_ats ].delete( sock )
       resolv_addr = @resolvd_info[ :pubs ].delete( sock )
       @resolvd_info[ :resolv_addrs ].delete( resolv_addr )
     end
@@ -143,15 +148,16 @@ module Girl
     def loop_expire
       Thread.new do
         loop do
-          sleep 10
+          sleep 60
 
           @mutex.synchronize do
             now = Time.new
             pubs = @resolvd_info[ :pubs ].keys
 
             pubs.each do | pub |
-              if now - @resolvd_info[ :last_coming_ats ][ pub ] > 30
-                @ctlw.write( [ pub.object_id ].pack( 'Q>' ) )
+              if now - @resolvd_info[ :last_recv_ats ][ pub ] > 5
+                pub_id = @socks[ pub ]
+                @ctlw.write( [ pub_id ].pack( 'Q>' ) )
               end
             end
           end

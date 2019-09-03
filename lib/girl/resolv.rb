@@ -18,13 +18,14 @@ module Girl
   class Resolv
 
     def initialize( port = 1717, nameservers = [], resolvd_host = nil, resolvd_port = nil, custom_domains = [] )
-      @reads = []
-      @writes = []
-      @socks = {} # object_id => sock
-      @roles = {} # sock => :ctlr / :redir / :resolv / :pub
-      @infos = {} # redir => {}
       @hex = Girl::Hex.new
       @mutex = Mutex.new
+      @reads = []
+      @writes = []
+      @roles = {} # sock => :ctlr / :redir / :resolv / :pub
+      @infos = {} # redir => {}
+      @socks = {} # sock => sock_id
+      @sock_ids = {} # sock_id => sock
 
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
@@ -38,9 +39,9 @@ module Girl
       end
 
       redir_info = {
-        src_addrs: {},       # src_addr => resolv_or_pub
-        socks: {},           # resolv_or_pub => src_addr
-        last_coming_ats: {}, # resolv_or_pub => now
+        src_addrs: {},     # src_addr => resolv_or_pub
+        socks: {},         # resolv_or_pub => src_addr
+        last_recv_ats: {}, # resolv_or_pub => now
         pubd_addrs: nameservers.map{ | ns | Socket.sockaddr_in( 53, ns ) },
         resolvd_addr: ( resolvd_host && resolvd_port ) ? Socket.sockaddr_in( resolvd_port, resolvd_host ) : nil,
         custom_qnames: custom_domains.map{ | dom | dom.split( '.' ).map{ | sub | [ sub.size ].pack( 'C' ) + sub }.join }
@@ -91,7 +92,7 @@ module Girl
 
     def read_ctlr( ctlr )
       sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
-      sock = @socks[ sock_id ]
+      sock = @sock_ids[ sock_id ]
 
       if sock
         # puts "debug expire #{ @roles[ sock ] } #{ sock_id } #{ Time.new }"
@@ -121,7 +122,9 @@ module Girl
         sock.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         sock.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
-        @socks[ sock.object_id ] = sock
+        sock_id = @hex.gen_random_num
+        @socks[ sock ] = sock_id
+        @sock_ids[ sock_id ] = sock
         qname = data[ 12, qname_len ]
 
         if info[ :resolvd_addr ] && ( info[ :custom_qnames ].any? { | custom | qname.include?( custom ) } )
@@ -135,7 +138,7 @@ module Girl
         @reads << sock
         info[ :src_addrs ][ src_addr ] = sock
         info[ :socks ][ sock ] = src_addr
-        info[ :last_coming_ats ][ sock ] = now
+        info[ :last_recv_ats ][ sock ] = now
       end
 
       if @roles[ sock ] == :resolv
@@ -157,7 +160,7 @@ module Girl
       src_addr = @redir_info[ :socks ][ sock ]
       return unless src_addr
 
-      @redir_info[ :last_coming_ats ][ sock ] = Time.new
+      @redir_info[ :last_recv_ats ][ sock ] = Time.new
       @redir.sendmsg( data, 0, src_addr )
     end
 
@@ -165,9 +168,10 @@ module Girl
       sock.close
       @reads.delete( sock )
       @writes.delete( sock )
-      @socks.delete( sock.object_id )
       @roles.delete( sock )
-      @redir_info[ :last_coming_ats ].delete( sock )
+      sock_id = @socks.delete( sock )
+      @sock_ids.delete( sock_id )
+      @redir_info[ :last_recv_ats ].delete( sock )
       src_addr = @redir_info[ :socks ].delete( sock )
       @redir_info[ :src_addrs ].delete( src_addr )
     end
@@ -175,15 +179,16 @@ module Girl
     def loop_expire
       Thread.new do
         loop do
-          sleep 10
+          sleep 60
 
           @mutex.synchronize do
             now = Time.new
             socks = @redir_info[ :socks ].keys
 
             socks.each do | sock |
-              if now - @redir_info[ :last_coming_ats ][ sock ] > 30
-                @ctlw.write( [ sock.object_id ].pack( 'Q>' ) )
+              if now - @redir_info[ :last_recv_ats ][ sock ] > 5
+                sock_id = @socks[ sock ]
+                @ctlw.write( [ sock_id ].pack( 'Q>' ) )
               end
             end
           end

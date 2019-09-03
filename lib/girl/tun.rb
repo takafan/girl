@@ -75,9 +75,10 @@ module Girl
       @reads = []
       @writes = []
       @closings = []
-      @socks = {} # object_id => sock
       @roles = {} # sock => :ctlr / :redir / :source / :tun
       @infos = {} # sock => {}
+      @socks = {} # sock => sock_id
+      @sock_ids = {} # sock_id => sock
 
       ctlr, ctlw = IO.pipe
       @ctlw = ctlw
@@ -141,14 +142,14 @@ module Girl
       case ctlr.read( 1 ).unpack( 'C' ).first
       when CTL_CLOSE
         sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
-        sock = @socks[ sock_id ]
+        sock = @sock_ids[ sock_id ]
 
         if sock
           add_closing( sock )
         end
       when CTL_RESUME
         sock_id = ctlr.read( 8 ).unpack( 'Q>' ).first
-        sock = @socks[ sock_id ]
+        sock = @sock_ids[ sock_id ]
 
         if sock
           add_write( sock )
@@ -176,13 +177,14 @@ module Girl
         return
       end
 
-      source_id = source.object_id
-
-      @socks[ source_id ] = source
+      source_id = @hex.gen_random_num
       @roles[ source ] = :source
       @infos[ source ] = {
+        id: source_id,
         tun: @tun
       }
+      @socks[ source ] = source_id
+      @sock_ids[ source_id ] = source
 
       @tun_info[ :waitings ][ source_id ] = []
       @tun_info[ :source_exts ][ source_id ] = {
@@ -230,7 +232,7 @@ module Girl
         return
       end
 
-      source_id = source.object_id
+      source_id = @socks[ source ]
       tun_info = @infos[ tun ]
       dest_id = tun_info[ :source_ids ][ source_id ]
 
@@ -242,8 +244,9 @@ module Girl
       tun_info[ :wbuffs ] << [ source_id, data ]
 
       if tun_info[ :wbuffs ].size >= WBUFFS_LIMIT
+        tun_id = @socks[ tun ]
         spring = tun_info[ :chunks ].size > 0 ? ( tun_info[ :spring ] + 1 ) : 0
-        filename = "#{ Process.pid }-#{ tun.object_id }.#{ spring }"
+        filename = "#{ Process.pid }-#{ tun_id }.#{ spring }"
         chunk_path = File.join( @tun_chunk_dir, filename )
         IO.binwrite( chunk_path, tun_info[ :wbuffs ].map{ | source_id, data | "#{ [ source_id, data.bytesize ].pack( 'Q>n' ) }#{ data }" }.join )
         tun_info[ :chunks ] << filename
@@ -509,7 +512,8 @@ module Girl
       end
 
       tun_info = @infos[ tun ]
-      ext = tun_info[ :source_exts ][ source.object_id ]
+      source_id = @socks[ source ]
+      ext = tun_info[ :source_exts ][ source_id ]
 
       # 取写前
       data = ext[ :cache ]
@@ -590,7 +594,7 @@ module Girl
       # 若写后达到上限，暂停取写前
       if info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum >= WMEMS_LIMIT
         unless info[ :paused ]
-          puts "pause #{ tun.object_id } #{ Time.new } p#{ Process.pid }"
+          puts "pause #{ @socks[ tun ] } #{ Time.new } p#{ Process.pid }"
           info[ :paused ] = true
         end
 
@@ -663,8 +667,9 @@ module Girl
     def new_tun
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-
+      tun_id = @hex.gen_random_num
       tun_info = {
+        id: tun_id,
         waitings: {},        # 还没连上tund，或者还没配上dest，暂存流量 source_id => buffs[]
         wbuffs: [],          # 写前缓存 [ source_id, data ]
         caches: [],          # 块读出缓存 [ source_id, data ]
@@ -683,9 +688,10 @@ module Girl
 
       @tun = tun
       @tun_info = tun_info
-      @socks[ tun.object_id ] = tun
       @roles[ tun ] = :tun
       @infos[ tun ] = tun_info
+      @socks[ tun ] = tun_id
+      @sock_ids[ tun_id ] = tun
 
       send_pack( tun, @hex.hello, @roomd_addr )
       add_read( tun )
@@ -701,7 +707,8 @@ module Girl
 
           unless tun_info[ :tund_addr ]
             @mutex.synchronize do
-              @ctlw.write( [ CTL_CLOSE, tun.object_id ].pack( 'CQ>' ) )
+              tun_id = @socks[ tun ]
+              @ctlw.write( [ CTL_CLOSE, tun_id ].pack( 'CQ>' ) )
             end
           end
         end
@@ -733,8 +740,9 @@ module Girl
 
           if now - tun_info[ :last_traffic_at ] > EXPIRE_AFTER
             @mutex.synchronize do
-              # puts "debug ctlw close tun #{ tun.object_id } #{ Time.new } p#{ Process.pid }"
-              @ctlw.write( [ CTL_CLOSE, tun.object_id ].pack( 'CQ>' ) )
+              tun_id = @socks[ tun ]
+              # puts "debug ctlw close tun #{ tun_id } #{ Time.new } p#{ Process.pid }"
+              @ctlw.write( [ CTL_CLOSE, tun_id ].pack( 'CQ>' ) )
             end
 
             break
@@ -790,8 +798,9 @@ module Girl
 
           if tun_info[ :paused ] && ( tun_info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
             @mutex.synchronize do
-              puts "ctlw resume #{ tun.object_id } #{ Time.new } p#{ Process.pid }"
-              @ctlw.write( [ CTL_RESUME, tun.object_id ].pack( 'CQ>' ) )
+              tun_id = @socks[ tun ]
+              puts "ctlw resume #{ tun_id } #{ Time.new } p#{ Process.pid }"
+              @ctlw.write( [ CTL_RESUME, tun_id ].pack( 'CQ>' ) )
               tun_info[ :paused ] = false
             end
           end
@@ -811,7 +820,7 @@ module Girl
           tun_info = @infos[ tun ]
 
           if tun_info[ :tund_addr ]
-            source_id = source.object_id
+            source_id = @socks[ source ]
             dest_id = tun_info[ :source_ids ][ source_id ]
 
             if dest_id
@@ -941,7 +950,7 @@ module Girl
       tun = info[ :tun ]
       return if tun.closed?
 
-      source_id = source.object_id
+      source_id = info[ :id ]
       tun_info = @infos[ tun ]
       ext = tun_info[ :source_exts ][ source_id ]
       return unless ext
@@ -966,9 +975,12 @@ module Girl
       @reads.delete( sock )
       @writes.delete( sock )
       @closings.delete( sock )
-      @socks.delete( sock.object_id )
       @roles.delete( sock )
-      @infos.delete( sock )
+      info = @infos.delete( sock )
+      sock_id = @socks.delete( sock )
+      @sock_ids.delete( sock_id )
+
+      info
     end
 
     def del_source_ext( tun_info, source_id )
