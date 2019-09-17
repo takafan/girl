@@ -2,6 +2,7 @@
   <div id="app">
     <div id="header">
       <div><img src="./assets/bear.jpg" /></div>
+      <div v-if="texts[ 'girl.im' ]">{{ texts[ 'girl.im' ].replace( new RegExp( /\n/, 'g' ), '' ) }}</div>
       <div class="right" v-if="is_locked"><i class="el-icon-lock"></i></div>
     </div>
 
