@@ -356,8 +356,14 @@ module Girl
               ranges << [ curr_pack_id, ext[ :biggest_dest_pack_id ] ]
             end
 
+            pack_count = 0
             # puts "debug #{ ext[ :continue_dest_pack_id ] }/#{ ext[ :biggest_dest_pack_id ] } send MISS #{ ranges.size }"
             ranges.each do | pack_id_begin, pack_id_end |
+              if pack_count >= BREAK_SEND_MISS
+                puts "break send miss at #{ pack_id_begin } #{ Time.new } p#{ Process.pid }"
+                break
+              end
+
               ctlmsg = [
                 0,
                 MISS,
@@ -367,6 +373,7 @@ module Girl
               ].pack( 'Q>CQ>Q>Q>' )
 
               send_pack( tun, ctlmsg,  info[ :tund_addr ] )
+              pack_count += ( pack_id_end - pack_id_begin + 1 )
             end
           end
         when MISS

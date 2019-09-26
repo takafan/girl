@@ -355,8 +355,14 @@ module Girl
               ranges << [ curr_pack_id, ext[ :biggest_source_pack_id ] ]
             end
 
+            pack_count = 0
             # puts "debug #{ ext[ :continue_source_pack_id ] }/#{ ext[ :biggest_source_pack_id ] } send MISS #{ ranges.size }"
             ranges.each do | pack_id_begin, pack_id_end |
+              if pack_count >= BREAK_SEND_MISS
+                puts "break send miss at #{ pack_id_begin } #{ Time.new } p#{ Process.pid }"
+                break
+              end
+
               ctlmsg = [
                 0,
                 MISS,
@@ -366,6 +372,7 @@ module Girl
               ].pack( 'Q>CQ>Q>Q>' )
 
               send_pack( tund, ctlmsg, info[ :tun_addr ] )
+              pack_count += ( pack_id_end - pack_id_begin + 1 )
             end
           end
         when MISS
@@ -575,7 +582,7 @@ module Girl
         end
       end
 
-      # 若写后到达上限，暂停取写前
+      # 若写后达到上限，暂停取写前
       if info[ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum >= WMEMS_LIMIT
         unless info[ :paused ]
           puts "pause #{ @socks[ tund ] } #{ Time.new } p#{ Process.pid }"
