@@ -23,6 +23,8 @@ lib/girl/resolv.rb
 lib/girl/resolvd.rb
 lib/girl/tun.rb
 lib/girl/tund.rb
+lib/girl/udp.rb
+lib/girl/udpd.rb
 lib/girl/version.rb
   ]
 

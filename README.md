@@ -5,7 +5,7 @@
 1. dns查询得到正确的ip。
 2. tcp流量正常的到达目的地。
 
-同时，她加速tcp传输。
+同时，她加速tcp传输。加速海外游戏。
 
 画图说明，通常：
 
@@ -19,9 +19,9 @@
 流量 ----> 网关（点对点近端） ---------------> 点对点远端 ----> 目的地
 ```
 
-妹子的加速，不是指换线路（新线路比原线路快）带来的加速，而是真正的加速：妹子带来一套现代的传输策略，她比tcp快。
+妹子的加速，不是单纯的换线路（新线路比原线路快）带来的加速。她是真正的加速：她带来一套现代的传输策略，她比tcp快。
 
-举个例子，你有一台服务器，从近一点的地方下载服务器上的文件，有几兆每秒，但从远一点的地方，就只有几十k，几k。而妹子依然几兆。
+举个例子，你有一台服务器，从近的地方下载服务器上的文件，有几兆每秒，但从远的地方，就只有几十k，几k。而妹子依然几兆。
 
 ## 快
 
@@ -43,7 +43,7 @@ tcp不够现代的地方，首先是单发确认，收到很多，但只回复�
 
 换一台堵的，电信老线路，单程cn2美国服务器，hybla降到80K，bbr降到10K，cubic降到4K，在tcp全体投降的状态下，妹子依然8M，比hybla快100倍，比bbr快800倍，比cubic快2000倍。
 
-## 安装
+## 使用
 
 分别在两端装：
 
@@ -136,7 +136,53 @@ curl https://www.google.com/
 
 相比别的对抗邪恶的办法，妹子没有特征，不加密（或者你自定义）。
 
-## 3. 树莓派
+## 3. 转发udp
+
+```
+udp traffic -> iptables ---- cn ip ------------------------------> 游戏服务器
+                        \
+                         `-- not cn --> udp ------------> udpd --> 海外游戏服务器
+```
+
+远端：
+
+```ruby
+require 'girl/udpd'
+
+Girl::Udpd.new( 3030 ).looping
+```
+
+近端：
+
+```ruby
+require 'girl/udp'
+
+Girl::Udp.new( 'your.server.ip', 3030, 1313 ).looping
+```
+
+tcp可以在iptables -j REDIRECT后拿到SO_ORIGINAL_DST（原始目标地址），但udp没有这个sockopt。
+另一个拿法是IP_RECVORIGDSTADDR，一个cmsg。但-j REDIRECT竟然把--to-ports的跳转端口带进IP_RECVORIGDSTADDR，原始目标地址丢了。
+想不丢，唯一的办法：-j TPROXY。
+
+```bash
+iptables -t mangle -I PREROUTING -p udp -d game.server.ip -j TPROXY --tproxy-mark 0x1/0x1 --on-port 1313
+```
+
+tproxy不自带，需要通过dkms加载。
+
+```bash
+apt-get install xtables-addons-dkms
+echo 'nf_tproxy_ipv4' > /etc/modules-load.d/nf_tproxy_ipv4.conf
+```
+
+默认只有经lo的流量会进--on-port的跳转端口。想使任意流量都进，可以打标记，标记对应一个隔离的表，这个表里一切流量全走lo。
+
+```bash
+ip rule add fwmark 1 lookup 100
+ip route add local 0.0.0.0/0 dev lo table 100
+```
+
+## 4. 树莓派
 
 把妹子安装在树莓派上（以及你的vps），你就得到了一台可能是目前地球上最快的（性价比最高的）（加速任何海外游戏的）（对抗邪恶的）路由器。
 
