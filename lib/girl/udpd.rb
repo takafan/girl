@@ -154,7 +154,7 @@ module Girl
 
             @udpd_info[ :dests ].values.each do | dest_info |
               if now - dest_info[ :last_recv_at ] > 3600
-                @ctlw.write( dest_info[ :dest_id ].pack( 'Q>' ) )
+                @ctlw.write( [ dest_info[ :dest_id ] ].pack( 'Q>' ) )
               end
             end
           end

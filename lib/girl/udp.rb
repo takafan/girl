@@ -172,7 +172,7 @@ module Girl
 
             @redir_info[ :udps ].values.each do | udp_info |
               if now - udp_info[ :last_recv_at ] > 3600
-                @ctlw.write( udp_info[ :udp_id ].pack( 'Q>' ) )
+                @ctlw.write( [ udp_info[ :udp_id ] ].pack( 'Q>' ) )
               end
             end
           end
