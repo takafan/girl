@@ -121,6 +121,57 @@
         </el-col>
       </el-row>
 
+      <!-- udp近端 -->
+      <el-row class="row">
+        <el-col>
+          <div class="title">{{ translates.udp }}</div>
+          <div class="interval" v-on:click="show_service( 'udp' )">
+            <span class="output" v-if="enableds.udp">Auto;&nbsp;</span>
+            <span class="output" v-html="colour_actives.udp"></span>
+          </div>
+          <div v-if="editing == 'udp' && !is_locked" class="mw600">
+            <div class="right">
+              <el-checkbox
+                v-model="enableds.udp"
+                @change="check_udp">
+                开机自启
+              </el-checkbox>&nbsp;&nbsp;
+              <el-button
+                @click="editing = null">
+                取消
+              </el-button>
+              <el-button
+                @click="systemctl( 'status', 'udp' )"
+                :loading="loadings[ 'status@udp' ]">
+                刷新
+              </el-button>
+              <el-button
+                v-if="runnings.resolv"
+                @click="systemctl( 'stop', 'udp' )"
+                :loading="loadings[ 'stop@udp' ]">
+                停止
+              </el-button>
+              <el-button
+                v-if="!runnings.resolv"
+                @click="systemctl( 'start', 'udp' )"
+                :loading="loadings[ 'start@udp' ]">
+                启动
+              </el-button>
+              <el-button
+                v-if="runnings.resolv"
+                @click="systemctl( 'restart', 'udp' )"
+                :loading="loadings[ 'restart@udp' ]">
+                重启
+              </el-button>
+              <el-button
+                @click="tail( 'udp' )">
+                日志
+              </el-button>
+            </div>
+          </div>
+        </el-col>
+      </el-row>
+
       <!-- 热点 -->
       <el-row class="row">
         <el-col>

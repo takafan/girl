@@ -4,9 +4,9 @@ require 'sinatra'
 set :public_folder, '/srv/girl/dist'
 set :server, 'webrick'
 
-SERVICES = %w[ dhcpcd dnsmasq hostapd resolv tun ]
+SERVICES = %w[ dhcpcd dnsmasq hostapd resolv tun udp ]
 
-CUSTOM_SERVICES = %w[ hostapd resolv tun ]
+CUSTOM_SERVICES = %w[ hostapd resolv tun udp ]
 
 CONFIG_DIR = '/boot'
 

@@ -18,6 +18,11 @@ export default {
       this.systemctl( command, 'resolv' )
     },
 
+    check_udp: function( checked ) {
+      let command = checked ? 'enable' : 'disable'
+      this.systemctl( command, 'udp' )
+    },
+
     ip: function() {
       window.open( this.http_host + '/api/ip', '_blank' )
     },
@@ -167,6 +172,7 @@ export default {
         stop: '停止',
         tun: '网关近端',
         resolv: 'dns近端',
+        udp: 'udp近端',
         'dnsmasq.d/wlan0.conf': 'dhcp租约配置',
         'dhcpcd.conf': '网卡配置',
         'girl.custom.txt': '自定义',
