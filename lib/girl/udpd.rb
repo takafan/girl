@@ -126,6 +126,7 @@ module Girl
         dest.sendmsg( data, 0, dest_info[ :dest_addr ] )
       rescue Errno::EACCES, Errno::EINTR => e
         puts "dest sendmsg #{ e.class } #{ Time.new }"
+        @ctlw.write( [ dest_info[ :dest_id ] ].pack( 'Q>' ) )
       end
     end
 
