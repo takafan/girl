@@ -121,7 +121,12 @@ module Girl
       end
 
       dest_info = info[ :dests ][ dest ]
-      dest.sendmsg( data, 0, dest_info[ :dest_addr ] )
+
+      begin
+        dest.sendmsg( data, 0, dest_info[ :dest_addr ] )
+      rescue Errno::EACCES, Errno::EINTR => e
+        puts "dest sendmsg #{ e.class } #{ Time.new }"
+      end
     end
 
     def read_dest( dest )
