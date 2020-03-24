@@ -101,6 +101,7 @@ module Girl
 
         dest = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         dest.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        dest.setsockopt( Socket::SOL_SOCKET, Socket::SO_BROADCAST, 1 )
         dest.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
         # puts "debug a new dest bound on #{ dest.local_address.ip_unpack.last } #{ Time.new }"
 
@@ -121,13 +122,7 @@ module Girl
       end
 
       dest_info = info[ :dests ][ dest ]
-
-      begin
-        dest.sendmsg( data, 0, dest_info[ :dest_addr ] )
-      rescue Errno::EACCES, Errno::EINTR => e
-        puts "dest sendmsg #{ e.class } #{ Time.new }"
-        @ctlw.write( [ dest_info[ :dest_id ] ].pack( 'Q>' ) )
-      end
+      dest.sendmsg( data, 0, dest_info[ :dest_addr ] )
     end
 
     def read_dest( dest )

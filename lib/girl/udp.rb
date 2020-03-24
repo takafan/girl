@@ -118,6 +118,7 @@ module Girl
       unless udp
         udp = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         udp.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        udp.setsockopt( Socket::SOL_SOCKET, Socket::SO_BROADCAST, 1 )
         udp.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
         # puts "debug a new udp bound on #{ udp.local_address.ip_unpack.last } #{ Time.new }"
