@@ -146,19 +146,19 @@
                 刷新
               </el-button>
               <el-button
-                v-if="runnings.resolv"
+                v-if="runnings.udp"
                 @click="systemctl( 'stop', 'udp' )"
                 :loading="loadings[ 'stop@udp' ]">
                 停止
               </el-button>
               <el-button
-                v-if="!runnings.resolv"
+                v-if="!runnings.udp"
                 @click="systemctl( 'start', 'udp' )"
                 :loading="loadings[ 'start@udp' ]">
                 启动
               </el-button>
               <el-button
-                v-if="runnings.resolv"
+                v-if="runnings.udp"
                 @click="systemctl( 'restart', 'udp' )"
                 :loading="loadings[ 'restart@udp' ]">
                 重启
