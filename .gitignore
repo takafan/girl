@@ -1,5 +1,7 @@
 .DS_Store
 .env
+.yarn
+.yarnrc.yml
 node_modules/
 dist/
 npm-debug.log
