@@ -20,6 +20,7 @@ module Girl
       @udpd = udpd
       @reads = [ ctlr, udpd ]
       @writes = []
+      @closings = []
       @roles = {
         ctlr => :ctlr, # :ctlr / :udpd / :dest
         udpd => :udpd
@@ -51,7 +52,7 @@ module Girl
           end
 
           ws.each do | sock |
-            close_dest( sock )
+            write_dest( sock )
           end
         end
       end
@@ -68,10 +69,8 @@ module Girl
       dest = @dests[ us_addr ]
 
       if dest
-        unless @writes.include?( dest )
-          # puts "debug expire dest #{ us_addr.inspect } #{ Time.new }"
-          @writes << dest
-        end
+        # puts "debug expire dest #{ us_addr.inspect } #{ Time.new }"
+        add_closing( dest )
       end
     end
 
@@ -88,7 +87,7 @@ module Girl
       return unless Addrinfo.new( dest_addr ).ipv4?
 
       us_addr = [ udp_addr, src_addr ].join
-      data = data[ 32..-1 ]
+      data = data[ 16..-1 ]
       dest = @dests[ us_addr ]
 
       unless dest
@@ -102,6 +101,7 @@ module Girl
           us_addr: us_addr,
           udp_addr: udp_addr,
           src_addr: src_addr,
+          wbuffs: [],
           last_traff_at: Time.new
         }
 
@@ -109,12 +109,9 @@ module Girl
         @reads << dest
       end
 
-      begin
-        dest.sendmsg( data, 0, dest_addr )
-      rescue Errno::EACCES, Errno::EINTR => e
-        puts "dest sendmsg #{ e.class } #{ Time.new }"
-        @ctlw.write( us_addr )
-      end
+      dest_info = @dest_infos[ dest ]
+      dest_info[ :wbuffs ] << data
+      add_write( dest )
     end
 
     def read_dest( dest )
@@ -127,10 +124,53 @@ module Girl
       @udpd.sendmsg( "#{ dest_info[ :src_addr ] }#{ data }", 0, dest_info[ :udp_addr ] )
     end
 
+    def write_dest( dest )
+      if @closings.include?( dest )
+        close_dest( dest )
+        return
+      end
+
+      dest_info = @dest_infos[ dest ]
+      data = dest_info[ :wbuffs ].shift
+
+      unless data
+        @writes.delete( dest )
+        return
+      end
+
+      dest_addr = data[ 0, 16 ]
+      data = data[ 16..-1 ]
+
+      begin
+        dest.sendmsg( data, 0, dest_addr )
+      rescue Errno::EACCES, Errno::EINTR => e
+        puts "dest sendmsg #{ e.class } #{ Time.new }"
+        add_closing( dest )
+        return
+      end
+
+      dest_info[ :last_traff_at ] = Time.new
+    end
+
+    def add_write( dest )
+      unless @writes.include?( dest )
+        @writes << dest
+      end
+    end
+
+    def add_closing( dest )
+      unless @closings.include?( dest )
+        @closings << dest
+      end
+
+      add_write( dest )
+    end
+
     def close_dest( dest )
       dest.close
       @reads.delete( dest )
       @writes.delete( dest )
+      @closings.delete( dest )
       @roles.delete( dest )
       dest_info = @dest_infos.delete( dest )
       @dests.delete( dest_info[ :us_addr ] )
