@@ -50,10 +50,11 @@ module Girl
         redir => :redir,
         udp => :udp
       }
-      @srcs = {}      # dest_addr => src
+      @srcs = {}      # sd_addr => src
       @src_infos = {} # src => {}
-                      #   dest_addr: dest_addr
+                      #   sd_addr: [ src_addr, dest_addr ].join
                       #   src_addr: src_addr
+                      #   dest_addr: dest_addr
                       #   last_traff_at: now
     end
 
@@ -91,47 +92,45 @@ module Girl
     private
 
     def read_ctlr( ctlr )
-      dest_addr = ctlr.read( 16 )
-      src = @srcs[ dest_addr ]
+      sd_addr = ctlr.read( 32 )
+      src = @srcs[ sd_addr ]
 
       if src
-        # puts "debug expire src #{ dest_addr.inspect } #{ Time.new }"
         add_closing( src )
       end
     end
 
     def read_redir( redir )
       data, addrinfo, rflags, *controls = redir.recvmsg
-      # puts "debug #{ data.inspect } #{ Time.new }"
-      # puts "debug #{ controls.inspect } #{ Time.new }"
 
-      from_addr = addrinfo.to_sockaddr
+      src_addr = addrinfo.to_sockaddr
       ancdata = controls.find { | _ancdata | _ancdata.cmsg_is?( Socket::SOL_IP, 20 ) }
-      to_addr = ancdata.data
+      dest_addr = ancdata.data
 
-      @udp.sendmsg( "#{ from_addr }#{ to_addr }#{ data }", 0, @udpd_addr )
+      @udp.sendmsg( "#{ src_addr }#{ dest_addr }#{ data }", 0, @udpd_addr )
     end
 
     def read_udp( udp )
       data, addrinfo, rflags, *controls = udp.recvmsg
-      return if data.size < 17
+      return if data.size < 33
 
       dest_addr = data[ 0, 16 ]
       src_addr = data[ 16, 16 ]
+      sd_addr = [ src_addr, dest_addr ].join
       data = data[ 32..-1 ]
 
-      src = @srcs[ dest_addr ]
+      src = @srcs[ sd_addr ]
 
       unless src
         src = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         src.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         src.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-        # puts "debug a new src bound on #{ src.local_address.ip_unpack.last } #{ Time.new }"
 
-        @srcs[ dest_addr ] = src
+        @srcs[ sd_addr ] = src
         @src_infos[ src ] = {
-          dest_addr: dest_addr,
+          sd_addr: sd_addr,
           src_addr: src_addr,
+          dest_addr: dest_addr,
           wbuffs: [],
           last_traff_at: Time.new
         }
@@ -152,8 +151,8 @@ module Girl
       return unless src_info
 
       src_info[ :last_traff_at ] = Time.new
-      from_addr = addrinfo.to_sockaddr
-      @udp.sendmsg( "#{ from_addr }#{ src_info[ :dest_addr ] }#{ data }", 0, @udpd_addr )
+      src_addr = addrinfo.to_sockaddr
+      @udp.sendmsg( "#{ src_addr }#{ src_info[ :dest_addr ] }#{ data }", 0, @udpd_addr )
     end
 
     def write_src( src )
@@ -202,7 +201,7 @@ module Girl
       @closings.delete( src )
       @roles.delete( src )
       src_info = @src_infos.delete( src )
-      @srcs.delete( src_info[ :dest_addr ] )
+      @srcs.delete( src_info[ :sd_addr ] )
     end
 
     def loop_expire
@@ -215,7 +214,7 @@ module Girl
 
             @src_infos.values.each do | src_info |
               if now - src_info[ :last_traff_at ] > 1800
-                @ctlw.write( src_info[ :dest_addr ] )
+                @ctlw.write( src_info[ :sd_addr ] )
               end
             end
           end

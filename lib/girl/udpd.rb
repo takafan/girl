@@ -94,7 +94,6 @@ module Girl
         dest = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         dest.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         dest.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-        # puts "debug a new dest bound on #{ dest.local_address.ip_unpack.last } #{ Time.new }"
 
         @dests[ us_addr ] = dest
         @dest_infos[ dest ] = {
