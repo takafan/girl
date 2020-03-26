@@ -121,7 +121,8 @@ module Girl
       return unless dest_info
 
       dest_info[ :last_traff_at ] = Time.new
-      @udpd.sendmsg( "#{ dest_info[ :src_addr ] }#{ data }", 0, dest_info[ :udp_addr ] )
+      dest_addr = addrinfo.to_sockaddr
+      @udpd.sendmsg( "#{ dest_addr }#{ dest_info[ :src_addr ] }#{ data }", 0, dest_info[ :udp_addr ] )
     end
 
     def write_dest( dest )
