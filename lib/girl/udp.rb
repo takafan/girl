@@ -11,13 +11,7 @@ require 'socket'
 #
 # Girl::Udp.new( 'your.server.ip', 3030, 1313 ).looping # 近端
 #
-# apt-get install xtables-addons-dkms
-# echo 'nf_tproxy_ipv4' > /etc/modules-load.d/nf_tproxy_ipv4.conf
-#
-# iptables -t mangle -I PREROUTING -p udp -d game.server.ip -j TPROXY --tproxy-mark 0x1/0x1 --on-port 1313
-#
-# ip rule add fwmark 1 lookup 100
-# ip route add local 0.0.0.0/0 dev lo table 100
+# iptables -t nat -A PREROUTING -p udp -d game.server.ip -j REDIRECT --to-ports 1313
 #
 module Girl
   class Udp
@@ -27,8 +21,6 @@ module Girl
 
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      redir.setsockopt( Socket::SOL_IP, 19, 1 )
-      redir.setsockopt( Socket::SOL_IP, 20, 1 )
       redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
       puts "redir bound on #{ redir_port } #{ Time.new }"
 
@@ -56,6 +48,7 @@ module Girl
                       #   src_addr: src_addr
                       #   dest_addr: dest_addr
                       #   last_traff_at: now
+      @half = nil     # [ dest_addr, src_addr ].join
     end
 
     def looping
@@ -104,21 +97,38 @@ module Girl
       data, addrinfo, rflags, *controls = redir.recvmsg
 
       src_addr = addrinfo.to_sockaddr
-      ancdata = controls.find { | _ancdata | _ancdata.cmsg_is?( Socket::SOL_IP, 20 ) }
-      dest_addr = ancdata.data
+      rows = IO.readlines( '/proc/net/nf_conntrack' ).reverse.map{ | line | line.split( ' ' ) }
+      row = rows.find{ | row | row[ 9 ] == '[UNREPLIED]' && row[ 2 ] == 'udp' && row[ 7 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port && row[ 5 ].split( '=' )[ 1 ] == addrinfo.ip_address }
 
-      @udp.sendmsg( "#{ src_addr }#{ dest_addr }#{ data }", 0, @udpd_addr )
+      unless row
+        puts "miss #{ addrinfo.inspect } #{ Time.new }"
+        return
+      end
+
+      dest_addr = Socket.sockaddr_in( row[ 8 ].split( '=' )[ 1 ].to_i, row[ 6 ].split( '=' )[ 1 ] )
+      sendmsg_to_udpd( "#{ src_addr }#{ dest_addr }#{ data }" )
     end
 
     def read_udp( udp )
       data, addrinfo, rflags, *controls = udp.recvmsg
-      return if data.size < 33
+      return if data.size < 32
 
-      dest_addr = data[ 0, 16 ]
-      src_addr = data[ 16, 16 ]
+      if @half.nil? && data.size == 32
+         @half = data
+         return
+      end
+
+      if @half
+        dest_addr = @half[ 0, 16 ]
+        src_addr = @half[ 16, 16 ]
+        @half = nil
+      else
+        dest_addr = data[ 0, 16 ]
+        src_addr = data[ 16, 16 ]
+        data = data[ 32..-1 ]
+      end
+
       sd_addr = [ src_addr, dest_addr ].join
-      data = data[ 32..-1 ]
-
       src = @srcs[ sd_addr ]
 
       unless src
@@ -152,7 +162,7 @@ module Girl
 
       src_info[ :last_traff_at ] = Time.new
       src_addr = addrinfo.to_sockaddr
-      @udp.sendmsg( "#{ src_addr }#{ src_info[ :dest_addr ] }#{ data }", 0, @udpd_addr )
+      sendmsg_to_udpd( "#{ src_addr }#{ src_info[ :dest_addr ] }#{ data }" )
     end
 
     def write_src( src )
@@ -202,6 +212,17 @@ module Girl
       @roles.delete( src )
       src_info = @src_infos.delete( src )
       @srcs.delete( src_info[ :sd_addr ] )
+    end
+
+    def sendmsg_to_udpd( data )
+      begin
+        @udp.sendmsg( data, 0, @udpd_addr )
+      rescue Errno::EMSGSIZE => e
+        puts "#{ e.class } #{ Time.new }"
+        [ data[ 0, 32 ], data[ 32..-1 ] ].each do | part |
+          @udp.sendmsg( part, 0, @udpd_addr )
+        end
+      end
     end
 
     def loop_expire

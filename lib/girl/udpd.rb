@@ -31,6 +31,7 @@ module Girl
                        #   udp_addr: udp_addr
                        #   src_addr: src_addr
                        #   last_traff_at: now
+      @halfs = {}      # udp_addr => [ src_addr, dest_addr ].join
     end
 
     def looping
@@ -76,18 +77,30 @@ module Girl
 
     def read_udpd( udpd )
       data, addrinfo, rflags, *controls = udpd.recvmsg
-      return if data.size < 33
+      return if data.size < 32
 
       udp_addr = addrinfo.to_sockaddr
 
-      src_addr = data[ 0, 16 ]
-      return unless Addrinfo.new( src_addr ).ipv4?
+      if @halfs[ udp_addr ].nil? && data.size == 32
+         @halfs[ udp_addr ] = data
+         return
+      end
 
-      dest_addr = data[ 16, 16 ]
+      if @halfs[ udp_addr ]
+        src_addr = @halfs[ udp_addr ][ 0, 16 ]
+        dest_addr = @halfs[ udp_addr ][ 16, 16 ]
+        data = "#{ dest_addr }#{ data }"
+        @halfs.delete( udp_addr )
+      else
+        src_addr = data[ 0, 16 ]
+        dest_addr = data[ 16, 16 ]
+        data = data[ 16..-1 ]
+      end
+
+      return unless Addrinfo.new( src_addr ).ipv4?
       return unless Addrinfo.new( dest_addr ).ipv4?
 
       us_addr = [ udp_addr, src_addr ].join
-      data = data[ 16..-1 ]
       dest = @dests[ us_addr ]
 
       unless dest
@@ -121,7 +134,7 @@ module Girl
 
       dest_info[ :last_traff_at ] = Time.new
       dest_addr = addrinfo.to_sockaddr
-      @udpd.sendmsg( "#{ dest_addr }#{ dest_info[ :src_addr ] }#{ data }", 0, dest_info[ :udp_addr ] )
+      sendmsg_to_udp( "#{ dest_addr }#{ dest_info[ :src_addr ] }#{ data }", dest_info[ :udp_addr ] )
     end
 
     def write_dest( dest )
@@ -174,6 +187,17 @@ module Girl
       @roles.delete( dest )
       dest_info = @dest_infos.delete( dest )
       @dests.delete( dest_info[ :us_addr ] )
+    end
+
+    def sendmsg_to_udp( data, udp_addr )
+      begin
+        @udpd.sendmsg( data, 0, udp_addr )
+      rescue Errno::EMSGSIZE => e
+        puts "#{ e.class } #{ Time.new }"
+        [ data[ 0, 32 ], data[ 32..-1 ] ].each do | part |
+          @udpd.sendmsg( part, 0, udp_addr )
+        end
+      end
     end
 
     def loop_expire

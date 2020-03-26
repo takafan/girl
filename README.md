@@ -160,26 +160,8 @@ require 'girl/udp'
 Girl::Udp.new( 'your.server.ip', 3030, 1313 ).looping
 ```
 
-tcp可以在iptables -j REDIRECT后拿到SO_ORIGINAL_DST（原始目标地址），但udp没有这个sockopt。
-另一个拿法是IP_RECVORIGDSTADDR，一个cmsg。但-j REDIRECT竟然把--to-ports的跳转端口带进IP_RECVORIGDSTADDR，原始目标地址丢了。
-想不丢，唯一的办法：-j TPROXY。
-
 ```bash
-iptables -t mangle -I PREROUTING -p udp -d game.server.ip -j TPROXY --tproxy-mark 0x1/0x1 --on-port 1313
-```
-
-tproxy不自带，需要通过dkms加载。
-
-```bash
-apt-get install xtables-addons-dkms
-echo 'nf_tproxy_ipv4' > /etc/modules-load.d/nf_tproxy_ipv4.conf
-```
-
-默认只有经lo的流量会进--on-port指定的端口。想使任意流量都进，可以打标记，标记对应一个隔离的表，这个表里一切流量全走lo。
-
-```bash
-ip rule add fwmark 1 lookup 100
-ip route add local 0.0.0.0/0 dev lo table 100
+iptables -t nat -A PREROUTING -p udp -d game.server.ip -j REDIRECT --to-ports 1313
 ```
 
 ## 4. 树莓派
