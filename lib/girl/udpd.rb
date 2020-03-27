@@ -22,16 +22,17 @@ module Girl
       @writes = []
       @closings = []
       @roles = {
-        ctlr => :ctlr, # :ctlr / :udpd / :dest
+        ctlr => :ctlr, # :ctlr / :udpd / :tund
         udpd => :udpd
       }
-      @dests = {}      # us_addr => dest
-      @dest_infos = {} # dest => {}
-                       #   us_addr: [ udp_addr, src_addr ].join
-                       #   udp_addr: udp_addr
-                       #   src_addr: src_addr
-                       #   last_traff_at: now
-      @halfs = {}      # udp_addr => [ src_addr, dest_addr ].join
+      @tunds = {}       # usd_addr => tund
+      @tund_infos = {}  # tund => {}
+                        #   usd_addr: [ udp_addr, src_addr, dest_addr ].join
+                        #   udp_addr: udp_addr
+                        #   src_addr: src_addr
+                        #   tun_addr: sockaddr
+                        #   wbuffs: []
+                        #   last_traff_at: now
     end
 
     def looping
@@ -47,13 +48,18 @@ module Girl
               read_ctlr( sock )
             when :udpd
               read_udpd( sock )
-            when :dest
-              read_dest( sock )
+            when :tund
+              read_tund( sock )
             end
           end
 
           ws.each do | sock |
-            write_dest( sock )
+            case @roles[ sock ]
+            when :udpd
+              write_udpd( sock )
+            when :tund
+              write_tund( sock )
+            end
           end
         end
       end
@@ -66,138 +72,168 @@ module Girl
     private
 
     def read_ctlr( ctlr )
-      us_addr = ctlr.read( 32 )
-      dest = @dests[ us_addr ]
+      usd_addr = ctlr.read( 48 )
+      tund = @tunds[ usd_addr ]
 
-      if dest
-        # puts "debug expire dest #{ us_addr.inspect } #{ Time.new }"
-        add_closing( dest )
+      if tund
+        add_closing( tund )
       end
     end
 
     def read_udpd( udpd )
       data, addrinfo, rflags, *controls = udpd.recvmsg
-      return if data.size < 32
+      ctl_num = data[ 0 ].unpack( 'C' ).first
 
-      udp_addr = addrinfo.to_sockaddr
+      case ctl_num
+      when 1
+        # puts "debug got 1 req a tund -> src_addr dest_addr"
+        udp_addr = addrinfo.to_sockaddr
+        src_addr = data[ 1, 16 ]
+        dest_addr = data[ 17, 16 ]
 
-      if @halfs[ udp_addr ].nil? && data.size == 32
-         @halfs[ udp_addr ] = data
-         return
-      end
+        return unless Addrinfo.new( src_addr ).ipv4?
+        return unless Addrinfo.new( dest_addr ).ipv4?
 
-      if @halfs[ udp_addr ]
-        src_addr = @halfs[ udp_addr ][ 0, 16 ]
-        dest_addr = @halfs[ udp_addr ][ 16, 16 ]
-        data = "#{ dest_addr }#{ data }"
-        @halfs.delete( udp_addr )
-      else
-        src_addr = data[ 0, 16 ]
-        dest_addr = data[ 16, 16 ]
-        data = data[ 16..-1 ]
-      end
+        usd_addr = [ udp_addr, src_addr, dest_addr ].join
+        tund = @tunds[ usd_addr ]
 
-      return unless Addrinfo.new( src_addr ).ipv4?
-      return unless Addrinfo.new( dest_addr ).ipv4?
+        unless tund
+          tund = new_a_tund( udp_addr, src_addr, dest_addr )
+        end
 
-      us_addr = [ udp_addr, src_addr ].join
-      dest = @dests[ us_addr ]
+        tund_port = tund.local_address.ip_unpack.last
 
-      unless dest
-        dest = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-        dest.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        dest.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-
-        @dests[ us_addr ] = dest
-        @dest_infos[ dest ] = {
-          us_addr: us_addr,
-          udp_addr: udp_addr,
-          src_addr: src_addr,
-          wbuffs: [],
-          last_traff_at: Time.new
-        }
-
-        @roles[ dest ] = :dest
-        @reads << dest
-      end
-
-      dest_info = @dest_infos[ dest ]
-      dest_info[ :wbuffs ] << data
-      add_write( dest )
-    end
-
-    def read_dest( dest )
-      data, addrinfo, rflags, *controls = dest.recvmsg
-
-      dest_info = @dest_infos[ dest ]
-      return unless dest_info
-
-      dest_info[ :last_traff_at ] = Time.new
-      dest_addr = addrinfo.to_sockaddr
-      sendmsg_to_udp( "#{ dest_addr }#{ dest_info[ :src_addr ] }#{ data }", dest_info[ :udp_addr ] )
-    end
-
-    def write_dest( dest )
-      if @closings.include?( dest )
-        close_dest( dest )
-        return
-      end
-
-      dest_info = @dest_infos[ dest ]
-      data = dest_info[ :wbuffs ].shift
-
-      unless data
-        @writes.delete( dest )
-        return
-      end
-
-      dest_addr = data[ 0, 16 ]
-      data = data[ 16..-1 ]
-
-      begin
-        dest.sendmsg( data, 0, dest_addr )
-      rescue Errno::EACCES, Errno::EINTR => e
-        puts "dest sendmsg #{ e.class } #{ Time.new }"
-        add_closing( dest )
-        return
-      end
-
-      dest_info[ :last_traff_at ] = Time.new
-    end
-
-    def add_write( dest )
-      unless @writes.include?( dest )
-        @writes << dest
+        # puts "debug send C: 2 tund port -> src_addr dest_addr -> n: tund_port #{ tund_port }"
+        msg = [ [ 2 ].pack( 'C' ), src_addr, dest_addr, [ tund_port ].pack( 'n' ) ].join
+        @udpd.sendmsg( msg, 0, udp_addr )
       end
     end
 
-    def add_closing( dest )
-      unless @closings.include?( dest )
-        @closings << dest
-      end
+    def read_tund( tund )
+      data, addrinfo, rflags, *controls = tund.recvmsg
+      from_addr = addrinfo.to_sockaddr
+      tund_info = @tund_infos[ tund ]
+      tund_info[ :last_traff_at ] = Time.new
 
-      add_write( dest )
-    end
+      unless tund_info[ :tun_addr ]
+        if addrinfo.ip_address != Addrinfo.new( tund_info[ :udp_addr ] ).ip_address
+          return
+        end
 
-    def close_dest( dest )
-      dest.close
-      @reads.delete( dest )
-      @writes.delete( dest )
-      @closings.delete( dest )
-      @roles.delete( dest )
-      dest_info = @dest_infos.delete( dest )
-      @dests.delete( dest_info[ :us_addr ] )
-    end
+        tund_info[ :tun_addr ] = from_addr
 
-    def sendmsg_to_udp( data, udp_addr )
-      begin
-        @udpd.sendmsg( data, 0, udp_addr )
-      rescue Errno::EMSGSIZE => e
-        puts "#{ e.class } #{ Time.new }"
-        [ data[ 0, 32 ], data[ 32..-1 ] ].each do | part |
-          @udpd.sendmsg( part, 0, udp_addr )
+        if data.unpack( 'C' ).first == 4 && tund_info[ :wbuffs ].any?
+          # puts "debug got C: 4 hello i'm new tun"
+          add_write( tund )
+          return
         end
       end
+
+      if from_addr == tund_info[ :tun_addr ]
+        tund.sendmsg( data, 0, tund_info[ :dest_addr ] )
+      elsif from_addr == tund_info[ :dest_addr ]
+        add_write( tund, data )
+      else
+        udp_addr = tund_info[ :udp_addr ]
+        src_addr = tund_info[ :src_addr ]
+        new_dest_addr = from_addr
+        usd_addr = [ udp_addr, src_addr, new_dest_addr ].join
+        new_tund = @tunds[ usd_addr ]
+
+        if new_tund
+          puts "conflict dest addr? #{ addrinfo.inspect } vs #{ Addrinfo.new( udp_addr ).inspect } #{ Addrinfo.new( src_addr ).inspect } #{ Addrinfo.new( tund_info[ :dest_addr ] ).inspect }"
+          return
+        end
+
+        new_tund = new_a_tund( udp_addr, src_addr, new_dest_addr )
+        new_tund_port = new_tund.local_address.ip_unpack.last
+
+        # puts "debug send C: 3 req a new tun -> src_addr new_dest_addr -> new_tund_port #{ addrinfo.inspect } #{ new_tund_port }"
+        msg = [ [ 3 ].pack( 'C' ), src_addr, new_dest_addr, [ new_tund_port ].pack( 'n' ) ].join
+        @udpd.sendmsg( msg, 0, udp_addr )
+
+        add_write( new_tund, data )
+      end
+    end
+
+    def write_udpd( udpd )
+      if @udpd_wbuffs.empty?
+        @writes.delete( udpd )
+        return
+      end
+
+      udp_addr, data = @udpd_wbuffs.shift
+      @udpd.sendmsg( data, 0, udp_addr )
+    end
+
+    def write_tund( tund )
+      if @closings.include?( tund )
+        close_tund( tund )
+        return
+      end
+
+      tund_info = @tund_infos[ tund ]
+
+      if tund_info[ :wbuffs ].empty?
+        @writes.delete( tund )
+        return
+      end
+
+      data = tund_info[ :wbuffs ].shift
+      tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
+    end
+
+    def add_write( tund, data = nil )
+      tund_info = @tund_infos[ tund ]
+
+      if data
+        tund_info[ :wbuffs ] << data
+      end
+
+      if tund_info[ :tun_addr ] && !@writes.include?( tund )
+        @writes << tund
+      end
+    end
+
+    def add_closing( tund )
+      unless @closings.include?( tund )
+        @closings << tund
+      end
+
+      add_write( tund )
+    end
+
+    def close_tund( tund )
+      tund.close
+      @reads.delete( tund )
+      @writes.delete( tund )
+      @closings.delete( tund )
+      @roles.delete( tund )
+      tund_info = @tund_infos.delete( tund )
+      @tunds.delete( tund_info[ :usd_addr ] )
+    end
+
+    def new_a_tund( udp_addr, src_addr, dest_addr )
+      tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+
+      usd_addr = [ udp_addr, src_addr, dest_addr ].join
+      @tunds[ usd_addr ] = tund
+      @tund_infos[ tund ] = {
+        usd_addr: usd_addr,
+        udp_addr: udp_addr,
+        src_addr: src_addr,
+        dest_addr: dest_addr,
+        wbuffs: [],
+        tun_addr: nil,
+        last_traff_at: Time.new
+      }
+
+      @roles[ tund ] = :tund
+      @reads << tund
+
+      tund
     end
 
     def loop_expire
@@ -208,9 +244,9 @@ module Girl
           @mutex.synchronize do
             now = Time.new
 
-            @dest_infos.values.each do | dest_info |
-              if now - dest_info[ :last_traff_at ] > 1800
-                @ctlw.write( dest_info[ :us_addr ] )
+            @tund_infos.values.each do | tund_info |
+              if now - tund_info[ :last_traff_at ] > 1800
+                @ctlw.write( tund_info[ :usd_addr ] )
               end
             end
           end
