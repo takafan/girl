@@ -5,7 +5,7 @@ require 'socket'
 # Girl::Udp - 转发udp。近端。
 #
 # usage
-# =====
+# ======
 #
 # Girl::Udpd.new( 3030 ).looping # 远端
 #
@@ -13,10 +13,13 @@ require 'socket'
 #
 # iptables -t nat -A PREROUTING -p udp -d game.server.ip -j REDIRECT --to-ports 1313
 #
-# C: 1 req a tund -> src_addr dest_addr
-# C: 2 tund port -> src_addr dest_addr -> n: tund_port
-# C: 3 req a new tun -> src_addr new_dest_addr -> n: tund_port
-# C: 4 hello i'm new tun
+# control message
+# ================
+#
+# C: 1 (req a tund) -> src_addr dest_addr
+# C: 2 (tund port) -> src_addr dest_addr -> n: tund_port
+# C: 3 (req a new tun) -> src_addr new_dest_addr -> n: tund_port
+# C: 4 (hello i'm new tun)
 #
 module Girl
   class Udp
@@ -48,13 +51,14 @@ module Girl
         redir => :redir,
         udp => :udp
       }
-      @tuns = {}         # sd_addr => tun
-      @tun_infos = {}    # tun => {}
-                         #   sd_addr: [ src_addr, dest_addr ].join
-                         #   src_addr: sockaddr
-                         #   dest_addr: sockaddr
-                         #   tund_addr: sockaddr
-                         #   last_traff_at: now
+      @tuns = {}      # sd_addr => tun
+      @tun_infos = {} # tun => {}
+                      #   sd_addr: [ src_addr, dest_addr ].join
+                      #   src_addr: sockaddr
+                      #   dest_addr: sockaddr
+                      #   wbuffs: []
+                      #   tund_addr: sockaddr
+                      #   last_traff_at: now
     end
 
     def looping
@@ -101,18 +105,25 @@ module Girl
 
     def read_redir( redir )
       data, addrinfo, rflags, *controls = redir.recvmsg
+      src_addr = addrinfo.to_sockaddr
+
       # puts "debug redir recv from #{ addrinfo.inspect }"
       bin = IO.binread( '/proc/net/nf_conntrack' )
       rows = bin.split( "\n" ).reverse.map { | line | line.split( ' ' ) }
       row = rows.find { | _row | _row[ 2 ] == 'udp' && _row[ 5 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 7 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port && _row[ 9 ] == '[UNREPLIED]' }
 
       unless row
-        puts "miss #{ addrinfo.inspect } #{ Time.new }"
-        IO.binwrite( '/tmp/nf_conntrack', bin )
-        return
+        row = rows.find { | _row | _row[ 2 ] == 'udp' && _row[ 5 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 9 ] == '[UNREPLIED]' && _row[ 13 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port }
+
+        unless row
+          puts "miss? #{ addrinfo.inspect } #{ Time.new }"
+          IO.binwrite( '/tmp/nf_conntrack', bin )
+          return
+        end
+
+        src_addr = Socket.sockaddr_in( row[ 7 ].split( '=' )[ 1 ].to_i, row[ 5 ].split( '=' )[ 1 ] )
       end
 
-      src_addr = addrinfo.to_sockaddr
       dest_addr = Socket.sockaddr_in( row[ 8 ].split( '=' )[ 1 ].to_i, row[ 6 ].split( '=' )[ 1 ] )
       sd_addr = [ src_addr, dest_addr ].join
       tun = @tuns[ sd_addr ]
@@ -120,7 +131,7 @@ module Girl
       unless tun
         tun = new_a_tun( src_addr, dest_addr )
 
-        # puts "debug send C: 1 req a tund -> src_addr dest_addr #{ addrinfo.inspect } #{ Addrinfo.new( dest_addr ).inspect }"
+        # puts "debug send C: 1 (req a tund) -> src_addr dest_addr #{ addrinfo.inspect } #{ Addrinfo.new( dest_addr ).inspect }"
         msg = [ [ 1 ].pack( 'C' ), sd_addr ].join
         @udp.sendmsg( msg, 0, @udpd_addr )
       end
@@ -136,7 +147,7 @@ module Girl
 
       case ctl_num
       when 2
-        # puts "debug got 2 tund port -> src_addr dest_addr -> n: tund_port"
+        # puts "debug got 2 (tund port) -> src_addr dest_addr -> n: tund_port"
         sd_addr = data[ 1, 32 ]
         tun = @tuns[ sd_addr ]
         return unless tun
@@ -149,7 +160,7 @@ module Girl
           add_write( tun )
         end
       when 3
-        # puts "debug got 3 req a new tun -> src_addr new_dest_addr -> n: tund_port"
+        # puts "debug got 3 (req a new tun) -> src_addr new_dest_addr -> n: tund_port"
         sd_addr = data[ 1, 32 ]
         tun = @tuns[ sd_addr ]
         return if tun
@@ -162,7 +173,7 @@ module Girl
         tun_info = @tun_infos[ tun ]
         tun_info[ :tund_addr ] = tund_addr
 
-        # puts "debug send C: 4 hello i'm new tun"
+        # puts "debug send C: 4 (hello i'm new tun)"
         msg = [ 4 ].pack( 'C' )
         add_write( tun, msg )
       end

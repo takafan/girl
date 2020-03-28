@@ -30,8 +30,8 @@ module Girl
                         #   usd_addr: [ udp_addr, src_addr, dest_addr ].join
                         #   udp_addr: udp_addr
                         #   src_addr: src_addr
-                        #   tun_addr: sockaddr
                         #   wbuffs: []
+                        #   tun_addr: sockaddr
                         #   last_traff_at: now
     end
 
@@ -86,7 +86,7 @@ module Girl
 
       case ctl_num
       when 1
-        # puts "debug got 1 req a tund -> src_addr dest_addr"
+        # puts "debug got 1 (req a tund) -> src_addr dest_addr"
         udp_addr = addrinfo.to_sockaddr
         src_addr = data[ 1, 16 ]
         dest_addr = data[ 17, 16 ]
@@ -103,7 +103,7 @@ module Girl
 
         tund_port = tund.local_address.ip_unpack.last
 
-        # puts "debug send C: 2 tund port -> src_addr dest_addr -> n: tund_port #{ tund_port }"
+        # puts "debug send C: 2 (tund port) -> src_addr dest_addr -> n: tund_port #{ tund_port }"
         msg = [ [ 2 ].pack( 'C' ), src_addr, dest_addr, [ tund_port ].pack( 'n' ) ].join
         @udpd.sendmsg( msg, 0, udp_addr )
       end
@@ -123,7 +123,7 @@ module Girl
         tund_info[ :tun_addr ] = from_addr
 
         if data.unpack( 'C' ).first == 4 && tund_info[ :wbuffs ].any?
-          # puts "debug got C: 4 hello i'm new tun"
+          # puts "debug got C: 4 (hello i'm new tun)"
           add_write( tund )
           return
         end
@@ -148,7 +148,7 @@ module Girl
         new_tund = new_a_tund( udp_addr, src_addr, new_dest_addr )
         new_tund_port = new_tund.local_address.ip_unpack.last
 
-        # puts "debug send C: 3 req a new tun -> src_addr new_dest_addr -> new_tund_port #{ addrinfo.inspect } #{ new_tund_port }"
+        # puts "debug send C: 3 (req a new tun) -> src_addr new_dest_addr -> new_tund_port #{ addrinfo.inspect } #{ new_tund_port }"
         msg = [ [ 3 ].pack( 'C' ), src_addr, new_dest_addr, [ new_tund_port ].pack( 'n' ) ].join
         @udpd.sendmsg( msg, 0, udp_addr )
 
