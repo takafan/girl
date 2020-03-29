@@ -22,17 +22,20 @@ module Girl
       @writes = []
       @closings = []
       @roles = {
-        ctlr => :ctlr, # :ctlr / :udpd / :tund
+        ctlr => :ctlr,        # :ctlr / :udpd / :tund
         udpd => :udpd
       }
-      @tunds = {}       # usd_addr => tund
-      @tund_infos = {}  # tund => {}
-                        #   usd_addr: [ udp_addr, src_addr, dest_addr ].join
-                        #   udp_addr: udp_addr
-                        #   src_addr: src_addr
-                        #   wbuffs: []
-                        #   tun_addr: sockaddr
-                        #   last_traff_at: now
+      @tunds = {}             # tund_port => tund
+      @tund_infos = {}        # tund => {}
+                              #   port: port
+                              #   tun_addr: sockaddr
+                              #   orgin_addr: sockaddr
+                              #   dest_addr: sockaddr
+                              #   orig_tund: tund1
+                              #   wbuffs: []
+                              #   new_dest_rbuffs: { new_dest_addr => [] }
+                              #   last_traff_at: now
+      @od_addr_rbuffs = {}
     end
 
     def looping
@@ -54,12 +57,7 @@ module Girl
           end
 
           ws.each do | sock |
-            case @roles[ sock ]
-            when :udpd
-              write_udpd( sock )
-            when :tund
-              write_tund( sock )
-            end
+            write_tund( sock )
           end
         end
       end
@@ -72,8 +70,8 @@ module Girl
     private
 
     def read_ctlr( ctlr )
-      usd_addr = ctlr.read( 48 )
-      tund = @tunds[ usd_addr ]
+      tund_port = ctlr.read( 2 ).unpack( 'n' ).first
+      tund = @tunds[ tund_port ]
 
       if tund
         add_closing( tund )
@@ -81,32 +79,27 @@ module Girl
     end
 
     def read_udpd( udpd )
+      # src_addr(16) dest_addr(16)
       data, addrinfo, rflags, *controls = udpd.recvmsg
-      ctl_num = data[ 0 ].unpack( 'C' ).first
+      tun_addr = addrinfo.to_sockaddr
+      orig_addr = data[ 0, 16 ]
+      dest_addr = data[ 16, 16 ]
 
-      case ctl_num
-      when 1
-        # puts "debug got 1 (req a tund) -> src_addr dest_addr"
-        udp_addr = addrinfo.to_sockaddr
-        src_addr = data[ 1, 16 ]
-        dest_addr = data[ 17, 16 ]
+      return unless Addrinfo.new( orig_addr ).ipv4?
+      return unless Addrinfo.new( dest_addr ).ipv4?
 
-        return unless Addrinfo.new( src_addr ).ipv4?
-        return unless Addrinfo.new( dest_addr ).ipv4?
+      tund = @tunds[ [ tun_addr, orig_addr, dest_addr ].join ]
 
-        usd_addr = [ udp_addr, src_addr, dest_addr ].join
-        tund = @tunds[ usd_addr ]
-
-        unless tund
-          tund = new_a_tund( udp_addr, src_addr, dest_addr )
-        end
-
-        tund_port = tund.local_address.ip_unpack.last
-
-        # puts "debug send C: 2 (tund port) -> src_addr dest_addr -> n: tund_port #{ tund_port }"
-        msg = [ [ 2 ].pack( 'C' ), src_addr, dest_addr, [ tund_port ].pack( 'n' ) ].join
-        @udpd.sendmsg( msg, 0, udp_addr )
+      unless tund
+        tund = new_a_tund( tun_addr, orig_addr, dest_addr )
       end
+
+      tund_info = @tund_infos[ tund ]
+      tund_port = tund_info[ :port ]
+
+      # puts "debug send 1 #{ tund_port }"
+      msg = [ 1, tund_port ].pack( 'Cn' )
+      @udpd.sendmsg( msg, 0, tun_addr )
     end
 
     def read_tund( tund )
@@ -115,55 +108,41 @@ module Girl
       tund_info = @tund_infos[ tund ]
       tund_info[ :last_traff_at ] = Time.new
 
-      unless tund_info[ :tun_addr ]
-        if addrinfo.ip_address != Addrinfo.new( tund_info[ :udp_addr ] ).ip_address
-          return
-        end
-
+      if tund_info[ :tun_addr ].nil?
         tund_info[ :tun_addr ] = from_addr
 
-        if data.unpack( 'C' ).first == 4 && tund_info[ :wbuffs ].any?
-          # puts "debug got C: 4 (hello i'm new tun)"
-          add_write( tund )
-          return
-        end
-      end
+        # tund接到tun，找:orig_tund的:new_dest_rbuffs里来自dest_addr的流量，放进tund的:wbuffs
+        orig_tund = tund_info[ :orig_tund ]
 
-      if from_addr == tund_info[ :tun_addr ]
-        tund.sendmsg( data, 0, tund_info[ :dest_addr ] )
+        if orig_tund
+          orig_tund_info = @tund_infos[ orig_tund ]
+          dest_rbuffs = orig_tund_info[ :new_dest_rbuffs ].delete( tund_info[ :dest_addr ] )
+
+          if dest_rbuffs
+            tund_info[ :wbuffs ] = dest_rbuffs
+            add_write( tund )
+          end
+        end
+
+        send_dest( tund, data )
+      elsif from_addr == tund_info[ :tun_addr ]
+        send_dest( tund, data )
       elsif from_addr == tund_info[ :dest_addr ]
         add_write( tund, data )
       else
-        udp_addr = tund_info[ :udp_addr ]
-        src_addr = tund_info[ :src_addr ]
+        # 新的dest，把流量存在:new_dest_rbuffs里，并对应创建一对tun-tund
         new_dest_addr = from_addr
-        usd_addr = [ udp_addr, src_addr, new_dest_addr ].join
-        new_tund = @tunds[ usd_addr ]
 
-        if new_tund
-          puts "conflict dest addr? #{ addrinfo.inspect } vs #{ Addrinfo.new( udp_addr ).inspect } #{ Addrinfo.new( src_addr ).inspect } #{ Addrinfo.new( tund_info[ :dest_addr ] ).inspect }"
-          return
+        unless tund_info[ :new_dest_rbuffs ].include?( new_dest_addr )
+          tund_info[ :new_dest_rbuffs ][ new_dest_addr ] = []
         end
 
-        new_tund = new_a_tund( udp_addr, src_addr, new_dest_addr )
-        new_tund_port = new_tund.local_address.ip_unpack.last
+        tund_info[ :new_dest_rbuffs ][ new_dest_addr ] << data
 
-        # puts "debug send C: 3 (req a new tun) -> src_addr new_dest_addr -> new_tund_port #{ addrinfo.inspect } #{ new_tund_port }"
-        msg = [ [ 3 ].pack( 'C' ), src_addr, new_dest_addr, [ new_tund_port ].pack( 'n' ) ].join
-        @udpd.sendmsg( msg, 0, udp_addr )
-
-        add_write( new_tund, data )
+        # puts "debug send 2 (a new dest coming) -> new_dest_addr(16) #{ addrinfo.inspect }"
+        msg = [ [ 2 ].pack( 'C' ), new_dest_addr ].join
+        @udpd.sendmsg( msg, 0, tund_info[ :tun_addr ] )
       end
-    end
-
-    def write_udpd( udpd )
-      if @udpd_wbuffs.empty?
-        @writes.delete( udpd )
-        return
-      end
-
-      udp_addr, data = @udpd_wbuffs.shift
-      @udpd.sendmsg( data, 0, udp_addr )
     end
 
     def write_tund( tund )
@@ -210,23 +189,24 @@ module Girl
       @closings.delete( tund )
       @roles.delete( tund )
       tund_info = @tund_infos.delete( tund )
-      @tunds.delete( tund_info[ :usd_addr ] )
+      @tunds.delete( tund_info[ :port ] )
     end
 
-    def new_a_tund( udp_addr, src_addr, dest_addr )
+    def new_a_tund( tun_addr, orig_addr, dest_addr, orig_tund = nil )
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+      tund_port = tund.local_address.ip_unpack.last
 
-      usd_addr = [ udp_addr, src_addr, dest_addr ].join
-      @tunds[ usd_addr ] = tund
+      @tunds[ tund_port ] = tund
       @tund_infos[ tund ] = {
-        usd_addr: usd_addr,
-        udp_addr: udp_addr,
-        src_addr: src_addr,
+        port: tund_port,
+        tun_addr: tun_addr,
+        orig_addr: orig_addr,
         dest_addr: dest_addr,
+        orig_tund: orig_tund,
         wbuffs: [],
-        tun_addr: nil,
+        new_dest_rbuffs: {},
         last_traff_at: Time.new
       }
 
@@ -234,6 +214,12 @@ module Girl
       @reads << tund
 
       tund
+    end
+
+    def send_dest( tund, data )
+      tund_info = @tund_infos[ tund ]
+      orig_tund = tund_info[ :orig_tund ] || tund
+      orig_tund.sendmsg( data, 0, tund_info[ :dest_addr ] )
     end
 
     def loop_expire
@@ -246,7 +232,7 @@ module Girl
 
             @tund_infos.values.each do | tund_info |
               if now - tund_info[ :last_traff_at ] > 1800
-                @ctlw.write( tund_info[ :usd_addr ] )
+                @ctlw.write( [ tund_info[ :port ] ].pack( 'n' ) )
               end
             end
           end
