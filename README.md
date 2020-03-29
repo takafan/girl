@@ -21,7 +21,7 @@
 
 妹子加速tcp传输，不是单纯的换线路（新线路比原线路快），妹子带来一套现代的传输策略，她比tcp快。
 
-举个例子，你有一台服务器，从近的地方下载服务器上的文件，有几兆每秒，但从远的地方，就只有几十k，几k。而妹子依然几兆。
+举个例子，你有一台服务器，从近的地方下载服务器上的文件，有几兆每秒，但从远的地方，只有几十k，几k。而妹子依然几兆。
 
 妹子还支持udp转发，这可以加速任何用p2p实现联机的游戏，特别是海外玩家多的那种，比如街霸、吃鸡、人类一败涂地。
 
@@ -83,7 +83,7 @@ Girl::Resolv.new( 1717, [ '114.114.114.114' ], 'your.server.ip', 7070, [ 'google
 dig google.com @127.0.0.1 -p1717
 ```
 
-满足：特定域名+53端口，dns查询包将被丢弃，到不了远端。办法是加密，或者换个端口。
+在国内，满足：特定域名+53端口，dns查询包会被邪恶掉，到不了远端。办法是混淆域名，或者换个端口。
 
 diy加解密，覆盖下面两个方法即可：
 
@@ -132,7 +132,9 @@ iptables -t nat -A OUTPUT -p tcp -d 216.58.217.196 -j REDIRECT --to-ports 1919
 curl https://www.google.com/
 ```
 
-和上面一样可以覆盖加解密方法。不同的是，这里加解密只作用于第一段流量。为什么是第一段？ssh的第一段流量是明文版本号，https的第一段流量含明文域名。后面本来就是乱码。
+同样在国内，含特定域名的tcp流量会被邪恶掉。办法也是混淆域名。和上面一样，覆盖加解密方法。
+
+https的第一段流量含明文域名，之后本身就是乱码。ssh的第一段流量是明文版本号，之后本身就是乱码。因此妹子的加解密方法只作用于第一段流量。
 
 相比别的对抗邪恶的办法，妹子没有特征，不加密（或者你自定义）。
 
@@ -163,6 +165,14 @@ Girl::Udp.new( 'your.server.ip', 3030, 1313 ).looping
 ```bash
 iptables -t nat -A PREROUTING -p udp -d game.server.ip -j REDIRECT --to-ports 1313
 ```
+
+想加速任何海外游戏/网站，同时直连任何国内游戏/网站，根据：
+
+https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+
+http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
+
+把保留ip段和注册在亚太的CN的ip段-j RETURN，其余-j REDIRECT到妹子端口。
 
 ## 4. 树莓派
 
