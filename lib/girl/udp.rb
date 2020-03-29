@@ -13,6 +13,15 @@ require 'socket'
 #
 # iptables -t nat -A PREROUTING -p udp -d game.server.ip -j REDIRECT --to-ports 1313
 #
+# control message
+# ================
+#
+# C: 1 (tun > udpd: req a tund) -> src_addr dest_addr
+# C: 2 (udpd > tun: tund port) -> n: tund_port
+# C: 3 (udpd > tun: req a chain tun) -> new_dest_addr orig_tun_addr
+# C: 4 (tun > udpd: req a chain tund) -> src_addr dest_addr orig_tun_addr
+# C: 5 (tun > tund: hello)
+#
 module Girl
   class Udp
 
@@ -34,16 +43,16 @@ module Girl
       @closings = []
       @roles = {
         ctlr => :ctlr, # :ctlr / :redir / :tun
-        redir => :redir,
-        udp => :udp
+        redir => :redir
       }
-      @orig_tuns = {} # orig_addr => tun
-      @tuns = {}      # [ orig_addr, dest_addr ].join => tun
+      @orig_tuns = {} # src_addr => tun
+      @tuns = {}      # [ src_addr dest_addr ] => tun
       @tun_infos = {} # tun => {}
-                      #   orig_addr: sockaddr
+                      #   src_addr: sockaddr
                       #   dest_addr: sockaddr
                       #   tund_addr: sockaddr
                       #   orig_tun: tun1 一个源地址发往第二个目的地，衍生出tun2-tund2中转流量，但由tund1发往第二个目的地，由tun1发往源地址
+                      #   ctlmsgs: []
                       #   wbuffs: []
                       #   last_traff_at: now
     end
@@ -80,8 +89,8 @@ module Girl
     private
 
     def read_ctlr( ctlr )
-      od_addr = ctlr.read( 32 )
-      tun = @tuns[ od_addr ]
+      sd_addr = ctlr.read( 32 )
+      tun = @tuns[ sd_addr ]
 
       if tun
         add_closing( tun )
@@ -90,7 +99,7 @@ module Girl
 
     def read_redir( redir )
       data, addrinfo, rflags, *controls = redir.recvmsg
-      orig_addr = addrinfo.to_sockaddr
+      src_addr = addrinfo.to_sockaddr
       orig_tun = nil
 
       # puts "debug redir recv from #{ addrinfo.inspect }"
@@ -102,15 +111,15 @@ module Girl
         row = rows.find { | _row | _row[ 2 ] == 'udp' && _row[ 5 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 9 ] == '[UNREPLIED]' && _row[ 13 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port }
 
         unless row
-          puts "miss conntrack? #{ addrinfo.inspect } #{ Time.new }"
-          IO.binwrite( '/tmp/nf_conntrack', bin )
+          puts "miss conntrack #{ addrinfo.inspect } #{ Time.new }"
+          # IO.binwrite( '/tmp/nf_conntrack', bin )
           return
         end
 
         src_ip = row[ 5 ].split( '=' )[ 1 ]
         src_port = row[ 7 ].split( '=' )[ 1 ].to_i
-        orig_addr = Socket.sockaddr_in( src_ip, src_port )
-        orig_tun = @orig_tuns[ orig_addr ]
+        src_addr = Socket.sockaddr_in( src_port, src_ip )
+        orig_tun = @orig_tuns[ src_addr ]
 
         unless orig_tun
           puts "a chain src #{ addrinfo.inspect } coming, miss orig? #{ Time.new }"
@@ -121,14 +130,15 @@ module Girl
       dest_ip = row[ 6 ].split( '=' )[ 1 ]
       dest_port = row[ 8 ].split( '=' )[ 1 ].to_i
       dest_addr = Socket.sockaddr_in( dest_port, dest_ip )
-      od_addr = [ orig_addr, dest_addr ].join
-      tun = @tuns[ od_addr ]
+      tun = @tuns[ [ src_addr, dest_addr ].join ]
 
       unless tun
-        tun = new_a_tun( orig_addr, dest_addr, orig_tun )
+        tun = new_a_tun( src_addr, dest_addr, orig_tun )
+        tun_info = @tun_infos[ tun ]
 
-        # puts "debug tun > udpd: #{ Addrinfo.new( orig_addr ).inspect } #{ Addrinfo.new( dest_addr ).inspect }"
-        tun.sendmsg( od_addr, 0, @udpd_addr )
+        # puts "debug send C: 1 (tun > udpd: req a tund) -> src_addr dest_addr #{ Addrinfo.new( src_addr ).inspect } #{ Addrinfo.new( dest_addr ).inspect }"
+        ctlmsg = [ [ 1 ].pack( 'C' ), src_addr, dest_addr ].join
+        add_ctlmsg( tun, ctlmsg )
       end
 
       tun_info = @tun_infos[ tun ]
@@ -146,36 +156,42 @@ module Girl
         ctl_num = data[ 0 ].unpack( 'C' ).first
 
         case ctl_num
-        when 1 # (tund ready) -> n: tund_port
+        when 2 # C: 2 (udpd > tun: tund port) -> n: tund_port
+          return if tun_info[ :tund_addr ]
+
           tund_port = data[ 1, 2 ].unpack( 'n' ).first
           tund_addr = Socket.sockaddr_in( tund_port, @udpd_host )
+          tun_info[ :tund_addr ] = tund_addr
 
-          unless tun_info[ :tund_addr ]
-            tun_info[ :tund_addr ] = tund_addr
-            # now tun can flush wbuffs to tund
-            add_write( tun )
+          # now tun can flush wbuffs to tund, if empty, just send a (5: hello) to cross nat, tund should ignore hello
+          if tun_info[ :wbuffs ].empty?
+            tun_info[ :wbuffs ] << [ 5 ].pack( 'C' )
           end
-        when 2 # (a new dest coming) -> new_dest_addr(16)
-          new_dest_addr = data[ 1, 16 ]
-          orig_addr = tun_info[ :orig_addr ]
-          new_tun = @tuns[ [ orig_addr, new_dest_addr ].join ]
 
-          unless new_tun
-            unless  @orig_tuns.include?( orig_addr )
+          add_write( tun )
+        when 3 # C: 3 (udpd > tun: req a chain tun) -> new_dest_addr orig_tun_addr
+          new_dest_addr = data[ 1, 16 ]
+          orig_tun_addr = data[ 17, 16 ]
+          src_addr = tun_info[ :src_addr ]
+          chain_tun = @tuns[ [ src_addr, new_dest_addr ].join ]
+
+          unless chain_tun
+            unless  @orig_tuns.include?( src_addr )
               puts "a new dest #{ Addrinfo.new( new_dest_addr ).inspect } coming, but tun is not orig? #{ Time.new }"
               return
             end
 
-            new_tun = new_a_tun( orig_addr, new_dest_addr, tun )
+            chain_tun = new_a_tun( src_addr, new_dest_addr, tun )
           end
 
-          new_tun.sendmsg( [ orig_addr, new_dest_addr ], 0, @udpd_addr )
+          # puts "debug send C: 4 (tun > udpd: req a chain tund) -> src_addr dest_addr orig_tun_addr #{ Addrinfo.new( src_addr ).inspect } #{ Addrinfo.new( new_dest_addr ).inspect } #{ Addrinfo.new( orig_tun_addr ).inspect }"
+          ctlmsg = [ [ 4 ].pack( 'C' ), src_addr, new_dest_addr, orig_tun_addr ].join
+          add_ctlmsg( chain_tun, ctlmsg )
         end
       elsif from_addr == tun_info[ :tund_addr ]
-        # puts "debug tun > #{ Addrinfo.new( tun_info[ :orig_addr ] ).inspect }"
         orig_tun = tun_info[ :orig_tun ] || tun
-        orig_tun.sendmsg( data, 0, tun_info[ :orig_addr ] )
-      elsif from_addr == tun_info[ :orig_addr ]
+        orig_tun.sendmsg( data, 0, tun_info[ :src_addr ] )
+      elsif from_addr == tun_info[ :src_addr ]
         add_write( tun, data )
       end
     end
@@ -187,15 +203,29 @@ module Girl
       end
 
       tun_info = @tun_infos[ tun ]
+      ctlmsg = tun_info[ :ctlmsgs ].shift
 
-      if tun_info[ :wbuffs ].empty?
+      if ctlmsg
+        tun.sendmsg( ctlmsg, 0, @udpd_addr )
+        return
+      end
+
+      if tun_info[ :tund_addr ].nil? || tun_info[ :wbuffs ].empty?
         @writes.delete( tun )
         return
       end
 
       data = tun_info[ :wbuffs ].shift
-      # puts "debug tun > #{ Addrinfo.new( tun_info[ :tund_addr ] ).inspect }"
       tun.sendmsg( data, 0, tun_info[ :tund_addr ] )
+    end
+
+    def add_ctlmsg( tun, ctlmsg )
+      tun_info = @tun_infos[ tun ]
+      tun_info[ :ctlmsgs ] << ctlmsg
+
+      unless @writes.include?( tun )
+        @writes << tun
+      end
     end
 
     def add_write( tun, data = nil )
@@ -205,7 +235,7 @@ module Girl
         tun_info[ :wbuffs ] << data
       end
 
-      if tun_info[ :tund_addr ] && !@writes.include?( tun )
+      unless @writes.include?( tun )
         @writes << tun
       end
     end
@@ -225,28 +255,29 @@ module Girl
       @closings.delete( tun )
       @roles.delete( tun )
       tun_info = @tun_infos.delete( tun )
-      @tuns.delete( [ tun_info[ :orig_addr ], tun_info[ :dest_addr ] ].join )
+      @tuns.delete( [ tun_info[ :src_addr ], tun_info[ :dest_addr ] ].join )
 
-      unless tun_info[ :ogin_tun ]
-        @orig_tuns.delete( tun_info[ :orig_addr ] )
+      unless tun_info[ :orig_tun ]
+        @orig_tuns.delete( tun_info[ :src_addr ] )
       end
     end
 
-    def new_a_tun( orig_addr, dest_addr, orig_tun )
+    def new_a_tun( src_addr, dest_addr, orig_tun )
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tun.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
       unless orig_tun
-        @orig_tuns[ orig_addr ] = tun
+        @orig_tuns[ src_addr ] = tun
       end
 
-      @tuns[ [ orig_addr, dest_addr ].join ] = tun
+      @tuns[ [ src_addr, dest_addr ].join ] = tun
       @tun_infos[ tun ] = {
-        orig_addr: orig_addr,
+        src_addr: src_addr,
         dest_addr: dest_addr,
-        tund_addr: tund_addr,
+        tund_addr: nil,
         orig_tun: orig_tun,
+        ctlmsgs: [],
         wbuffs: [],
         last_traff_at: Time.new
       }
@@ -267,7 +298,7 @@ module Girl
 
             @tun_infos.values.each do | tun_info |
               if now - tun_info[ :last_traff_at ] > 1800
-                @ctlw.write( [ tun_info[ :orig_addr ], tun_info[ :dest_addr ] ].join )
+                @ctlw.write( [ tun_info[ :src_addr ], tun_info[ :dest_addr ] ].join )
               end
             end
           end
