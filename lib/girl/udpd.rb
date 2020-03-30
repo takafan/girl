@@ -87,7 +87,6 @@ module Girl
     end
 
     def read_udpd( udpd )
-      # src_addr(16) -> dest_addr(16) -> orig_dest_addr(16)
       data, addrinfo, rflags, *controls = udpd.recvmsg
       ctl_num = data[ 0 ].unpack( 'C' ).first
       src_addr = data[ 1, 16 ]
@@ -138,8 +137,6 @@ module Girl
       if !tund_info[ :is_tunneled ]
         tund_info[ :tun_addr ] = from_addr
         tund_info[ :is_tunneled ] = true
-
-        # tund接到tun，找:orig_tund的:new_dest_rbuffs里来自dest_addr的流量，放进tund的:wbuffs
         orig_tund = tund_info[ :orig_tund ]
 
         if orig_tund
@@ -163,7 +160,6 @@ module Girl
       elsif from_addr == tund_info[ :dest_addr ]
         add_write( tund, data )
       else
-        # 新的dest，把流量存在:new_dest_rbuffs里，并创建一对tun-tund
         new_dest_addr = from_addr
 
         unless tund_info[ :new_dest_rbuffs ].include?( new_dest_addr )
