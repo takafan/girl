@@ -65,7 +65,6 @@ module Girl
             when :tund
               write_tund( sock )
             end
-
           end
         end
       end
@@ -87,6 +86,8 @@ module Girl
     end
 
     def read_udpd( udpd )
+      # C: 1 (tun > udpd: req a tund) -> src_addr -> dest_addr
+      # C: 4 (tun > udpd: req a chain tund) -> src_addr -> dest_addr -> orig_tun_addr
       data, addrinfo, rflags, *controls = udpd.recvmsg
       ctl_num = data[ 0 ].unpack( 'C' ).first
       src_addr = data[ 1, 16 ]
@@ -120,8 +121,8 @@ module Girl
       tund_info = @tund_infos[ tund ]
       tund_port = tund_info[ :port ]
 
-      # puts "debug send C: 2 (udpd > tun: tund port) -> n: tund_port #{ tund_port }"
-      @udpd_wbuffs << [ tun_addr, [ 2, tund_port ].pack( 'Cn' ) ]
+      # puts "debug send C: 2 (udpd > tun: tund port) -> n: tund_port -> tun_addr #{ tund_port } #{ addrinfo.inspect }"
+      @udpd_wbuffs << [ tun_addr, [ [ 2, tund_port ].pack( 'Cn' ), tun_addr ].join ]
 
       unless @writes.include?( udpd )
         @writes << udpd
@@ -144,12 +145,13 @@ module Girl
           dest_rbuffs = orig_tund_info[ :new_dest_rbuffs ].delete( tund_info[ :dest_addr ] )
 
           if dest_rbuffs
+            # puts "debug dest_rbuffs #{ dest_rbuffs.inspect }"
             tund_info[ :wbuffs ] = dest_rbuffs
             add_write( tund )
           end
 
           if data.size == 1 && data[ 0 ].unpack( 'C' ).first == 5
-            # puts "debug ignore C: 5 (hello)"
+            puts "ignore C: 5 (hello) #{ Time.new }"
             return
           end
         end
@@ -160,6 +162,7 @@ module Girl
       elsif from_addr == tund_info[ :dest_addr ]
         add_write( tund, data )
       else
+        # p2p input
         new_dest_addr = from_addr
 
         unless tund_info[ :new_dest_rbuffs ].include?( new_dest_addr )
