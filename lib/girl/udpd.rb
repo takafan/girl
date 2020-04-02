@@ -36,7 +36,8 @@ module Girl
                               #   dest_addr: sockaddr
                               #   root_tund: tund1
                               #   wbuffs: []
-                              #   last_dest_wmemo: nil
+                              #   is_dest_responsed: false
+                              #   dest_wmemos: []
                               #   new_dest_rbuffs: { new_dest_addr => [] }
                               #   last_traff_at: now
       @od_addr_rbuffs = {}
@@ -91,6 +92,7 @@ module Girl
       # C: 1 (tun > udpd: req a tund) -> orig_src_addr -> dest_addr
       # C: 4 (tun > udpd: req a chain tund) -> orig_src_addr -> dest_addr -> root_dest_addr
       data, addrinfo, rflags, *controls = udpd.recvmsg
+      # puts "debug udpd recv #{ data.inspect } from #{ addrinfo.inspect }"
       ctl_num = data[ 0 ].unpack( 'C' ).first
       orig_src_addr = data[ 1, 16 ]
       dest_addr = data[ 17, 16 ]
@@ -164,10 +166,15 @@ module Girl
         sender = root_tund || tund
         sender.sendmsg( data, 0, tund_info[ :dest_addr ] )
 
-        unless root_tund
-          tund_info[ :last_dest_wmemo ] = data
+        if root_tund.nil? && !tund_info[ :is_dest_responsed ]
+          if tund_info[ :dest_wmemos ].size >= 10
+            tund_info[ :dest_wmemos ].clear
+          end
+
+          tund_info[ :dest_wmemos ] << data
         end
       elsif from_addr == tund_info[ :dest_addr ]
+        tund_info[ :is_dest_responsed ] = true
         add_write( tund, data )
       else
         # p2p input
@@ -190,12 +197,16 @@ module Girl
         chain_tund_info = @tund_infos[ chain_tund ]
 
         unless chain_tund_info[ :root_tund ]
+          # p2p paired
           chain_tund_info[ :root_tund ] = tund
-          wmemo = chain_tund_info[ :last_dest_wmemo ]
 
-          if wmemo
-            # puts "debug send wmemo #{ wmemo.inspect } to #{ Addrinfo.new( from_addr ).inspect }"
-            tund.sendmsg( wmemo, 0, from_addr )
+          if chain_tund_info[ :dest_wmemos ].size > 0
+            chain_tund_info[ :dest_wmemos ].each do | wmemo |
+              # puts "debug send wmemo #{ wmemo.inspect } to #{ Addrinfo.new( from_addr ).inspect }"
+              tund.sendmsg( wmemo, 0, from_addr )
+            end
+
+            chain_tund_info[ :dest_wmemos ].clear
           end
         end
 
@@ -276,7 +287,8 @@ module Girl
         dest_addr: dest_addr,
         root_tund: root_tund,
         wbuffs: [],
-        last_dest_wmemo: nil,
+        is_dest_responsed: root_tund ? true : false,
+        dest_wmemos: [],
         new_dest_rbuffs: {},
         last_traff_at: Time.new
       }

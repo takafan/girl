@@ -148,7 +148,7 @@ module Girl
 
         unless row
           puts "miss conntrack #{ addrinfo.inspect } #{ Time.new }"
-          # IO.binwrite( '/tmp/nf_conntrack', bin )
+          IO.binwrite( '/tmp/nf_conntrack', bin )
           return
         end
       end
