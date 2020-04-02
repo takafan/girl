@@ -98,13 +98,18 @@ module Girl
       dest_addr = data[ 17, 16 ]
       tun_addr = addrinfo.to_sockaddr
       tun_ip_addr = Addrinfo.ip( addrinfo.ip_address ).to_sockaddr
-      root_tund = nil
 
       return unless [ 1, 4 ].include?( ctl_num )
       return unless Addrinfo.new( orig_src_addr ).ipv4?
       return unless Addrinfo.new( dest_addr ).ipv4?
 
-      if ctl_num == 4
+      tund = @tunds[ [ tun_ip_addr, orig_src_addr, dest_addr ].join ]
+
+      if ctl_num == 1
+        unless tund
+          tund = new_a_tund( tun_addr, tun_ip_addr, orig_src_addr, dest_addr )
+        end
+      elsif ctl_num == 4
         root_dest_addr = data[ 33, 16 ]
         return unless Addrinfo.new( root_dest_addr ).ipv4?
 
@@ -114,12 +119,13 @@ module Girl
           puts "miss root tund? #{ Addrinfo.new( tun_ip_addr ).inspect } #{ Addrinfo.new( orig_src_addr ).inspect } #{ Addrinfo.new( root_dest_addr ).inspect }"
           return
         end
-      end
 
-      tund = @tunds[ [ tun_ip_addr, orig_src_addr, dest_addr ].join ]
-
-      unless tund
-        tund = new_a_tund( tun_addr, tun_ip_addr, orig_src_addr, dest_addr, root_tund )
+        if tund
+          tund_info = @tund_infos[ tund ]
+          tund_info[ :root_tund ] = root_tund
+        else
+          tund = new_a_tund( tun_addr, tun_ip_addr, orig_src_addr, dest_addr, root_tund )
+        end
       end
 
       tund_info = @tund_infos[ tund ]

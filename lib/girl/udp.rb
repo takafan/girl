@@ -138,19 +138,15 @@ module Girl
 
       # puts "debug redir recv #{ data.inspect } from #{ addrinfo.inspect }"
       # 2 udp 5 src 7 sport 9 [UNREPLIED] 11 dst 13 dport
-      # 2 udp 5 src 7 sport 10 dst 12 dport 13 [ASSURED]
+      # 2 udp 5 src 7 sport 10 dst 12 dport
       bin = IO.binread( '/proc/net/nf_conntrack' )
       rows = bin.split( "\n" ).map { | line | line.split( ' ' ) }
-      row = rows.find { | _row | _row[ 2 ] == 'udp' && _row[ 9 ] == '[UNREPLIED]' && _row[ 11 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 13 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port }
+      row = rows.find { | _row | _row[ 2 ] == 'udp' && ( ( _row[ 9 ] == '[UNREPLIED]' && _row[ 11 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 13 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port ) || ( _row[ 10 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 12 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port ) ) }
 
       unless row
-        row = rows.find { | _row | _row[ 2 ] == 'udp' && _row[ 10 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 12 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port && _row[ 13 ] == '[ASSURED]' }
-
-        unless row
-          puts "miss conntrack #{ addrinfo.inspect } #{ Time.new }"
-          IO.binwrite( '/tmp/nf_conntrack', bin )
-          return
-        end
+        puts "miss conntrack #{ addrinfo.inspect } #{ Time.new }"
+        IO.binwrite( '/tmp/nf_conntrack', bin )
+        return
       end
 
       orig_src_ip = row[ 5 ].split( '=' )[ 1 ]
