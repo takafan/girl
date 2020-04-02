@@ -26,15 +26,17 @@ module Girl
         udpd => :udpd
       }
       @udpd_wbuffs = []       # [ tun_addr ctlmsg ] ...
-      @tunds = {}             # tun_addr => tund
+      @tunds = {}             # [ tun_ip_addr orig_src_addr dest_addr ] => tund
       @tund_infos = {}        # tund => {}
                               #   port: port
-                              #   tun_addr: sockaddr
                               #   is_tunneled: false
-                              #   src_addr: sockaddr
+                              #   tun_addr: sockaddr
+                              #   tun_ip_addr: sockaddr
+                              #   orig_src_addr: sockaddr
                               #   dest_addr: sockaddr
-                              #   orig_tund: tund1
+                              #   root_tund: tund1
                               #   wbuffs: []
+                              #   last_dest_wmemo: nil
                               #   new_dest_rbuffs: { new_dest_addr => [] }
                               #   last_traff_at: now
       @od_addr_rbuffs = {}
@@ -77,8 +79,8 @@ module Girl
     private
 
     def read_ctlr( ctlr )
-      tun_addr = ctlr.read( 16 )
-      tund = @tunds[ tun_addr ]
+      tod_addr = ctlr.read( 48 )
+      tund = @tunds[ tod_addr ]
 
       if tund
         add_closing( tund )
@@ -86,36 +88,36 @@ module Girl
     end
 
     def read_udpd( udpd )
-      # C: 1 (tun > udpd: req a tund) -> src_addr -> dest_addr
-      # C: 4 (tun > udpd: req a chain tund) -> src_addr -> dest_addr -> orig_tun_addr
+      # C: 1 (tun > udpd: req a tund) -> orig_src_addr -> dest_addr
+      # C: 4 (tun > udpd: req a chain tund) -> orig_src_addr -> dest_addr -> root_dest_addr
       data, addrinfo, rflags, *controls = udpd.recvmsg
       ctl_num = data[ 0 ].unpack( 'C' ).first
-      src_addr = data[ 1, 16 ]
+      orig_src_addr = data[ 1, 16 ]
       dest_addr = data[ 17, 16 ]
+      tun_addr = addrinfo.to_sockaddr
+      tun_ip_addr = Addrinfo.ip( addrinfo.ip_address ).to_sockaddr
+      root_tund = nil
 
       return unless [ 1, 4 ].include?( ctl_num )
-      return unless Addrinfo.new( src_addr ).ipv4?
+      return unless Addrinfo.new( orig_src_addr ).ipv4?
       return unless Addrinfo.new( dest_addr ).ipv4?
 
-      orig_tund = nil
-
       if ctl_num == 4
-        orig_tun_addr = data[ 33, 16 ]
-        return unless Addrinfo.new( orig_tun_addr ).ipv4?
+        root_dest_addr = data[ 33, 16 ]
+        return unless Addrinfo.new( root_dest_addr ).ipv4?
 
-        orig_tund = @tunds[ orig_tun_addr ]
+        root_tund = @tunds[ [ tun_ip_addr, orig_src_addr, root_dest_addr ].join ]
 
-        unless orig_tund
-          puts "miss orig tund? #{ Addrinfo.new( orig_tun_addr ).inspect }"
+        unless root_tund
+          puts "miss root tund? #{ Addrinfo.new( tun_ip_addr ).inspect } #{ Addrinfo.new( orig_src_addr ).inspect } #{ Addrinfo.new( root_dest_addr ).inspect }"
           return
         end
       end
 
-      tun_addr = addrinfo.to_sockaddr
-      tund = @tunds[ tun_addr ]
+      tund = @tunds[ [ tun_ip_addr, orig_src_addr, dest_addr ].join ]
 
       unless tund
-        tund = new_a_tund( tun_addr, src_addr, dest_addr, orig_tund )
+        tund = new_a_tund( tun_addr, tun_ip_addr, orig_src_addr, dest_addr, root_tund )
       end
 
       tund_info = @tund_infos[ tund ]
@@ -135,45 +137,69 @@ module Girl
       tund_info = @tund_infos[ tund ]
       tund_info[ :last_traff_at ] = Time.new
 
-      if !tund_info[ :is_tunneled ]
-        tund_info[ :tun_addr ] = from_addr
-        tund_info[ :is_tunneled ] = true
-        orig_tund = tund_info[ :orig_tund ]
+      if from_addr == tund_info[ :tun_addr ]
+        root_tund = tund_info[ :root_tund ]
 
-        if orig_tund
-          orig_tund_info = @tund_infos[ orig_tund ]
-          dest_rbuffs = orig_tund_info[ :new_dest_rbuffs ].delete( tund_info[ :dest_addr ] )
+        if !tund_info[ :is_tunneled ]
+          tund_info[ :is_tunneled ] = true
 
-          if dest_rbuffs
-            # puts "debug dest_rbuffs #{ dest_rbuffs.inspect }"
-            tund_info[ :wbuffs ] = dest_rbuffs
-            add_write( tund )
-          end
+          if root_tund
+            # p2p tunnel paired
+            root_tund_info = @tund_infos[ root_tund ]
+            dest_rbuffs = root_tund_info[ :new_dest_rbuffs ].delete( tund_info[ :dest_addr ] )
 
-          if data.size == 1 && data[ 0 ].unpack( 'C' ).first == 5
-            puts "ignore C: 5 (hello) #{ Time.new }"
-            return
+            if dest_rbuffs
+              # puts "debug #{ Addrinfo.new( tund_info[ :dest_addr ] ).inspect } dest_rbuffs #{ dest_rbuffs.inspect }"
+              tund_info[ :wbuffs ] = dest_rbuffs
+              add_write( tund )
+            end
+
+            if data.size == 1 && data[ 0 ].unpack( 'C' ).first == 5
+              puts "ignore C: 5 (hello) #{ Time.new }"
+              return
+            end
           end
         end
 
-        send_dest( tund, data )
-      elsif from_addr == tund_info[ :tun_addr ]
-        send_dest( tund, data )
+        sender = root_tund || tund
+        sender.sendmsg( data, 0, tund_info[ :dest_addr ] )
+
+        unless root_tund
+          tund_info[ :last_dest_wmemo ] = data
+        end
       elsif from_addr == tund_info[ :dest_addr ]
         add_write( tund, data )
       else
         # p2p input
-        new_dest_addr = from_addr
+        # puts "debug tund recv #{ data.inspect } from #{ Addrinfo.new( from_addr ).inspect }"
+        chain_tund = @tunds[ [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ], from_addr ].join ]
 
-        unless tund_info[ :new_dest_rbuffs ].include?( new_dest_addr )
-          tund_info[ :new_dest_rbuffs ][ new_dest_addr ] = []
+        unless chain_tund
+          unless tund_info[ :new_dest_rbuffs ].include?( from_addr )
+            tund_info[ :new_dest_rbuffs ][ from_addr ] = []
+          end
+
+          tund_info[ :new_dest_rbuffs ][ from_addr ] << data
+
+          # puts "debug send C: 3 (udpd > tun: req a chain tun) -> new_dest_addr -> root_dest_addr #{ Addrinfo.new( from_addr ).inspect } #{ Addrinfo.new( tund_info[ :dest_addr ] ).inspect }"
+          msg = [ [ 3 ].pack( 'C' ), from_addr, tund_info[ :dest_addr ] ].join
+          @udpd.sendmsg( msg, 0, tund_info[ :tun_addr ] )
+          return
         end
 
-        tund_info[ :new_dest_rbuffs ][ new_dest_addr ] << data
+        chain_tund_info = @tund_infos[ chain_tund ]
 
-        # puts "debug send C: 3 (udpd > tun: req a chain tun) -> new_dest_addr orig_tun_addr #{ addrinfo.inspect } -> #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
-        msg = [ [ 3 ].pack( 'C' ), new_dest_addr, tund_info[ :tun_addr ] ].join
-        @udpd.sendmsg( msg, 0, tund_info[ :tun_addr ] )
+        unless chain_tund_info[ :root_tund ]
+          chain_tund_info[ :root_tund ] = tund
+          wmemo = chain_tund_info[ :last_dest_wmemo ]
+
+          if wmemo
+            # puts "debug send wmemo #{ wmemo.inspect } to #{ Addrinfo.new( from_addr ).inspect }"
+            tund.sendmsg( wmemo, 0, from_addr )
+          end
+        end
+
+        add_write( chain_tund, data )
       end
     end
 
@@ -231,24 +257,26 @@ module Girl
       @closings.delete( tund )
       @roles.delete( tund )
       tund_info = @tund_infos.delete( tund )
-      @tunds.delete( tund_info[ :tun_addr ] )
+      @tunds.delete( [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ], tund_info[ :dest_addr ] ].join )
     end
 
-    def new_a_tund( tun_addr, src_addr, dest_addr, orig_tund = nil )
+    def new_a_tund( tun_addr, tun_ip_addr, orig_src_addr, dest_addr, root_tund = nil )
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       tund_port = tund.local_address.ip_unpack.last
 
-      @tunds[ tun_addr ] = tund
+      @tunds[ [ tun_ip_addr, orig_src_addr, dest_addr ].join ] = tund
       @tund_infos[ tund ] = {
         port: tund_port,
-        tun_addr: tun_addr,
         is_tunneled: false,
-        src_addr: src_addr,
+        tun_addr: tun_addr,
+        tun_ip_addr: tun_ip_addr,
+        orig_src_addr: orig_src_addr,
         dest_addr: dest_addr,
-        orig_tund: orig_tund,
+        root_tund: root_tund,
         wbuffs: [],
+        last_dest_wmemo: nil,
         new_dest_rbuffs: {},
         last_traff_at: Time.new
       }
@@ -257,12 +285,6 @@ module Girl
       @reads << tund
 
       tund
-    end
-
-    def send_dest( tund, data )
-      tund_info = @tund_infos[ tund ]
-      orig_tund = tund_info[ :orig_tund ] || tund
-      orig_tund.sendmsg( data, 0, tund_info[ :dest_addr ] )
     end
 
     def loop_expire
@@ -275,7 +297,7 @@ module Girl
 
             @tund_infos.values.each do | tund_info |
               if now - tund_info[ :last_traff_at ] > 1800
-                @ctlw.write( tund_info[ :tun_addr ] )
+                @ctlw.write(  [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ], tund_info[ :dest_addr ] ].join )
               end
             end
           end

@@ -166,6 +166,8 @@ Girl::Udp.new( 'your.server.ip', 3030, 1313 ).looping
 iptables -t nat -A PREROUTING -p udp -d game.server.ip -j REDIRECT --to-ports 1313
 ```
 
+## 4. 区分国内外
+
 想加速任何海外游戏/网站，同时直连任何国内游戏/网站，根据：
 
 https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
@@ -174,15 +176,9 @@ http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
 
 把保留ip段和注册在亚太的CN的ip段-j RETURN，其余-j REDIRECT到妹子端口。
 
-和tcp不同，转发udp若区分国内外，采用p2p联机的游戏会有问题：游戏匹配服务器在海外，匹配到国内玩家，他从他洞里出来穿你（映射到远端的）洞，通。你却不走自己的洞直接穿他，不通。
+和tcp不同，udp若区分国内外，采用p2p联机的游戏会有问题：游戏匹配服务器在海外，匹配到国内玩家，他从他洞里出来穿你（映射到远端的）洞，通。你却不走自己的洞直接穿他，不通。因此想完整支持p2p需要国内外全走妹子。
 
-三种方案：
-
-1. udp国内外全走妹子。
-2. 国内直连国外走妹子。只和海外玩家玩。匹配到国内玩家，连线失败，下一把，匹配到海外玩家，连线成功。
-3. 在2的基础上，针对个别游戏，把它背后的配对服务器ip配成直连。（等于个别游戏放弃加速）
-
-## 4. 树莓派
+## 5. 树莓派
 
 把妹子安装在树莓派上，你就得到了一台可能是目前地球上最快的（性价比最高的）（加速任何海外游戏的）（对抗邪恶的）路由器。
 
