@@ -27,6 +27,7 @@ module Girl
       }
       @udpd_wbuffs = []       # [ tun_addr ctlmsg ] ...
       @tunds = {}             # tun_addr => tund
+      @orig_tunds = {}        # [ tun_ip_addr orig_src_addr ] => tund
       @alias_senders = {}     # [ tun_ip_addr orig_src_addr dst_addr ] => tund # alias senders to dst
       @receivers = {}         # [ dst_addr tun_ip_addr orig_src_addr ] => tund # receivers from dst
       @tund_infos = {}        # tund => {}
@@ -139,14 +140,14 @@ module Girl
 
         if sender
           # puts "debug alias sender send #{ data.inspect } to #{ Addrinfo.new( tund_info[ :dst_addr ] ).inspect }"
-          sender.sendmsg( data, 0, tund_info[ :dst_addr ] )
+          send_to_dst( sender, data, tund_info[ :dst_addr ] )
         else
           # 若发送代理为空，据src-dst2找发送代理，找到tund1，tund1发数据给dst2，同时tund2转tund1.dst2.rbuffs给tun2。没找到，tund2-dst2，记tund2.wmem。
           tod_addr = [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ], tund_info[ :dst_addr ] ].join
           sender = @alias_senders[ tod_addr ]
 
           if sender
-            sender.sendmsg( data, 0, tund_info[ :dst_addr ] )
+            send_to_dst( sender, data, tund_info[ :dst_addr ] )
             tund_info[ :alias_sender ] = sender
 
             sender_info = @tund_infos[ sender ]
@@ -158,7 +159,9 @@ module Girl
               add_write( tund )
             end
           else
-            tund.sendmsg( data, 0, tund_info[ :dst_addr ] )
+            to_addr = [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ] ].join
+            orig_tund = @orig_tunds[ to_addr ]
+            send_to_dst( orig_tund, data, tund_info[ :dst_addr ] )
 
             # 缓存写后，可能是p2p自己先出去，撞死的流量，之后对面进来匹配成对，由发送代理重发。超过5条看做非p2p。
             if tund_info[ :wmems ].size < 5
@@ -203,7 +206,7 @@ module Girl
 
             receiver_info[ :wmems ].each do | wmem |
               # puts "debug send wmem #{ wmem.inspect } to #{ addrinfo.inspect }"
-              tund.sendmsg( wmem, 0, from_addr )
+              send_to_dst( tund, wmem, from_addr )
             end
 
             receiver_info[ :wmems ].clear
@@ -247,6 +250,13 @@ module Girl
 
       data = tund_info[ :wbuffs ].shift
       tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
+      tund_info[ :last_traff_at ] = Time.new
+    end
+
+    def send_to_dst( tund, data, dst_addr )
+      tund.sendmsg( data, 0, dst_addr )
+      tund_info = @tund_infos[ tund ]
+      tund_info[ :last_traff_at ] = Time.new
     end
 
     def add_write( sock, data = nil )
@@ -288,6 +298,12 @@ module Girl
       if @receivers[ dto_addr ] && @receivers[ dto_addr ] == tund
         @receivers.delete( dto_addr )
       end
+
+      to_addr = [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ] ].join
+
+      if @orig_tunds[ to_addr ] && @orig_tunds[ to_addr ] == tund
+        @orig_tunds.delete( to_addr )
+      end
     end
 
     def new_a_tund( tun_addr, tun_ip_addr, orig_src_addr, dst_addr )
@@ -314,19 +330,26 @@ module Girl
       @roles[ tund ] = :tund
       @reads << tund
 
+      to_addr = [ tun_ip_addr, orig_src_addr ].join
+
+      unless @orig_tunds.include?( to_addr )
+        @orig_tunds[ to_addr ] = tund
+      end
+
       tund
     end
 
     def loop_expire
       Thread.new do
         loop do
-          sleep 60
+          sleep 30
 
           @mutex.synchronize do
             now = Time.new
 
             @tund_infos.values.each do | tund_info |
-              if now - tund_info[ :last_traff_at ] > 600
+              # net.netfilter.nf_conntrack_udp_timeout_stream
+              if now - tund_info[ :last_traff_at ] > 180
                 @ctlw.write( tund_info[ :tun_addr ] )
               end
             end

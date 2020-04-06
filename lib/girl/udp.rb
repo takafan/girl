@@ -136,30 +136,47 @@ module Girl
     def read_redir( redir )
       data, addrinfo, rflags, *controls = redir.recvmsg
       src_addr = addrinfo.to_sockaddr
-
       # puts "debug redir recv #{ data.inspect } from #{ addrinfo.inspect }"
-      # 2 udp 5 src 7 sport 9 [UNREPLIED] 11 dst 13 dport
-      # 2 udp 5 src 7 sport 10 dst 12 dport
-      bin = IO.binread( '/proc/net/nf_conntrack' )
-      rows = bin.split( "\n" ).map { | line | line.split( ' ' ) }
-      row = rows.find { | _row | _row[ 2 ] == 'udp' && ( ( _row[ 9 ] == '[UNREPLIED]' && _row[ 11 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 13 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port ) || ( _row[ 10 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 12 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port ) ) }
 
-      if row
+      if @mappings.include?( src_addr )
+        orig_src_addr, dst_addr = @mappings[ src_addr ]
+      else
+        # 2 udp 5 src 7 sport 9 [UNREPLIED] 11 dst 13 dport
+        # 2 udp 5 src 7 sport 10 dst 12 dport
+        is_add_mapping = false
+        bin = IO.binread( '/proc/net/nf_conntrack' )
+        rows = bin.split( "\n" ).map { | line | line.split( ' ' ) }
+        row = rows.find { | _row | _row[ 2 ] == 'udp' && _row[ 10 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 12 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port }
+
+        if row
+          is_add_mapping = true
+        else
+          row = rows.find { | _row | _row[ 2 ] == 'udp' && _row[ 9 ] == '[UNREPLIED]' && _row[ 11 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 13 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port }
+
+          unless row
+            puts "miss conntrack #{ addrinfo.inspect } #{ Time.new }"
+            IO.binwrite( '/tmp/nf_conntrack', bin )
+            return
+          end
+        end
+
         orig_src_ip = row[ 5 ].split( '=' )[ 1 ]
         orig_src_port = row[ 7 ].split( '=' )[ 1 ].to_i
         dst_ip = row[ 6 ].split( '=' )[ 1 ]
         dst_port = row[ 8 ].split( '=' )[ 1 ].to_i
         orig_src_addr = Socket.sockaddr_in( orig_src_port, orig_src_ip )
         dst_addr = Socket.sockaddr_in( dst_port, dst_ip )
-      else
-        unless @mappings.include?( src_addr )
-          puts "miss conntrack #{ addrinfo.inspect } #{ Time.new }"
-          IO.binwrite( '/tmp/nf_conntrack', bin )
+
+        if Addrinfo.new( dst_addr ).ipv4_private?
+          puts "redir send to #{ Addrinfo.new( dst_addr ).inspect } from #{ Addrinfo.new( src_addr ).inspect } #{ Addrinfo.new( orig_src_addr ).inspect } #{ Time.new }"
+          @redir_wbuffs << [ dst_addr, data ]
+          add_write( @redir )
           return
         end
 
-        puts "hit mapping #{ addrinfo.inspect }"
-        orig_src_addr, dst_addr = @mappings[ src_addr ]
+        if is_add_mapping
+          @mappings[ src_addr ] = [ orig_src_addr, dst_addr ]
+        end
       end
 
       tun = @tuns[ [ orig_src_addr, dst_addr ].join ]
@@ -170,8 +187,6 @@ module Girl
         # puts "debug tun send to udpd #{ Addrinfo.new( orig_src_addr ).inspect } #{ Addrinfo.new( dst_addr ).inspect }"
         ctlmsg = [ orig_src_addr, dst_addr ].join
         add_ctlmsg( tun, ctlmsg )
-
-        @mappings[ src_addr ] = [ orig_src_addr, dst_addr ]
       end
 
       add_write( tun, data )
@@ -295,13 +310,14 @@ module Girl
     def loop_expire
       Thread.new do
         loop do
-          sleep 60
+          sleep 30
 
           @mutex.synchronize do
             now = Time.new
 
             @tun_infos.values.each do | tun_info |
-              if now - tun_info[ :last_traff_at ] > 600
+              # net.netfilter.nf_conntrack_udp_timeout_stream
+              if now - tun_info[ :last_traff_at ] > 180
                 @ctlw.write( [ tun_info[ :orig_src_addr ], tun_info[ :dst_addr ] ].join )
               end
             end
