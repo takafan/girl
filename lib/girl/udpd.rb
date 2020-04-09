@@ -35,7 +35,6 @@ module Girl
                         #   dst_addrs: { tun_addr => dst_addr }
                         #   tun_addrs: { dst_addr => tun_addr }
                         #   unpaired_dst_rbuffs: { dst_addr => [] }
-                        #   receivers: { other_dst_addr => other_tund }
                         #   last_traff_at: now
     end
 
@@ -113,34 +112,30 @@ module Girl
       from_addr = addrinfo.to_sockaddr
       tund_info = @tund_infos[ tund ]
       tund_info[ :last_traff_at ] = Time.new
-      dst_addr = tund_info[ :dst_addrs ][ from_addr ]
+      to_addr = tund_info[ :dst_addrs ][ from_addr ]
 
-      if dst_addr
+      if to_addr
         # 来自tun，发给dst。
-        add_tund_wbuff( tund, dst_addr, data )
-
         # 如果对面没来过流量，且在nat里，nat规则是只对去过的目的地做接收，那么，先过去的流量会撞死。
         # 没关系，撞死的流量通常是打洞数据，撞死在应用掌控之内，打洞数据通常是连发的。
-        #
-        # 先出去的流量不一定是p2p，但对面先到的流量一定是p2p，暂存它。
-        # 现在，自己那头来了，重发暂存的流量。
-        if tund_info[ :unpaired_dst_rbuffs ].include?( dst_addr )
-          rbuffs = tund_info[ :unpaired_dst_rbuffs ].delete( dst_addr )
-
-          if rbuffs
-            # puts "debug move tund.dst.rbuffs to tund.wbuffs #{ rbuffs.inspect }"
-            tund_info[ :wbuffs ] += rbuffs.map{ | rbuff | [ from_addr, rbuff ] }
-          end
-        end
-
+        # puts "debug #{ data.inspect } from #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
+        add_tund_wbuff( tund, to_addr, data )
         return
       end
 
-      tun_addr = tund_info[ :tun_addrs ][ from_addr ]
+      to_addr = tund_info[ :tun_addrs ][ from_addr ]
 
-      if tun_addr
+      if to_addr
         # 来自dst，发给tun。
-        add_tund_wbuff( tund, tun_addr, data )
+        # 先发暂存
+        if tund_info[ :unpaired_dst_rbuffs ].include?( from_addr )
+          rbuffs = tund_info[ :unpaired_dst_rbuffs ].delete( from_addr )
+          # puts "debug move tund.dst.rbuffs to tund.wbuffs #{ rbuffs.inspect }"
+          tund_info[ :wbuffs ] += rbuffs.map{ | rbuff | [ to_addr, rbuff ] }
+        end
+
+        # puts "debug #{ data.inspect } from #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
+        add_tund_wbuff( tund, to_addr, data )
         return
       end
 
