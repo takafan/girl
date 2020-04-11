@@ -34,6 +34,7 @@ module Girl
                         #   wbuffs: [] # [ to_addr, data ] ...
                         #   dst_addrs: { tun_addr => dst_addr }
                         #   tun_addrs: { dst_addr => tun_addr }
+                        #   is_tunneleds: { [ tun_addr dst_addr ] => false }
                         #   unpaired_dst_rbuffs: { dst_addr => [] }
                         #   last_traff_at: now
     end
@@ -116,8 +117,23 @@ module Girl
 
       if to_addr
         # 来自tun，发给dst。
+        td_addr = [ from_addr, to_addr ].join
+        is_tunneled = tund_info[ :is_tunneleds ][ td_addr ]
+
+        unless is_tunneled
+          # puts "debug first traffic from tun #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
+          # 发暂存
+          if tund_info[ :unpaired_dst_rbuffs ].include?( to_addr )
+            rbuffs = tund_info[ :unpaired_dst_rbuffs ].delete( to_addr )
+            # puts "debug move tund.dst.rbuffs to tund.wbuffs #{ rbuffs.inspect }"
+            tund_info[ :wbuffs ] += rbuffs.map{ | rbuff | [ from_addr, rbuff ] }
+          end
+
+          tund_info[ :is_tunneleds ][ td_addr ] = true
+        end
+
         # 如果对面没来过流量，且在nat里，nat规则是只对去过的目的地做接收，那么，先过去的流量会撞死。
-        # 没关系，撞死的流量通常是打洞数据，撞死在应用掌控之内，打洞数据通常是连发的。
+        # 没关系，撞死的流量通常是打洞数据，在应用计算之内，打洞数据通常是连发的。
         # puts "debug #{ data.inspect } from #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
         add_tund_wbuff( tund, to_addr, data )
         return
@@ -127,19 +143,20 @@ module Girl
 
       if to_addr
         # 来自dst，发给tun。
-        # 先发暂存
-        if tund_info[ :unpaired_dst_rbuffs ].include?( from_addr )
-          rbuffs = tund_info[ :unpaired_dst_rbuffs ].delete( from_addr )
-          # puts "debug move tund.dst.rbuffs to tund.wbuffs #{ rbuffs.inspect }"
-          tund_info[ :wbuffs ] += rbuffs.map{ | rbuff | [ to_addr, rbuff ] }
+        # puts "debug #{ data.inspect } from #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
+
+        td_addr = [ to_addr, from_addr ].join
+        is_tunneled = tund_info[ :is_tunneleds ][ td_addr ]
+
+        if is_tunneled
+          add_tund_wbuff( tund, to_addr, data )
+          return
         end
 
-        # puts "debug #{ data.inspect } from #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
-        add_tund_wbuff( tund, to_addr, data )
-        return
+        # puts "debug #{ Addrinfo.new( to_addr ).inspect } #{ addrinfo.inspect } not tunneled"
       end
 
-      # 来自未知的地方，看做是p2p对面先到。
+      # 来自未知的地方，或者对应的tun还没来流量，记暂存
       unless tund_info[ :unpaired_dst_rbuffs ][ from_addr ]
         tund_info[ :unpaired_dst_rbuffs ][ from_addr ] = []
       end
@@ -211,12 +228,14 @@ module Girl
 
     def pair_tund( tun_addr, tun_ip_addr, orig_src_addr, dst_addr )
       from_addr = [ tun_ip_addr, orig_src_addr ].join
+      td_addr = [ tun_addr, dst_addr ].join
       tund = @tunds[ from_addr ]
 
       if tund
         tund_info = @tund_infos[ tund ]
         tund_info[ :dst_addrs ][ tun_addr ] = dst_addr
         tund_info[ :tun_addrs ][ dst_addr ] = tun_addr
+        tund_info[ :is_tunneleds ][ td_addr ] = false
       else
         tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
@@ -231,6 +250,7 @@ module Girl
           wbuffs: [],
           dst_addrs: { tun_addr => dst_addr },
           tun_addrs: { dst_addr => tun_addr },
+          is_tunneleds: { td_addr => false },
           unpaired_dst_rbuffs: {},
           last_traff_at: Time.new
         }
