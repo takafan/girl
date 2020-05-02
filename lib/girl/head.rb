@@ -1,14 +1,18 @@
 module Girl
-  PACK_SIZE             = 1328             # 包大小 1400(console MTU) - 8(PPPoE header) - 40(IPv6 header) - 8(UDP header) - 8(source/dest id) - 8(pack id) = 1328
-  CHUNK_SIZE            = PACK_SIZE * 1000 # 块大小
-  WBUFFS_LIMIT          = 1000             # 写前上限，超过上限结一个块
-  WMEMS_LIMIT           = 100_000          # 写后上限，达到上限暂停写
-  RESUME_BELOW          = 50_000           # 降到多少以下恢复写
-  EXPIRE_AFTER          = 1800             # 多久过期
-  HEARTBEAT_INTERVAL    = 3                # 心跳间隔
-  STATUS_INTERVAL       = 0.3              # 发送状态间隔
-  SEND_STATUS_UNTIL     = 10               # 持续的告之对面状态，直到没有流量往来，持续多少秒
-  BREAK_SEND_MISS       = 10_000           # miss包个数上限，达到上限忽略要后面的段，可控碎片缓存
+  PACK_SIZE             = 1328                   # 包大小 1400(console MTU) - 8(PPPoE header) - 40(IPv6 header) - 8(UDP header) - 8(source/dest id) - 8(pack id) = 1328
+  CHUNK_SIZE            = PACK_SIZE * 1000       # 块大小
+  PROXY_PACK_SIZE       = 1320                   # 1400(console MTU) - 8(PPPoE header) - 40(IPv6 header) - 8(UDP header) - 8(pack id) - 16(src_addr) = 1320
+  PROXY_CHUNK_SIZE      = PROXY_PACK_SIZE * 1000 # proxy块大小
+  WBUFFS_LIMIT          = 1000                   # 写前上限，超过上限结一个块
+  WMEMS_LIMIT           = 100_000                # 写后上限，达到上限暂停写
+  RESUME_BELOW          = 50_000                 # 降到多少以下恢复写
+  EXPIRE_NEW            = 5                      # 创建之后多久没有流量进来，过期
+  EXPIRE_AFTER          = 900                    # 多久没有新流量进来，过期
+  CHECK_EXPIRE_INTERVAL = 30                     # 检查过期间隔
+  HEARTBEAT_INTERVAL    = 30                     # 心跳间隔
+  STATUS_INTERVAL       = 0.3                    # 发送状态间隔
+  SEND_STATUS_UNTIL     = 10                     # 持续的告之对面状态，直到没有流量往来，持续多少秒
+  BREAK_SEND_MISS       = 10_000                 # miss包个数上限，达到上限忽略要后面的段，可控碎片缓存
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3
@@ -24,4 +28,35 @@ module Girl
   TUN_FIN               = 13
   CTL_CLOSE             = 1
   CTL_RESUME            = 2
+  CTL_CLOSE_TUN         = 3
+  CTL_CLOSE_SRC         = 4
+  CTL_CLOSE_DST         = 5
+  CTL_SEND_HEARTBEAT    = 6
+  CTL_SEND_STATUS       = 7
+  CTL_DEL_SRC_EXT       = 8
+  CTL_RESOLVED          = 9
+  CTL_CLOSE_TUND        = 10
+  CTL_DEL_DST_EXT       = 11
+  HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
+  # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+  RESERVED_ROUTE = <<EOF
+0.0.0.0/8
+10.0.0.0/8
+100.64.0.0/10
+127.0.0.0/8
+169.254.0.0/16
+172.16.0.0/12
+192.0.0.0/24
+192.0.2.0/24
+192.31.196.0/24
+192.52.193.0/24
+192.88.99.0/24
+192.168.0.0/16
+192.175.48.0/24
+198.18.0.0/15
+198.51.100.0/24
+203.0.113.0/24
+240.0.0.0/4
+255.255.255.255/32
+EOF
 end

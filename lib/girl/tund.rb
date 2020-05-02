@@ -4,19 +4,7 @@ require 'girl/version'
 require 'socket'
 
 ##
-# Girl::Tund - tcp流量正常的到达目的地。远端。
-#
-# 两套关闭
-# ========
-#
-# 1-1. dest.close -> ext.is_source_closed ? no -> send fin1 loop
-# 1-2. recv got_fin1 -> break loop
-# 1-3. recv fin2 -> send got_fin2 -> del ext
-#
-# 2-1. recv fin1 -> send got_fin1 -> ext.is_source_closed = true
-# 2-2. all sent && ext.biggest_source_pack_id == ext.continue_source_pack_id -> add closing dest
-# 2-3. dest.close -> ext.is_source_closed ? yes -> del ext -> loop send fin2
-# 2-4. recv got_fin2 -> break loop
+# Girl::Tund - tcp透明转发，远端。
 #
 module Girl
   class Tund
@@ -54,6 +42,15 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
+          ws.each do | sock |
+            case @roles[ sock ]
+            when :dest
+              write_dest( sock )
+            when :tund
+              write_tund( sock )
+            end
+          end
+
           rs.each do | sock |
             case @roles[ sock ]
             when :ctlr
@@ -64,15 +61,6 @@ module Girl
               read_dest( sock )
             when :tund
               read_tund( sock )
-            end
-          end
-
-          ws.each do | sock |
-            case @roles[ sock ]
-            when :dest
-              write_dest( sock )
-            when :tund
-              write_tund( sock )
             end
           end
         end
@@ -660,13 +648,13 @@ module Girl
 
     def check_expire( tund )
       Thread.new do
-        sleep HEARTBEAT_INTERVAL
+        sleep 3
 
-        unless tund.closed?
-          tund_info = @infos[ tund ]
+        @mutex.synchronize do
+          unless tund.closed?
+            tund_info = @infos[ tund ]
 
-          unless tund_info[ :tun_addr ]
-            @mutex.synchronize do
+            unless tund_info[ :tun_addr ]
               tund_id = @socks[ tund ]
               @ctlw.write( [ CTL_CLOSE, tund_id ].pack( 'CQ>' ) )
             end
@@ -678,25 +666,23 @@ module Girl
     def loop_check_expire( tund )
       Thread.new do
         loop do
-          sleep 60
-          break if tund.closed?
+          sleep CHECK_EXPIRE_INTERVAL
 
-          now = Time.new
-          tund_info = @infos[ tund ]
+          @mutex.synchronize do
+            break if tund.closed?
 
-          if now - tund_info[ :last_traffic_at ] > EXPIRE_AFTER
-            @mutex.synchronize do
+            now = Time.new
+            tund_info = @infos[ tund ]
+
+            if now - tund_info[ :last_traffic_at ] > EXPIRE_AFTER
               tund_id = @socks[ tund ]
               @ctlw.write( [ CTL_CLOSE, tund_id ].pack( 'CQ>' ) )
+              break
             end
 
-            break
-          end
+            exts = tund_info[ :dest_exts ].select{ | _, ext | now - ext[ :created_at ] > 5 }
 
-          exts = tund_info[ :dest_exts ].select{ | _, ext | now - ext[ :created_at ] > 5 }
-
-          if exts.any?
-            @mutex.synchronize do
+            if exts.any?
               exts.each do | dest_id, ext |
                 if ext[ :last_recv_at ].nil? || ( now - ext[ :last_recv_at ] > EXPIRE_AFTER )
                   # puts "debug ctlw close dest #{ dest_id } #{ Time.new } p#{ Process.pid }"
@@ -714,15 +700,15 @@ module Girl
         loop do
           sleep STATUS_INTERVAL
 
-          if tund.closed?
-            # puts "debug tund is closed, break send status loop #{ Time.new }"
-            break
-          end
+          @mutex.synchronize do
+            if tund.closed?
+              # puts "debug tund is closed, break send status loop #{ Time.new }"
+              break
+            end
 
-          tund_info = @infos[ tund ]
+            tund_info = @infos[ tund ]
 
-          if tund_info[ :dest_exts ].any?
-            @mutex.synchronize do
+            if tund_info[ :dest_exts ].any?
               now = Time.new
 
               tund_info[ :dest_exts ].each do | dest_id, ext |
@@ -739,10 +725,8 @@ module Girl
                 end
               end
             end
-          end
 
-          if tund_info[ :paused ] && ( tund_info[ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
-            @mutex.synchronize do
+            if tund_info[ :paused ] && ( tund_info[ :dest_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
               tund_id = @socks[ tund ]
               puts "ctlw resume #{ tund_id } #{ Time.new } p#{ Process.pid }"
               @ctlw.write( [ CTL_RESUME, tund_id ].pack( 'CQ>' ) )
@@ -755,18 +739,18 @@ module Girl
 
     def loop_send_fin1( tund, dest_id )
       Thread.new do
-        100.times do
-          break if tund.closed?
-
-          tund_info = @infos[ tund ]
-          break unless tund_info[ :tun_addr ]
-
-          unless tund_info[ :fin1s ].include?( dest_id )
-            # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
-            break
-          end
-
+        30.times do
           @mutex.synchronize do
+            break if tund.closed?
+
+            tund_info = @infos[ tund ]
+            break unless tund_info[ :tun_addr ]
+
+            unless tund_info[ :fin1s ].include?( dest_id )
+              # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
+              break
+            end
+
             ctlmsg = [
               0,
               FIN1,
@@ -784,18 +768,18 @@ module Girl
 
     def loop_send_fin2( tund, dest_id )
       Thread.new do
-        100.times do
-          break if tund.closed?
-
-          tund_info = @infos[ tund ]
-          break unless tund_info[ :tun_addr ]
-
-          unless tund_info[ :fin2s ].include?( dest_id )
-            # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
-            break
-          end
-
+        30.times do
           @mutex.synchronize do
+            break if tund.closed?
+
+            tund_info = @infos[ tund ]
+            break unless tund_info[ :tun_addr ]
+
+            unless tund_info[ :fin2s ].include?( dest_id )
+              # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
+              break
+            end
+
             ctlmsg = [
               0,
               FIN2,

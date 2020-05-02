@@ -2,7 +2,7 @@ require 'girl/version'
 require 'socket'
 
 ##
-# Girl::Udp - 转发udp。近端。
+# Girl::Udp - udp透明转发，近端。
 #
 # usage
 # ======

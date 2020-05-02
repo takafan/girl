@@ -2,7 +2,7 @@ require 'girl/version'
 require 'socket'
 
 ##
-# Girl::Udpd - 转发udp。远端。
+# Girl::Udpd - udp透明转发，远端。
 #
 module Girl
   class Udpd

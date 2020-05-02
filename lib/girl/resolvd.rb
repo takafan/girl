@@ -3,7 +3,7 @@ require 'girl/version'
 require 'socket'
 
 ##
-# Girl::Resolvd - dns查询得到正确的ip。远端。
+# Girl::Resolvd - dns查询得到正确的ip，远端。
 #
 module Girl
   class Resolvd

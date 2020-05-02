@@ -4,7 +4,7 @@ require 'girl/version'
 require 'socket'
 
 ##
-# Girl::Tun - tcp流量正常的到达目的地。近端。
+# Girl::Tun - tcp透明转发，近端。
 #
 # usage
 # =====
@@ -38,18 +38,6 @@ require 'socket'
 #                             11 got fin2      -> Q>: source/dest_id
 #                             12 tund fin
 #                             13 tun fin
-#
-# 两套关闭
-# ========
-#
-# 1-1. source.close -> ext.is_dest_closed ? no -> send fin1 loop
-# 1-2. recv got_fin1 -> break loop
-# 1-3. recv fin2 -> send got_fin2 -> del ext
-#
-# 2-1. recv fin1 -> send got_fin1 -> ext.is_dest_closed = true
-# 2-2. all sent && ext.biggest_dest_pack_id == ext.continue_dest_pack_id -> add closing source
-# 2-3. source.close -> ext.is_dest_closed ? yes -> del ext -> loop send fin2
-# 2-4. recv got_fin2 -> break loop
 #
 module Girl
   class Tun
@@ -96,6 +84,15 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
+          ws.each do | sock |
+            case @roles[ sock ]
+            when :source
+              write_source( sock )
+            when :tun
+              write_tun( sock )
+            end
+          end
+
           rs.each do | sock |
             case @roles[ sock ]
             when :ctlr
@@ -106,15 +103,6 @@ module Girl
               read_source( sock )
             when :tun
               read_tun( sock )
-            end
-          end
-
-          ws.each do | sock |
-            case @roles[ sock ]
-            when :source
-              write_source( sock )
-            when :tun
-              write_tun( sock )
             end
           end
         end
@@ -707,13 +695,13 @@ module Girl
 
     def check_expire( tun )
       Thread.new do
-        sleep HEARTBEAT_INTERVAL
+        sleep 3
 
-        unless tun.closed?
-          tun_info = @infos[ tun ]
+        @mutex.synchronize do
+          unless tun.closed?
+            tun_info = @infos[ tun ]
 
-          unless tun_info[ :tund_addr ]
-            @mutex.synchronize do
+            unless tun_info[ :tund_addr ]
               tun_id = @socks[ tun ]
               @ctlw.write( [ CTL_CLOSE, tun_id ].pack( 'CQ>' ) )
             end
@@ -725,9 +713,8 @@ module Girl
     def loop_send_heartbeat( tun )
       Thread.new do
         loop do
-          break if tun.closed?
-
           @mutex.synchronize do
+            break if tun.closed?
             send_heartbeat( tun )
           end
 
@@ -739,26 +726,24 @@ module Girl
     def loop_check_expire( tun )
       Thread.new do
         loop do
-          sleep 60
-          break if tun.closed?
+          sleep CHECK_EXPIRE_INTERVAL
 
-          now = Time.new
-          tun_info = @infos[ tun ]
+          @mutex.synchronize do
+            break if tun.closed?
 
-          if now - tun_info[ :last_traffic_at ] > EXPIRE_AFTER
-            @mutex.synchronize do
+            now = Time.new
+            tun_info = @infos[ tun ]
+
+            if now - tun_info[ :last_traffic_at ] > EXPIRE_AFTER
               tun_id = @socks[ tun ]
               # puts "debug ctlw close tun #{ tun_id } #{ Time.new } p#{ Process.pid }"
               @ctlw.write( [ CTL_CLOSE, tun_id ].pack( 'CQ>' ) )
+              break
             end
 
-            break
-          end
+            exts = tun_info[ :source_exts ].select{ | _, ext | now - ext[ :created_at ] > 5 }
 
-          exts = tun_info[ :source_exts ].select{ | _, ext | now - ext[ :created_at ] > 5 }
-
-          if exts.any?
-            @mutex.synchronize do
+            if exts.any?
               exts.each do | source_id, ext |
                 if ext[ :last_recv_at ].nil? || ( now - ext[ :last_recv_at ] > EXPIRE_AFTER )
                   # puts "debug ctlw close source #{ source_id } #{ Time.new } p#{ Process.pid }"
@@ -776,15 +761,15 @@ module Girl
         loop do
           sleep STATUS_INTERVAL
 
-          if tun.closed?
-            # puts "debug tun is closed, break send status loop #{ Time.new }"
-            break
-          end
+          @mutex.synchronize do
+            if tun.closed?
+              # puts "debug tun is closed, break send status loop #{ Time.new }"
+              break
+            end
 
-          tun_info = @infos[ tun ]
+            tun_info = @infos[ tun ]
 
-          if tun_info[ :source_exts ].any?
-            @mutex.synchronize do
+            if tun_info[ :source_exts ].any?
               now = Time.new
 
               tun_info[ :source_exts ].each do | source_id, ext |
@@ -801,10 +786,8 @@ module Girl
                 end
               end
             end
-          end
 
-          if tun_info[ :paused ] && ( tun_info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
-            @mutex.synchronize do
+            if tun_info[ :paused ] && ( tun_info[ :source_exts ].map{ | _, ext | ext[ :wmems ].size }.sum < RESUME_BELOW )
               tun_id = @socks[ tun ]
               puts "ctlw resume #{ tun_id } #{ Time.new } p#{ Process.pid }"
               @ctlw.write( [ CTL_RESUME, tun_id ].pack( 'CQ>' ) )
@@ -817,25 +800,25 @@ module Girl
 
     def loop_send_a_new_source( source, original_dst )
       Thread.new do
-        100.times do
-          break if source.closed?
+        30.times do
+          @mutex.synchronize do
+            break if source.closed?
 
-          source_info = @infos[ source ]
-          tun = source_info[ :tun ]
-          break if tun.closed?
+            source_info = @infos[ source ]
+            tun = source_info[ :tun ]
+            break if tun.closed?
 
-          tun_info = @infos[ tun ]
+            tun_info = @infos[ tun ]
 
-          if tun_info[ :tund_addr ]
-            source_id = @socks[ source ]
-            dest_id = tun_info[ :source_ids ][ source_id ]
+            if tun_info[ :tund_addr ]
+              source_id = @socks[ source ]
+              dest_id = tun_info[ :source_ids ][ source_id ]
 
-            if dest_id
-              # puts "debug break a new source loop #{ Time.new } p#{ Process.pid }"
-              break
-            end
+              if dest_id
+                # puts "debug break a new source loop #{ Time.new } p#{ Process.pid }"
+                break
+              end
 
-            @mutex.synchronize do
               ctlmsg = "#{ [ 0, A_NEW_SOURCE, source_id ].pack( 'Q>CQ>' ) }#{ original_dst }"
               # puts "debug send a new source #{ Time.new } p#{ Process.pid }"
               send_pack( tun, ctlmsg, tun_info[ :tund_addr ] )
@@ -849,18 +832,18 @@ module Girl
 
     def loop_send_fin1( tun, source_id )
       Thread.new do
-        100.times do
-          break if tun.closed?
-
-          tun_info = @infos[ tun ]
-          break unless tun_info[ :tund_addr ]
-
-          unless tun_info[ :fin1s ].include?( source_id )
-            # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
-            break
-          end
-
+        30.times do
           @mutex.synchronize do
+            break if tun.closed?
+
+            tun_info = @infos[ tun ]
+            break unless tun_info[ :tund_addr ]
+
+            unless tun_info[ :fin1s ].include?( source_id )
+              # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
+              break
+            end
+
             ctlmsg = [
               0,
               FIN1,
@@ -878,18 +861,18 @@ module Girl
 
     def loop_send_fin2( tun, source_id )
       Thread.new do
-        100.times do
-          break if tun.closed?
-
-          tun_info = @infos[ tun ]
-          break unless tun_info[ :tund_addr ]
-
-          unless tun_info[ :fin2s ].include?( source_id )
-            # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
-            break
-          end
-
+        30.times do
           @mutex.synchronize do
+            break if tun.closed?
+
+            tun_info = @infos[ tun ]
+            break unless tun_info[ :tund_addr ]
+
+            unless tun_info[ :fin2s ].include?( source_id )
+              # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
+              break
+            end
+
             ctlmsg = [
               0,
               FIN2,
