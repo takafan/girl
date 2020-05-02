@@ -71,17 +71,15 @@ module Girl
     # quit!
     #
     def quit!
-      @mutex.synchronize do
-        data = [ 0, TUND_FIN ].pack( 'Q>C' )
+      data = [ 0, TUND_FIN ].pack( 'Q>C' )
 
-        @tund_infos.each do | tund, tund_info |
-          if !tund.closed? && tund_info[ :tun_addr ]
-            puts "debug1 send tund fin"
-            tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
-          end
+      @tund_infos.each do | tund, tund_info |
+        if !tund.closed? && tund_info[ :tun_addr ]
+          puts "debug1 send tund fin"
+          tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
         end
       end
-
+      
       puts "debug1 exit"
       exit
     end

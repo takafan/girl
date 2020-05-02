@@ -77,14 +77,12 @@ module Girl
     # quit!
     #
     def quit!
-      @mutex.synchronize do
-        if @tun && !@tun.closed? && @tun_info[ :tund_addr ]
-          puts "debug1 send tun fin"
-          data = [ 0, TUN_FIN ].pack( 'Q>C' )
-          @tun.sendmsg( data, 0, @tun_info[ :tund_addr ] )
-        end
+      if @tun && !@tun.closed? && @tun_info[ :tund_addr ]
+        puts "debug1 send tun fin"
+        data = [ 0, TUN_FIN ].pack( 'Q>C' )
+        @tun.sendmsg( data, 0, @tun_info[ :tund_addr ] )
       end
-
+      
       puts "debug1 exit"
       exit
     end
