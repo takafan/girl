@@ -736,11 +736,11 @@ module Girl
             rescue IO::WaitWritable, Errno::EINTR
               return
             end
-
-            @tun_info[ :resendings ].shift
-            return
           end
         end
+
+        @tun_info[ :resendings ].shift
+        return
       end
 
       # 若写后达到上限，暂停取写前
@@ -809,12 +809,13 @@ module Girl
         end
 
         # puts "debug2 written pack #{ pack_id }"
-        @tun_info[ from ].shift
         src_ext[ :biggest_pack_id ] = pack_id
         src_ext[ :wmems ][ pack_id ] = data
         src_ext[ :send_ats ][ pack_id ] = now
         src_ext[ :last_continue_at ] = now
       end
+
+      @tun_info[ from ].shift
     end
 
     ##
