@@ -82,7 +82,7 @@ module Girl
         data = [ 0, TUN_FIN ].pack( 'Q>C' )
         @tun.sendmsg( data, 0, @tun_info[ :tund_addr ] )
       end
-      
+
       puts "debug1 exit"
       exit
     end
@@ -795,8 +795,7 @@ module Girl
       if src_ext
         pack_id = src_ext[ :biggest_pack_id ] + 1
 
-        # 混淆第1个发往tund的包
-        if pack_id == 1
+        if pack_id <= 5
           data = @custom.encode( data )
           puts "debug1 encoded pack #{ pack_id }"
         end
@@ -1169,7 +1168,6 @@ module Girl
       data = data[ 10..-1 ]
       # puts "debug2 got pack #{ pack_id }"
 
-      # tund过来前5个包是混淆的
       if pack_id <= 5
         # puts "debug2 #{ data.inspect }"
         data = @custom.decode( data )

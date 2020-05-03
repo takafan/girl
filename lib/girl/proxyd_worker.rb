@@ -385,7 +385,7 @@ module Girl
 
       tund = dst_info[ :tund ]
       return if tund.closed?
-      
+
       tund_info = @tund_infos[ tund ]
       dst_ext = tund_info[ :dst_exts ][ local_port ]
       return unless dst_ext
@@ -635,7 +635,6 @@ module Girl
       if dst_ext
         pack_id = dst_ext[ :biggest_pack_id ] + 1
 
-        # 混淆前5个发往tun的包
         if pack_id <= 5
           data = @custom.encode( data )
           puts "debug1 encoded pack #{ pack_id }"
@@ -906,8 +905,7 @@ module Girl
       data = data[ 24..-1 ]
       # puts "debug2 got pack #{ pack_id }"
 
-      # tun过来第1个包是混淆的
-      if pack_id == 1
+      if pack_id <= 5
         # puts "debug2 #{ data.inspect }"
         data = @custom.decode( data )
         puts "debug1 decoded pack #{ pack_id }"
