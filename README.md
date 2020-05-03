@@ -100,30 +100,16 @@ Girl::Proxy.new '/boot/girl.conf.json'
 ruby proxy.rb
 ```
 
-http代理不会代理udp，需要额外设置dns查询走妹子。
-
-```bash
-# 本机dns查询走妹子
-iptables -t nat -I OUTPUT -p udp -d 127.0.0.1 --dport 53 -j REDIRECT --to-ports 6677
-echo "nameserver 127.0.0.1" > /etc/resolv.conf
-
-# 经过的dns查询改走妹子
-iptables -t nat -I PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 6677
-```
-
 girl.conf.json的格式：
 
 ```javascript
 // girl.conf.json
 {
     "proxy_port": 6666,                   // 代理服务，近端（本地）端口
-    "resolv_port": 6677,                  // dns转发服务，近端端口，用于http代理
     "proxyd_host": "1.2.3.4",             // 代理服务，远端服务器
     "proxyd_port": 6060,                  // 代理服务，远端端口
-    "resolvd_port": 6070,                 // dns转发服务，远端端口
     "direct_path": "girl.direct.txt",     // 直连ip段
     "remote_path": "girl.remote.txt",     // 交给远端解析的域名列表
-    "nameserver_path": "nameserver.txt",  // dns服务器列表
     "proxy_tmp_dir": "/tmp/girl.proxy",   // 近端缓存根路径
     "proxyd_tmp_dir": "/tmp/girl.proxyd", // 远端缓存根路径
     "im": "girl",                         // 标识，用来识别近端
@@ -150,15 +136,6 @@ ytimg.com
 ```
 
 很多网站都流行把静态资源放到额外的一个域名下，需要自行f12探索一下。
-
-nameserver.txt的格式：
-
-```txt
-114.114.114.114
-114.114.115.115
-```
-
-不命中girl.remote.txt的域名，就近查询。
 
 ## 对抗邪恶
 

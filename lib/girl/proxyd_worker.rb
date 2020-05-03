@@ -39,8 +39,6 @@ module Girl
           # 先写，再读
           ws.each do | sock |
             case @roles[ sock ]
-            when :dotr
-              read_dotr( sock )
             when :proxyd
               write_proxyd( sock )
             when :dst
@@ -52,6 +50,8 @@ module Girl
 
           rs.each do | sock |
             case @roles[ sock ]
+            when :dotr
+              read_dotr( sock )
             when :proxyd
               read_proxyd( sock )
             when :dst
@@ -79,7 +79,7 @@ module Girl
           tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
         end
       end
-      
+
       puts "debug1 exit"
       exit
     end
@@ -384,6 +384,8 @@ module Girl
       @dsts.delete( local_port )
 
       tund = dst_info[ :tund ]
+      return if tund.closed?
+      
       tund_info = @tund_infos[ tund ]
       dst_ext = tund_info[ :dst_exts ][ local_port ]
       return unless dst_ext
@@ -407,7 +409,7 @@ module Girl
       puts "debug1 close tund"
       close_sock( tund )
 
-      tund_info = @tund_infos[ tund ]
+      tund_info = @tund_infos.delete( tund )
       tund_info[ :chunks ].each do | filename |
         begin
           File.delete( File.join( @tund_chunk_dir, filename ) )
