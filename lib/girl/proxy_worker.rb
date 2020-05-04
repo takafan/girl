@@ -205,6 +205,7 @@ module Girl
           @mutex.synchronize do
             puts "debug1 send a new source #{ data.inspect }"
             add_tun_ctlmsg( data )
+            next_tick
           end
 
           sleep 1
