@@ -192,6 +192,27 @@ module Girl
     end
 
     ##
+    # loop send a new source
+    #
+    def loop_send_a_new_source( src_ext, data )
+      Thread.new do
+        EXPIRE_NEW.times do
+          if src_ext[ :src ].closed? || src_ext[ :dst_port ]
+            puts "debug1 break loop send a new source #{ src_ext[ :dst_port ] }"
+            break
+          end
+
+          @mutex.synchronize do
+            puts "debug1 send a new source #{ data.inspect }"
+            add_tun_ctlmsg( data )
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    ##
     # resolve domain
     #
     def resolve_domain( src, domain )
@@ -332,9 +353,7 @@ module Girl
         new_a_tun
       end
 
-      src_info = @src_infos[ src ]
-      src_addr = src_info[ :src_addr ]
-      @tun_info[ :src_exts ][ src_addr ] = {
+      src_ext = {
         src: src,                  # src
         dst_port: nil,             # 远端dst端口
         wmems: {},                 # 写后 pack_id => data
@@ -348,13 +367,16 @@ module Girl
         last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
       }
 
+      src_info = @src_infos[ src ]
+      src_addr = src_info[ :src_addr ]
+      @tun_info[ :src_exts ][ src_addr ] = src_ext
+      src_info[ :proxy_type ] = :tunnel
+
       destination_port = src_info[ :destination_port ]
       destination_domain = src_info[ :destination_domain ]
       destination_domain_port = [ destination_domain, destination_port ].join( ':' )
       data = [ [ 0, A_NEW_SOURCE ].pack( 'Q>C' ), src_addr, @custom.encode( destination_domain_port ) ].join
-      puts "debug1 add ctlmsg a new source #{ data.inspect }"
-      add_tun_ctlmsg( data )
-      src_info[ :proxy_type ] = :tunnel
+      loop_send_a_new_source( src_ext, data )
     end
 
     ##
@@ -1005,7 +1027,7 @@ module Girl
           dst_port = data[ 25, 2 ].unpack( 'n' ).first
 
           src_ext = @tun_info[ :src_exts ][ src_addr ]
-          return if src_ext.nil? || src_ext[ :src ].closed?
+          return if src_ext.nil? || src_ext[ :src ].closed? || src_ext[ :dst_port ]
 
           @tun_info[ :last_recv_at ] = now
 

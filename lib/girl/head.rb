@@ -6,7 +6,7 @@ module Girl
   WBUFFS_LIMIT          = 1000                   # 写前上限，超过上限结一个块
   WMEMS_LIMIT           = 100_000                # 写后上限，达到上限暂停写
   RESUME_BELOW          = 50_000                 # 降到多少以下恢复写
-  EXPIRE_NEW            = 5                      # 创建之后多久没有流量进来，过期
+  EXPIRE_NEW            = 10                     # 创建之后多久没有流量进来，过期
   EXPIRE_AFTER          = 900                    # 多久没有新流量进来，过期
   CHECK_EXPIRE_INTERVAL = 30                     # 检查过期间隔
   HEARTBEAT_INTERVAL    = 30                     # 心跳间隔
@@ -28,15 +28,6 @@ module Girl
   TUN_FIN               = 13
   CTL_CLOSE             = 1
   CTL_RESUME            = 2
-  CTL_CLOSE_TUN         = 3
-  CTL_CLOSE_SRC         = 4
-  CTL_CLOSE_DST         = 5
-  CTL_SEND_HEARTBEAT    = 6
-  CTL_SEND_STATUS       = 7
-  CTL_DEL_SRC_EXT       = 8
-  CTL_RESOLVED          = 9
-  CTL_CLOSE_TUND        = 10
-  CTL_DEL_DST_EXT       = 11
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
   RESERVED_ROUTE = <<EOF

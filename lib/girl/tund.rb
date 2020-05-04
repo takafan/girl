@@ -668,16 +668,15 @@ module Girl
         loop do
           sleep CHECK_EXPIRE_INTERVAL
 
-          @mutex.synchronize do
-            break if tund.closed?
+          break if tund.closed?
 
+          @mutex.synchronize do
             now = Time.new
             tund_info = @infos[ tund ]
 
             if now - tund_info[ :last_traffic_at ] > EXPIRE_AFTER
               tund_id = @socks[ tund ]
               @ctlw.write( [ CTL_CLOSE, tund_id ].pack( 'CQ>' ) )
-              break
             end
 
             exts = tund_info[ :dest_exts ].select{ | _, ext | now - ext[ :created_at ] > 5 }
@@ -700,12 +699,12 @@ module Girl
         loop do
           sleep STATUS_INTERVAL
 
-          @mutex.synchronize do
-            if tund.closed?
-              # puts "debug tund is closed, break send status loop #{ Time.new }"
-              break
-            end
+          if tund.closed?
+            # puts "debug tund is closed, break send status loop #{ Time.new }"
+            break
+          end
 
+          @mutex.synchronize do
             tund_info = @infos[ tund ]
 
             if tund_info[ :dest_exts ].any?
@@ -740,17 +739,17 @@ module Girl
     def loop_send_fin1( tund, dest_id )
       Thread.new do
         30.times do
+          break if tund.closed?
+
+          tund_info = @infos[ tund ]
+          break unless tund_info[ :tun_addr ]
+
+          unless tund_info[ :fin1s ].include?( dest_id )
+            # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
           @mutex.synchronize do
-            break if tund.closed?
-
-            tund_info = @infos[ tund ]
-            break unless tund_info[ :tun_addr ]
-
-            unless tund_info[ :fin1s ].include?( dest_id )
-              # puts "debug break send fin1 loop #{ Time.new } p#{ Process.pid }"
-              break
-            end
-
             ctlmsg = [
               0,
               FIN1,
@@ -769,17 +768,17 @@ module Girl
     def loop_send_fin2( tund, dest_id )
       Thread.new do
         30.times do
+          break if tund.closed?
+
+          tund_info = @infos[ tund ]
+          break unless tund_info[ :tun_addr ]
+
+          unless tund_info[ :fin2s ].include?( dest_id )
+            # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
+            break
+          end
+
           @mutex.synchronize do
-            break if tund.closed?
-
-            tund_info = @infos[ tund ]
-            break unless tund_info[ :tun_addr ]
-
-            unless tund_info[ :fin2s ].include?( dest_id )
-              # puts "debug break send fin2 loop #{ Time.new } p#{ Process.pid }"
-              break
-            end
-
             ctlmsg = [
               0,
               FIN2,

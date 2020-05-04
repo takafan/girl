@@ -210,11 +210,13 @@ module Girl
 
             if is_wait
               local_port = dst.local_address.ip_unpack.last
+              data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
 
               @dsts[ local_port ] = dst
               @dst_infos[ dst ] = {
                 local_port: local_port, # 本地端口
                 tund: tund,             # 对应tund
+                ctlmsg_paired: data,    # 记下ctlmsg paired
                 wbuff: '',              # 写前
                 cache: '',              # 块读出缓存
                 chunks: [],             # 块队列，写前达到块大小时结一个块 filename
@@ -241,7 +243,6 @@ module Girl
                 last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
               }
 
-              data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
               puts "debug1 add ctlmsg paired #{ data.inspect }"
               add_tund_ctlmsg( tund, data )
               next_tick
@@ -767,7 +768,13 @@ module Girl
           dst_local_port = tund_info[ :dst_local_ports ][ src_addr ]
           puts "debug1 got a new source #{ Addrinfo.new( src_addr ).inspect }"
 
-          return if dst_local_port
+          if dst_local_port
+            dst = @dsts[ dst_local_port ]
+            dst_info = @dst_infos[ dst ]
+            puts "debug1 readd ctlmsg paired"
+            add_tund_ctlmsg( tund, dst_info[ :ctlmsg_paired ] )
+            return
+          end
 
           tund_info[ :last_recv_at ] = now
 
