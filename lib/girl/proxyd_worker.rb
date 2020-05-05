@@ -17,6 +17,7 @@ module Girl
       @tunds = {}           # port => tund
       @tund_infos = {}      # tund => {}
       @tunneling_tunds = {} # tunneling_addr => tund
+      @resolv_caches = {}   # domain => [ ip, created_at ]
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -184,6 +185,21 @@ module Girl
     # resolve domain
     #
     def resolve_domain( tund, src_addr, destination_domain_port )
+      resolv_cache = @resolv_caches[ destination_domain_port ]
+
+      if resolv_cache
+        destination_addr, created_at = resolv_cache
+
+        if Time.new - created_at < RESOLV_CACHE_EXPIRE
+          puts "debug1 #{ destination_domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
+          deal_with_destination_addr( tund, src_addr, destination_addr )
+          return
+        end
+
+        puts "debug1 expire #{ destination_domain_port } resolv cache"
+        @resolv_caches.delete( destination_domain_port )
+      end
+
       Thread.new do
         destination_domain, destination_port = destination_domain_port.split( ':' )
         destination_port = destination_port.to_i
@@ -195,61 +211,73 @@ module Girl
         end
 
         @mutex.synchronize do
-          if destination_addr && !tund.closed?
-            puts "debug1 ctl resolved #{ Addrinfo.new( src_addr ).inspect } #{ destination_domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
-            dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-            dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+          if destination_addr
+            puts "debug1 resolved #{ destination_domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
+            @resolv_caches[ destination_domain_port ] = [ destination_addr, Time.new ]
 
-            begin
-              dst.connect_nonblock( destination_addr )
-            rescue IO::WaitWritable
-              is_wait = true
-            rescue Exception => e
-              puts "p#{ Process.pid } #{ Time.new } connect destination #{ e.class }"
-            end
-
-            if is_wait
-              local_port = dst.local_address.ip_unpack.last
-              data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
-
-              @dsts[ local_port ] = dst
-              @dst_infos[ dst ] = {
-                local_port: local_port, # 本地端口
-                tund: tund,             # 对应tund
-                ctlmsg_paired: data,    # 记下ctlmsg paired
-                wbuff: '',              # 写前
-                cache: '',              # 块读出缓存
-                chunks: [],             # 块队列，写前达到块大小时结一个块 filename
-                spring: 0,              # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
-                created_at: Time.new,   # 创建时间
-                last_recv_at: nil,      # 上一次收到流量的时间，过期关闭
-                is_closing: false       # 是否准备关闭
-              }
-              add_read( dst, :dst )
-
-              tund_info = @tund_infos[ tund ]
-              tund_info[ :dst_local_ports ][ src_addr ] = local_port
-              tund_info[ :dst_exts ][ local_port ] = {
-                dst: dst,                  # dst
-                src_addr: src_addr,        # 近端src地址
-                wmems: {},                 # 写后 pack_id => data
-                send_ats: {},              # 上一次发出时间 pack_id => send_at
-                biggest_pack_id: 0,        # 发到几
-                continue_src_pack_id: 0,   # 收到几
-                pieces: {},                # 跳号包 src_pack_id => data
-                is_src_closed: false,      # 对面是否已关闭
-                biggest_src_pack_id: 0,    # 对面发到几
-                completed_pack_id: 0,      # 完成到几（对面收到几）
-                last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
-              }
-
-              puts "debug1 add ctlmsg paired #{ data.inspect }"
-              add_tund_ctlmsg( tund, data )
-              next_tick
+            unless tund.closed?
+              if deal_with_destination_addr( tund, src_addr, destination_addr )
+                next_tick
+              end
             end
           end
         end
       end
+    end
+
+    ##
+    # deal with destination addr
+    #
+    def deal_with_destination_addr( tund, src_addr, destination_addr )
+      dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+
+      begin
+        dst.connect_nonblock( destination_addr )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } connect destination #{ e.class }"
+        return false
+      end
+
+      local_port = dst.local_address.ip_unpack.last
+      data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
+
+      @dsts[ local_port ] = dst
+      @dst_infos[ dst ] = {
+        local_port: local_port, # 本地端口
+        tund: tund,             # 对应tund
+        ctlmsg_paired: data,    # 记下ctlmsg paired
+        wbuff: '',              # 写前
+        cache: '',              # 块读出缓存
+        chunks: [],             # 块队列，写前达到块大小时结一个块 filename
+        spring: 0,              # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
+        created_at: Time.new,   # 创建时间
+        last_recv_at: nil,      # 上一次收到流量的时间，过期关闭
+        is_closing: false       # 是否准备关闭
+      }
+      add_read( dst, :dst )
+
+      tund_info = @tund_infos[ tund ]
+      tund_info[ :dst_local_ports ][ src_addr ] = local_port
+      tund_info[ :dst_exts ][ local_port ] = {
+        dst: dst,                  # dst
+        src_addr: src_addr,        # 近端src地址
+        wmems: {},                 # 写后 pack_id => data
+        send_ats: {},              # 上一次发出时间 pack_id => send_at
+        biggest_pack_id: 0,        # 发到几
+        continue_src_pack_id: 0,   # 收到几
+        pieces: {},                # 跳号包 src_pack_id => data
+        is_src_closed: false,      # 对面是否已关闭
+        biggest_src_pack_id: 0,    # 对面发到几
+        completed_pack_id: 0,      # 完成到几（对面收到几）
+        last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
+      }
+
+      puts "debug1 add ctlmsg paired #{ data.inspect }"
+      add_tund_ctlmsg( tund, data )
+
+      true
     end
 
     ##
@@ -446,13 +474,6 @@ module Girl
     end
 
     ##
-    # next tick
-    #
-    def next_tick
-      @dotw.write( '.' )
-    end
-
-    ##
     # release wmems
     #
     def release_wmems( dst_ext, completed_pack_id )
@@ -468,6 +489,13 @@ module Girl
 
         dst_ext[ :completed_pack_id ] = completed_pack_id
       end
+    end
+
+    ##
+    # next tick
+    #
+    def next_tick
+      @dotw.write( '.' )
     end
 
     ##
@@ -636,7 +664,7 @@ module Girl
       if dst_ext
         pack_id = dst_ext[ :biggest_pack_id ] + 1
 
-        if pack_id <= 5
+        if pack_id <= CONFUSE_UNTIL
           data = @custom.encode( data )
           puts "debug1 encoded pack #{ pack_id }"
         end
@@ -913,7 +941,7 @@ module Girl
       data = data[ 24..-1 ]
       # puts "debug2 got pack #{ pack_id }"
 
-      if pack_id <= 5
+      if pack_id <= CONFUSE_UNTIL
         # puts "debug2 #{ data.inspect }"
         data = @custom.decode( data )
         puts "debug1 decoded pack #{ pack_id }"

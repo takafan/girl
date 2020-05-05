@@ -13,6 +13,8 @@ module Girl
   STATUS_INTERVAL       = 0.3                    # 发送状态间隔
   SEND_STATUS_UNTIL     = 10                     # 持续的告之对面状态，直到没有流量往来，持续多少秒
   BREAK_SEND_MISS       = 10_000                 # miss包个数上限，达到上限忽略要后面的段，可控碎片缓存
+  CONFUSE_UNTIL         = 5                      # 混淆前几个包
+  RESOLV_CACHE_EXPIRE   = 300                    # dns查询结果缓存多久过期
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3

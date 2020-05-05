@@ -16,11 +16,12 @@ module Girl
       @mutex = Mutex.new
       @reads = []
       @writes = []
-      @roles = {}     # sock => :dotr / :proxy / :src / :dst / :tun
-      @srcs = {}      # src_addr => src
-      @src_infos = {} # src => {}
-      @dsts = {}      # local_port => dst
-      @dst_infos = {} # dst => {}
+      @roles = {}         # sock => :dotr / :proxy / :src / :dst / :tun
+      @srcs = {}          # src_addr => src
+      @src_infos = {}     # src => {}
+      @dsts = {}          # local_port => dst
+      @dst_infos = {}     # dst => {}
+      @resolv_caches = {} # domain => [ ip, created_at ]
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -217,6 +218,21 @@ module Girl
     # resolve domain
     #
     def resolve_domain( src, domain )
+      resolv_cache = @resolv_caches[ domain ]
+
+      if resolv_cache
+        destination_ip, created_at = resolv_cache
+
+        if Time.new - created_at < RESOLV_CACHE_EXPIRE
+          puts "debug1 #{ domain } hit resolv cache #{ destination_ip }"
+          deal_with_destination_ip( src, destination_ip )
+          return
+        end
+
+        puts "debug1 expire #{ domain } resolv cache"
+        @resolv_caches.delete( domain )
+      end
+
       Thread.new do
         begin
           ip_info = Addrinfo.ip( domain )
@@ -225,18 +241,13 @@ module Girl
         end
 
         @mutex.synchronize do
-          if ip_info && !src.closed?
-            puts "debug1 resolv #{ domain } #{ ip_info.ip_address }"
-            ip_addr = ip_info.to_sockaddr
-            destination_ip = Addrinfo.new( ip_addr ).ip_address
+          if ip_info
+            destination_ip = ip_info.ip_address
+            puts "debug1 resolved #{ domain } #{ destination_ip }"
+            @resolv_caches[ domain ] = [ destination_ip, Time.new ]
 
-            if @directs.any? { | direct | direct.include?( destination_ip ) }
-              # ip命中直连列表，直连
-              puts "debug1 #{ destination_ip } hit directs"
-              new_a_dst( src, destination_ip )
-            else
-              # 走远端
-              new_a_src_ext( src )
+            unless src.closed?
+              deal_with_destination_ip( src, destination_ip )
             end
           else
             set_is_closing( src )
@@ -244,6 +255,20 @@ module Girl
 
           next_tick
         end
+      end
+    end
+
+    ##
+    # deal with destination ip
+    #
+    def deal_with_destination_ip( src, destination_ip )
+      if @directs.any? { | direct | direct.include?( destination_ip ) }
+        # ip命中直连列表，直连
+        puts "debug1 #{ destination_ip } hit directs"
+        new_a_dst( src, destination_ip )
+      else
+        # 走远端
+        new_a_src_ext( src )
       end
     end
 
@@ -597,13 +622,6 @@ module Girl
     end
 
     ##
-    # next tick
-    #
-    def next_tick
-      @dotw.write( '.' )
-    end
-
-    ##
     # release wmems
     #
     def release_wmems( src_ext, completed_pack_id )
@@ -618,6 +636,13 @@ module Girl
 
         src_ext[ :completed_pack_id ] = completed_pack_id
       end
+    end
+
+    ##
+    # next tick
+    #
+    def next_tick
+      @dotw.write( '.' )
     end
 
     ##
@@ -818,7 +843,7 @@ module Girl
       if src_ext
         pack_id = src_ext[ :biggest_pack_id ] + 1
 
-        if pack_id <= 5
+        if pack_id <= CONFUSE_UNTIL
           data = @custom.encode( data )
           puts "debug1 encoded pack #{ pack_id }"
         end
@@ -1192,7 +1217,7 @@ module Girl
       data = data[ 10..-1 ]
       # puts "debug2 got pack #{ pack_id }"
 
-      if pack_id <= 5
+      if pack_id <= CONFUSE_UNTIL
         # puts "debug2 #{ data.inspect }"
         data = @custom.decode( data )
         puts "debug1 decoded pack #{ pack_id }"
