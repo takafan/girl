@@ -218,6 +218,12 @@ module Girl
     # resolve domain
     #
     def resolve_domain( src, domain )
+      if @remotes.any? { | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) }
+        puts "debug1 #{ domain } hit remotes"
+        new_a_src_ext( src )
+        return
+      end
+
       resolv_cache = @resolv_caches[ domain ]
 
       if resolv_cache
@@ -284,6 +290,7 @@ module Girl
       proxy.listen( 511 )
       puts "p#{ Process.pid } #{ Time.new } proxy listen on #{ proxy_port }"
       add_read( proxy, :proxy )
+      @proxy_local_address = proxy.local_address
     end
 
     ##
@@ -341,7 +348,7 @@ module Girl
       end
 
       puts "debug1 a new dst #{ dst.local_address.inspect }"
-      local_port = dst.local_address.ip_unpack.last
+      local_port = dst.local_address.ip_unpack
       @dsts[ local_port ] = dst
       @dst_infos[ dst ] = {
         local_port: local_port, # 本地端口
@@ -358,16 +365,21 @@ module Girl
       add_read( dst, :dst )
       src_info[ :proxy_type ] = :direct
       src_info[ :dst ] = dst
-      first_traffic = src_info[ :first_traffic ]
 
-      if first_traffic
-        # not CONNECT
-        puts "debug1 add first traffic to dst wbuff"
-        add_dst_wbuff( dst, first_traffic )
-      else
-        # CONNECT
-        puts "debug1 add src wbuff http ok"
-        add_src_wbuff( src, HTTP_OK )
+      if src_info[ :proxy_proto ] == :http
+        first_traffic = src_info[ :first_traffic ]
+
+        if first_traffic
+          # HTTP/1.1 not CONNECT
+          puts "debug1 add first traffic to dst wbuff"
+          add_dst_wbuff( dst, first_traffic )
+        else
+          # HTTP/1.1 CONNECT
+          puts "debug1 add src wbuff http ok"
+          add_src_wbuff( src, HTTP_OK )
+        end
+      elsif src_info[ :proxy_proto ] == :socks5
+        add_src_wbuff_socks5_conn_reply( src )
       end
     end
 
@@ -403,6 +415,21 @@ module Girl
       destination_domain_port = [ destination_domain, destination_port ].join( ':' )
       data = [ [ 0, A_NEW_SOURCE ].pack( 'Q>C' ), src_addr, @custom.encode( destination_domain_port ) ].join
       loop_send_a_new_source( src_ext, data )
+    end
+
+    ##
+    # add src wbuff socks5 conn reply
+    #
+    def add_src_wbuff_socks5_conn_reply( src )
+      # +----+-----+-------+------+----------+----------+
+      # |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+      # +----+-----+-------+------+----------+----------+
+      # | 1  |  1  | X'00' |  1   | Variable |    2     |
+      # +----+-----+-------+------+----------+----------+
+      proxy_ip, proxy_port = @proxy_local_address.ip_unpack
+      data = [ [ 5, 0, 0, 1 ].pack( 'C4' ), IPAddr.new( proxy_ip ).hton, [ proxy_port ].pack( 'n' ) ].join
+      puts "debug1 add src wbuff socks5 conn reply #{ data.inspect }"
+      add_src_wbuff( src, data )
     end
 
     ##
@@ -888,7 +915,8 @@ module Girl
       @srcs[ src_addr ] = src
       @src_infos[ src ] = {
         src_addr: src_addr,      # src地址
-        proxy_type: :unchecked,  # :unchecked / :direct / :tunnel
+        proxy_proto: :unchecked, # :http / :socks5
+        proxy_type: :unchecked,  # :unchecked / :direct / :tunnel / :negotiation / :udp
         dst: nil,                # :direct的场合，对应的dst
         is_paired: false,        # :tunnel的场合，是否和远端dst配对完成
         destination_domain: nil, # 目的地域名
@@ -928,15 +956,43 @@ module Girl
       case proxy_type
       when :unchecked
         if data[ 0, 7 ] == 'CONNECT'
-          # CONNECT
-          puts "debug1 CONNECT"
+          puts "debug1 HTTP/1.1 CONNECT"
 
           connect_to = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
           domain, port = connect_to.split( ':' )
           port = port.to_i
         else
-          # 非CONNECT，找Host
-          puts "debug1 not CONNECT"
+          # https://tools.ietf.org/html/rfc1928
+          if data[ 0 ].unpack( 'C' ).first == 5
+            # +----+----------+----------+
+            # |VER | NMETHODS | METHODS  |
+            # +----+----------+----------+
+            # | 1  |    1     | 1 to 255 |
+            # +----+----------+----------+
+            puts "debug1 socks5 #{ data.inspect }"
+            nmethods = data[ 1 ].unpack( 'C' ).first
+            methods = data[ 2, nmethods ].unpack( 'C*' )
+
+            unless methods.include?( 0 )
+              puts "p#{ Process.pid } #{ Time.new } miss method 00"
+              set_is_closing( src )
+              return
+            end
+
+            # +----+--------+
+            # |VER | METHOD |
+            # +----+--------+
+            # | 1  |   1    |
+            # +----+--------+
+            data2 = [ 5, 0 ].pack( 'CC' )
+            add_src_wbuff( src, data2 )
+
+            src_info[ :proxy_proto ] = :socks5
+            src_info[ :proxy_type ] = :negotiation
+            return
+          end
+
+          puts "debug1 HTTP/1.1 not CONNECT"
           line = data.split( "\r\n" ).find { | _line | _line[ 0, 6 ] == 'Host: ' }
 
           unless line
@@ -950,18 +1006,47 @@ module Girl
           src_info[ :first_traffic ] = data
         end
 
+        src_info[ :proxy_proto ] = :http
         src_info[ :destination_domain ] = domain
         src_info[ :destination_port ] = port
 
-        # 命中域名列表，走远端
-        if @remotes.any? { | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) }
-          puts "debug1 #{ domain } hit remotes"
-          new_a_src_ext( src )
-          return
-        end
-
-        # 解析域名
         resolve_domain( src, domain )
+      when :negotiation
+        # +----+-----+-------+------+----------+----------+
+        # |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+        # +----+-----+-------+------+----------+----------+
+        # | 1  |  1  | X'00' |  1   | Variable |    2     |
+        # +----+-----+-------+------+----------+----------+
+        puts "debug1 negotiation #{ data.inspect }"
+        ver, cmd, rsv, atyp = data[ 0, 4 ].unpack( 'C4' )
+
+        if cmd == 1
+          puts "debug1 socks5 CONNECT"
+
+          if atyp == 1
+            destination_host, destination_port = data[ 4, 6 ].unpack( 'Nn' )
+            destination_addr = Socket.sockaddr_in( destination_port, destination_host )
+            destination_addrinfo = Addrinfo.new( destination_addr )
+            destination_ip = destination_addrinfo.ip_address
+            src_info[ :destination_domain ] = destination_ip
+            src_info[ :destination_port ] = destination_port
+            puts "debug1 IP V4 address #{ destination_addrinfo.inspect }"
+            deal_with_destination_ip( src, destination_ip )
+          elsif atyp == 3
+            domain_len = data[ 4 ].unpack( 'C' ).first
+
+            if ( domain_len + 7 ) == data.bytesize
+              domain = data[ 5, domain_len ]
+              port = data[ ( 5 + domain_len ), 2 ].unpack( 'n' ).first
+              src_info[ :destination_domain ] = domain
+              src_info[ :destination_port ] = port
+              puts "debug1 DOMAINNAME #{ domain } #{ port }"
+              resolve_domain( src, domain )
+            end
+          end
+        else
+          puts "debug1 cmd #{ cmd } not implement"
+        end
       when :tunnel
         unless src_info[ :is_paired ]
           puts "debug1 unexpect traffic? #{ data.inspect } close src #{ proxy_type } #{ Addrinfo.new( src_info[ :src_addr ] ).inspect }"
@@ -1063,16 +1148,21 @@ module Girl
 
           src_info = @src_infos[ src_ext[ :src ] ]
           src_info[ :is_paired ] = true
-          first_traffic = src_info[ :first_traffic ]
 
-          if first_traffic
-            # not CONNECT
-            puts "debug1 add first traffic to tun wbuff"
-            add_tun_wbuff( src_addr, first_traffic )
-          else
-            # CONNECT
-            puts "debug1 add src wbuff http ok"
-            add_src_wbuff( src_ext[ :src ], HTTP_OK )
+          if src_info[ :proxy_proto ] == :http
+            first_traffic = src_info[ :first_traffic ]
+
+            if first_traffic
+              # HTTP/1.1 not CONNECT
+              puts "debug1 add first traffic to tun wbuff"
+              add_tun_wbuff( src_addr, first_traffic )
+            else
+              # HTTP/1.1 CONNECT
+              puts "debug1 add src wbuff http ok"
+              add_src_wbuff( src_ext[ :src ], HTTP_OK )
+            end
+          elsif src_info[ :proxy_proto ] == :socks5
+            add_src_wbuff_socks5_conn_reply( src_ext[ :src ] )
           end
         when DEST_STATUS
           return if from_addr != @tun_info[ :tund_addr ]
