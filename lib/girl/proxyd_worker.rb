@@ -12,7 +12,6 @@ module Girl
       @reads = []
       @writes = []
       @roles = {}           # sock => :dotr / :proxyd / :dst / :tund
-      @dsts = {}            # local_port => dst
       @dst_infos = {}       # dst => {}
       @tunds = {}           # port => tund
       @tund_infos = {}      # tund => {}
@@ -243,7 +242,6 @@ module Girl
       local_port = dst.local_address.ip_unpack.last
       data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
 
-      @dsts[ local_port ] = dst
       @dst_infos[ dst ] = {
         local_port: local_port, # 本地端口
         tund: tund,             # 对应tund
@@ -409,13 +407,11 @@ module Girl
         end
       end
 
-      local_port = dst_info[ :local_port ]
-      @dsts.delete( local_port )
-
       tund = dst_info[ :tund ]
       return if tund.closed?
 
       tund_info = @tund_infos[ tund ]
+      local_port = dst_info[ :local_port ]
       dst_ext = tund_info[ :dst_exts ][ local_port ]
       return unless dst_ext
 
@@ -797,8 +793,8 @@ module Girl
           puts "debug1 got a new source #{ Addrinfo.new( src_addr ).inspect }"
 
           if dst_local_port
-            dst = @dsts[ dst_local_port ]
-            dst_info = @dst_infos[ dst ]
+            dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
+            dst_info = @dst_infos[ dst_ext[ :dst ] ]
             puts "debug1 readd ctlmsg paired"
             add_tund_ctlmsg( tund, dst_info[ :ctlmsg_paired ] )
             return

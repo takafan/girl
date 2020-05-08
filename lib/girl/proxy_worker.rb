@@ -17,7 +17,6 @@ module Girl
       @reads = []
       @writes = []
       @roles = {}         # sock => :dotr / :proxy / :src / :dst / :tun
-      @srcs = {}          # src_addr => src
       @src_infos = {}     # src => {}
       @dsts = {}          # local_port => dst
       @dst_infos = {}     # dst => {}
@@ -568,7 +567,6 @@ module Girl
       end
 
       src_addr = src_info[ :src_addr ]
-      @srcs.delete( src_addr )
 
       if src_info[ :proxy_type ] == :tunnel
         return if @tun.closed?
@@ -912,13 +910,11 @@ module Girl
 
       puts "debug1 accept a src #{ addrinfo.inspect }"
       src_addr = addrinfo.to_sockaddr
-      @srcs[ src_addr ] = src
       @src_infos[ src ] = {
         src_addr: src_addr,      # src地址
         proxy_proto: :unchecked, # :http / :socks5
         proxy_type: :unchecked,  # :unchecked / :direct / :tunnel / :negotiation / :udp
         dst: nil,                # :direct的场合，对应的dst
-        is_paired: false,        # :tunnel的场合，是否和远端dst配对完成
         destination_domain: nil, # 目的地域名
         destination_port: nil,   # 目的地端口
         first_traffic: nil,      # 非CONNECT，暂存第一段流量
@@ -1048,7 +1044,9 @@ module Girl
           puts "debug1 cmd #{ cmd } not implement"
         end
       when :tunnel
-        unless src_info[ :is_paired ]
+        src_ext = @tun_info[ :src_exts ][ src_info[ :src_addr ] ]
+
+        if src_ext.nil? || src_ext[ :dst_port ].nil?
           puts "debug1 unexpect traffic? #{ data.inspect } close src #{ proxy_type } #{ Addrinfo.new( src_info[ :src_addr ] ).inspect }"
           set_is_closing( src )
           return
@@ -1147,7 +1145,6 @@ module Girl
           @tun_info[ :src_addrs ][ dst_port ] = src_addr
 
           src_info = @src_infos[ src_ext[ :src ] ]
-          src_info[ :is_paired ] = true
 
           if src_info[ :proxy_proto ] == :http
             first_traffic = src_info[ :first_traffic ]
