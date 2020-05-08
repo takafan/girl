@@ -572,7 +572,7 @@ module Girl
         return if @tun.closed?
 
         src_ext = @tun_info[ :src_exts ][ src_addr ]
-        return unless src_ext
+        return if src_ext.nil? || src_ext[ :dst_port ].nil?
 
         if src_ext[ :is_dst_closed ]
           puts "debug1 2-2. after close src -> dst closed ? yes -> del src ext -> send fin2"
@@ -1141,6 +1141,12 @@ module Girl
           @tun_info[ :last_recv_at ] = now
 
           puts "debug1 got paired #{ Addrinfo.new( src_addr ).inspect } #{ dst_port }"
+
+          if dst_port == 0
+            set_is_closing( src_ext[ :src ] )
+            return
+          end
+
           src_ext[ :dst_port ] = dst_port
           @tun_info[ :src_addrs ][ dst_port ] = src_addr
 

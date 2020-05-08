@@ -240,12 +240,10 @@ module Girl
       end
 
       local_port = dst.local_address.ip_unpack.last
-      data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
 
       @dst_infos[ dst ] = {
         local_port: local_port, # 本地端口
         tund: tund,             # 对应tund
-        ctlmsg_paired: data,    # 记下ctlmsg paired
         wbuff: '',              # 写前
         cache: '',              # 块读出缓存
         chunks: [],             # 块队列，写前达到块大小时结一个块 filename
@@ -272,6 +270,7 @@ module Girl
         last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
       }
 
+      data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
       puts "debug1 add ctlmsg paired #{ data.inspect }"
       add_tund_ctlmsg( tund, data )
 
@@ -794,9 +793,15 @@ module Girl
 
           if dst_local_port
             dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
-            dst_info = @dst_infos[ dst_ext[ :dst ] ]
-            puts "debug1 readd ctlmsg paired"
-            add_tund_ctlmsg( tund, dst_info[ :ctlmsg_paired ] )
+            return unless dst_ext
+
+            if dst_ext[ :dst ].closed?
+              dst_local_port = 0
+            end
+
+            puts "debug1 readd ctlmsg paired #{ dst_local_port }"
+            data2 = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ dst_local_port ].pack( 'n' ) ].join
+            add_tund_ctlmsg( tund, data2 )
             return
           end
 

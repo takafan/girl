@@ -30,6 +30,7 @@ module Girl
         conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
         proxyd_port = conf[ :proxyd_port ]
         proxyd_tmp_dir = conf[ :proxyd_tmp_dir ]
+        worker_count = conf[ :worker_count ]
       end
 
       unless proxyd_port
@@ -60,7 +61,10 @@ module Girl
       end
 
       nprocessors = Etc.nprocessors
-      worker_count = nprocessors
+
+      if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors
+        worker_count = nprocessors
+      end
 
       title = "girl proxyd #{ Girl::VERSION }"
       puts "debug1 #{ title }"
