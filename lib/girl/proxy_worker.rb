@@ -366,16 +366,19 @@ module Girl
       src_info[ :dst ] = dst
 
       if src_info[ :proxy_proto ] == :http
-        first_traffic = src_info[ :first_traffic ]
+        datas = src_info[ :rbuffs ]
 
-        if first_traffic
-          # HTTP/1.1 not CONNECT
-          puts "debug1 add first traffic to dst wbuff"
-          add_dst_wbuff( dst, first_traffic )
-        else
+        if datas.empty?
           # HTTP/1.1 CONNECT
           puts "debug1 add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
+        else
+          # HTTP/1.1 not CONNECT
+          puts "debug1 add src rbuffs to dst wbuff"
+
+          datas.each do | data |
+            add_dst_wbuff( dst, data )
+          end
         end
       elsif src_info[ :proxy_proto ] == :socks5
         add_src_wbuff_socks5_conn_reply( src )
@@ -917,7 +920,7 @@ module Girl
         dst: nil,                # :direct的场合，对应的dst
         destination_domain: nil, # 目的地域名
         destination_port: nil,   # 目的地端口
-        first_traffic: nil,      # 非CONNECT，暂存第一段流量
+        rbuffs: [],              # 非CONNECT，dst或者远端dst未准备好，暂存流量
         wbuff: '',               # 写前
         cache: '',               # 块读出缓存
         chunks: [],              # 块队列，写前达到块大小时结一个块 filename
@@ -999,7 +1002,7 @@ module Girl
 
           domain, port = line.split( ' ' )[ 1 ].split( ':' )
           port = port ? port.to_i : 80
-          src_info[ :first_traffic ] = data
+          src_info[ :rbuffs ] << data
         end
 
         src_info[ :proxy_proto ] = :http
@@ -1044,31 +1047,42 @@ module Girl
           puts "debug1 cmd #{ cmd } not implement"
         end
       when :tunnel
-        src_ext = @tun_info[ :src_exts ][ src_info[ :src_addr ] ]
+        src_addr = src_info[ :src_addr ]
+        src_ext = @tun_info[ :src_exts ][ src_addr ]
 
-        if src_ext.nil? || src_ext[ :dst_port ].nil?
-          puts "debug1 unexpect traffic? #{ data.inspect } close src #{ proxy_type } #{ Addrinfo.new( src_info[ :src_addr ] ).inspect }"
+        unless src_ext
+          puts "debug1 not found src ext"
           set_is_closing( src )
           return
         end
 
-        add_tun_wbuff( src_info[ :src_addr ], data )
+        if src_ext[ :dst_port ]
+          if @tun.closed?
+            puts "debug1 tun closed, close src"
+            set_is_closing( src )
+            return
+          end
+
+          add_tun_wbuff( src_addr, data )
+        else
+          puts "debug1 remote dst not ready, save data to src rbuff"
+          src_info[ :rbuffs ] << data
+        end
       when :direct
         dst = src_info[ :dst ]
 
-        unless dst
-          puts "debug1 unexpect traffic? #{ data.inspect } close src #{ proxy_type } #{ Addrinfo.new( src_info[ :src_addr ] ).inspect }"
-          set_is_closing( src )
-          return
-        end
+        if dst
+          if dst.closed?
+            puts "debug1 dst closed, close src"
+            set_is_closing( src )
+            return
+          end
 
-        if dst.closed?
-          puts "p#{ Process.pid } #{ Time.new } dst closed, close src"
-          set_is_closing( src )
-          return
+          add_dst_wbuff( dst, data )
+        else
+          puts "debug1 dst not ready, save data to src rbuff"
+          src_info[ :rbuffs ] << data
         end
-
-        add_dst_wbuff( dst, data )
       end
     end
 
@@ -1136,33 +1150,39 @@ module Girl
           dst_port = data[ 25, 2 ].unpack( 'n' ).first
 
           src_ext = @tun_info[ :src_exts ][ src_addr ]
-          return if src_ext.nil? || src_ext[ :src ].closed? || src_ext[ :dst_port ]
+          return if src_ext.nil? || src_ext[ :dst_port ]
+
+          src = src_ext[ :src ]
+          return if src.closed?
 
           @tun_info[ :last_recv_at ] = now
 
           puts "debug1 got paired #{ Addrinfo.new( src_addr ).inspect } #{ dst_port }"
 
           if dst_port == 0
-            set_is_closing( src_ext[ :src ] )
+            set_is_closing( src )
             return
           end
 
           src_ext[ :dst_port ] = dst_port
           @tun_info[ :src_addrs ][ dst_port ] = src_addr
 
-          src_info = @src_infos[ src_ext[ :src ] ]
+          src_info = @src_infos[ src ]
 
           if src_info[ :proxy_proto ] == :http
-            first_traffic = src_info[ :first_traffic ]
+            datas = src_info[ :rbuffs ]
 
-            if first_traffic
-              # HTTP/1.1 not CONNECT
-              puts "debug1 add first traffic to tun wbuff"
-              add_tun_wbuff( src_addr, first_traffic )
-            else
+            if datas.empty?
               # HTTP/1.1 CONNECT
               puts "debug1 add src wbuff http ok"
-              add_src_wbuff( src_ext[ :src ], HTTP_OK )
+              add_src_wbuff( src, HTTP_OK )
+            else
+              # HTTP/1.1 not CONNECT
+              puts "debug1 add src rbuffs to tun wbuffs"
+
+              datas.each do | _data |
+                add_tun_wbuff( src_addr, _data )
+              end
             end
           elsif src_info[ :proxy_proto ] == :socks5
             add_src_wbuff_socks5_conn_reply( src_ext[ :src ] )
