@@ -56,15 +56,9 @@ udp的快，是指：低延迟。如果家用电信线路不行，你希望通�
 
 但udp不能区分国内外。因为p2p的存在。要是把国内ip段设为直连，采用p2p联机的游戏会怎么样：游戏匹配服务器在海外，匹配到国内玩家，他从他洞里出来穿你（映射到远端的）洞，通。你却不走打好的洞突然直连穿他，不通。因此，要么不走，要么统统走，并且接受：和远的人连变快的同时，和近的人连变慢了。
 
-通常游戏不会特意去支持代理，而是靠操作系统支持，作用在有线，或者wifi连接上。http代理不会代理udp，socks5会。windows和macos同时支持http和socks5代理。ios，android，ps4，switch，仅支持http代理。妹子接http代理，也接socks5代理，接socks5的场合，udp一律送远端。平时用http代理，打实时连线的外服游戏时，例如吃鸡，街霸，换socks5代理。
+并且，现实中，udp代理是不存在的。首先，http代理不支持udp，也就是说，ios，android，ps4，switch，不支持。然后，windows和macos可设socks5，socks5支持udp。但走不走代理，还是由应用程序实现，实现socks5，有的，但实现socks5中的UDP ASSOCIATE部分，没见过。所以，udp代理是不存在的。想使p2p联机变快，办法只有一个：vpn。
 
-```
-流量 -> socks5代理 -> 妹子近端 -> tcp -> 同http代理
-                             \
-                              `- udp ----------> 远端 -> 目的地
-```
-
-最后，ping值要低。
+另附一个黑客向的办法：借助iptables把udp跳转到自己的端口，然后去/proc/net/nf_conntrack里找出源目的地，透明转发。
 
 ## 使用篇
 
