@@ -67,11 +67,11 @@ module Girl
       end
 
       title = "girl proxyd #{ Girl::VERSION }"
-      puts "debug1 #{ title }"
-      puts "debug1 proxyd port #{ proxyd_port }"
-      puts "debug1 dst chunk dir #{ dst_chunk_dir }"
-      puts "debug1 tund chunk dir #{ tund_chunk_dir }"
-      puts "debug1 worker count #{ worker_count }"
+      puts title
+      puts "proxyd port #{ proxyd_port }"
+      puts "dst chunk dir #{ dst_chunk_dir }"
+      puts "tund chunk dir #{ tund_chunk_dir }"
+      puts "worker count #{ worker_count }"
 
       $0 = title
       workers = []

@@ -75,12 +75,12 @@ module Girl
 
       @tund_infos.each do | tund, tund_info |
         if !tund.closed? && tund_info[ :tun_addr ]
-          puts "debug1 send tund fin"
+          # puts "debug1 send tund fin"
           tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
         end
       end
 
-      puts "debug1 exit"
+      # puts "debug1 exit"
       exit
     end
 
@@ -190,12 +190,12 @@ module Girl
         destination_addr, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE
-          puts "debug1 #{ destination_domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
+          # puts "debug1 #{ destination_domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
           deal_with_destination_addr( tund, src_addr, destination_addr )
           return
         end
 
-        puts "debug1 expire #{ destination_domain_port } resolv cache"
+        # puts "debug1 expire #{ destination_domain_port } resolv cache"
         @resolv_caches.delete( destination_domain_port )
       end
 
@@ -211,7 +211,7 @@ module Girl
 
         @mutex.synchronize do
           if destination_addr
-            puts "debug1 resolved #{ destination_domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
+            # puts "debug1 resolved #{ destination_domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
             @resolv_caches[ destination_domain_port ] = [ destination_addr, Time.new ]
 
             unless tund.closed?
@@ -271,7 +271,7 @@ module Girl
       }
 
       data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
-      puts "debug1 add ctlmsg paired #{ data.inspect }"
+      # puts "debug1 add ctlmsg paired #{ data.inspect }"
       add_tund_ctlmsg( tund, data )
 
       true
@@ -320,7 +320,15 @@ module Girl
         filename = "#{ Process.pid }-#{ tund_info[ :port ] }.#{ spring }"
         chunk_path = File.join( @tund_chunk_dir, filename )
         wbuffs = tund_info[ :wbuffs ].map{ | _dst_local_port, _data | [ [ _dst_local_port, _data.bytesize ].pack( 'nn' ), _data ].join }
-        IO.binwrite( chunk_path, wbuffs.join )
+
+        begin
+          IO.binwrite( chunk_path, wbuffs.join )
+        rescue Errno::ENOSPC => e
+          puts "p#{ Process.pid } #{ Time.new } #{ e.class }, close tund"
+          set_is_closing( tund )
+          return
+        end
+
         tund_info[ :chunks ] << filename
         tund_info[ :spring ] = spring
         tund_info[ :wbuffs ].clear
@@ -340,7 +348,15 @@ module Girl
         spring = dst_info[ :chunks ].size > 0 ? ( dst_info[ :spring ] + 1 ) : 0
         filename = "#{ Process.pid }-#{ dst_info[ :local_port ] }.#{ spring }"
         chunk_path = File.join( @dst_chunk_dir, filename )
-        IO.binwrite( chunk_path, dst_info[ :wbuff ] )
+
+        begin
+          IO.binwrite( chunk_path, dst_info[ :wbuff ] )
+        rescue Errno::ENOSPC => e
+          puts "p#{ Process.pid } #{ Time.new } #{ e.class }, close dst"
+          set_is_closing( dst )
+          return
+        end
+
         dst_info[ :chunks ] << filename
         dst_info[ :spring ] = spring
         dst_info[ :wbuff ].clear
@@ -375,7 +391,7 @@ module Girl
     def set_is_closing( sock )
       if sock && !sock.closed?
         role = @roles[ sock ]
-        puts "debug1 set #{ role.to_s } is closing"
+        # puts "debug1 set #{ role.to_s } is closing"
 
         case role
         when :dst
@@ -395,7 +411,7 @@ module Girl
     # close dst
     #
     def close_dst( dst )
-      puts "debug1 close dst"
+      # puts "debug1 close dst"
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
 
@@ -415,12 +431,12 @@ module Girl
       return unless dst_ext
 
       if dst_ext[ :is_src_closed ]
-        puts "debug1 2-2. after close dst -> src closed ? yes -> del dst ext -> send fin2"
+        # puts "debug1 2-2. after close dst -> src closed ? yes -> del dst ext -> send fin2"
         del_dst_ext( tund, local_port )
         data = [ 0, FIN2, local_port ].pack( 'Q>Cn' )
         add_tund_ctlmsg( tund, data )
       else
-        puts "debug1 1-1. after close dst -> src closed ? no -> send fin1"
+        # puts "debug1 1-1. after close dst -> src closed ? no -> send fin1"
         data = [ 0, FIN1, local_port, dst_ext[ :biggest_pack_id ], dst_ext[ :continue_src_pack_id ] ].pack( 'Q>CnQ>Q>' )
         add_tund_ctlmsg( tund, data )
       end
@@ -430,7 +446,7 @@ module Girl
     # close tun
     #
     def close_tund( tund )
-      puts "debug1 close tund"
+      # puts "debug1 close tund"
       close_sock( tund )
 
       tund_info = @tund_infos.delete( tund )
@@ -553,7 +569,7 @@ module Girl
       rescue IO::WaitWritable, Errno::EINTR
         return
       rescue Exception => e
-        puts "debug1 write dst #{ e.class }"
+        # puts "debug1 write dst #{ e.class }"
         close_dst( dst )
         return
       end
@@ -661,7 +677,7 @@ module Girl
 
         if pack_id <= CONFUSE_UNTIL
           data = @custom.encode( data )
-          puts "debug1 encoded pack #{ pack_id }"
+          # puts "debug1 encoded pack #{ pack_id }"
         end
 
         data = [ [ pack_id, dst_local_port ].pack( 'Q>n' ), data ].join
@@ -746,7 +762,7 @@ module Girl
       rescue IO::WaitReadable, Errno::EINTR
         return
       rescue Exception => e
-        puts "debug1 read dst #{ e.class }"
+        # puts "debug1 read dst #{ e.class }"
         set_is_closing( dst )
         return
       end
@@ -789,7 +805,7 @@ module Girl
         when A_NEW_SOURCE
           src_addr = data[ 9, 16 ]
           dst_local_port = tund_info[ :dst_local_ports ][ src_addr ]
-          puts "debug1 got a new source #{ Addrinfo.new( src_addr ).inspect }"
+          # puts "debug1 got a new source #{ Addrinfo.new( src_addr ).inspect }"
 
           if dst_local_port
             dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
@@ -799,7 +815,7 @@ module Girl
               dst_local_port = 0
             end
 
-            puts "debug1 readd ctlmsg paired #{ dst_local_port }"
+            # puts "debug1 readd ctlmsg paired #{ dst_local_port }"
             data2 = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ dst_local_port ].pack( 'n' ) ].join
             add_tund_ctlmsg( tund, data2 )
             return
@@ -808,7 +824,7 @@ module Girl
           tund_info[ :last_recv_at ] = now
 
           data = data[ 25..-1 ]
-          puts "debug1 #{ data }"
+          # puts "debug1 #{ data }"
           destination_domain_port = @custom.decode( data )
           resolve_domain( tund, src_addr, destination_domain_port )
         when SOURCE_STATUS
@@ -831,7 +847,7 @@ module Girl
 
             # 接到对面状态，若对面已关闭，且最后一个包已经进写前，关闭dst
             if dst_ext[ :is_src_closed ] && ( biggest_src_pack_id == dst_ext[ :continue_src_pack_id ] )
-              puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
+              # puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
               set_is_closing( dst_ext[ :dst ] )
             end
           end
@@ -856,7 +872,7 @@ module Girl
             end
 
             pack_count = 0
-            puts "debug1 continue/biggest #{ dst_ext[ :continue_src_pack_id ] }/#{ dst_ext[ :biggest_src_pack_id ] } send MISS #{ ranges.size }"
+            # puts "debug1 continue/biggest #{ dst_ext[ :continue_src_pack_id ] }/#{ dst_ext[ :biggest_src_pack_id ] } send MISS #{ ranges.size }"
 
             ranges.each do | pack_id_begin, pack_id_end |
               if pack_count >= BREAK_SEND_MISS
@@ -899,14 +915,14 @@ module Girl
 
           tund_info[ :last_recv_at ] = now
 
-          puts "debug1 got fin1 #{ Addrinfo.new( src_addr ).inspect } biggest src pack #{ biggest_src_pack_id } completed dst pack #{ continue_dst_pack_id }"
+          # puts "debug1 got fin1 #{ Addrinfo.new( src_addr ).inspect } biggest src pack #{ biggest_src_pack_id } completed dst pack #{ continue_dst_pack_id }"
           dst_ext[ :is_src_closed ] = true
           dst_ext[ :biggest_src_pack_id ] = biggest_src_pack_id
           release_wmems( dst_ext, continue_dst_pack_id )
 
           # 接到对面已关闭，若最后一个包已经进写前，关闭dst
           if biggest_src_pack_id == dst_ext[ :continue_src_pack_id ]
-            puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
+            # puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
             set_is_closing( dst_ext[ :dst ] )
           end
         when FIN2
@@ -917,7 +933,7 @@ module Girl
 
           tund_info[ :last_recv_at ] = now
 
-          puts "debug1 1-2. recv fin2 -> del dst ext"
+          # puts "debug1 1-2. recv fin2 -> del dst ext"
           del_dst_ext( tund, dst_local_port )
         when TUN_FIN
           puts "p#{ Process.pid } #{ Time.new } recv tun fin"
@@ -945,7 +961,7 @@ module Girl
       if pack_id <= CONFUSE_UNTIL
         # puts "debug2 #{ data.inspect }"
         data = @custom.decode( data )
-        puts "debug1 decoded pack #{ pack_id }"
+        # puts "debug1 decoded pack #{ pack_id }"
       end
 
       # 放进写前，跳号放碎片缓存
@@ -962,7 +978,7 @@ module Girl
 
         # 接到流量，若对面已关闭，且流量正好收全，关闭dst
         if dst_ext[ :is_src_closed ] && ( pack_id == dst_ext[ :biggest_src_pack_id ] )
-          puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
+          # puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
           set_is_closing( dst_ext[ :dst ] )
           return
         end

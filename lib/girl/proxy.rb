@@ -151,17 +151,17 @@ module Girl
       end
 
       title = "girl proxy #{ Girl::VERSION }"
-      puts "debug1 #{ title }"
-      puts "debug1 proxy port #{ proxy_port }"
-      puts "debug1 proxyd host #{ proxyd_host }"
-      puts "debug1 proxyd port #{ proxyd_port }"
-      puts "debug1 #{ direct_path } #{ directs.size } directs"
-      puts "debug1 #{ remote_path } #{ remotes.size } remotes"
-      puts "debug1 src chunk dir #{ src_chunk_dir }"
-      puts "debug1 dst chunk dir #{ dst_chunk_dir }"
-      puts "debug1 tun chunk dir #{ tun_chunk_dir }"
-      puts "debug1 im #{ im }"
-      puts "debug1 worker count #{ worker_count }"
+      puts title
+      puts "proxy port #{ proxy_port }"
+      puts "proxyd host #{ proxyd_host }"
+      puts "proxyd port #{ proxyd_port }"
+      puts "#{ direct_path } #{ directs.size } directs"
+      puts "#{ remote_path } #{ remotes.size } remotes"
+      puts "src chunk dir #{ src_chunk_dir }"
+      puts "dst chunk dir #{ dst_chunk_dir }"
+      puts "tun chunk dir #{ tun_chunk_dir }"
+      puts "im #{ im }"
+      puts "worker count #{ worker_count }"
 
       $0 = title
       workers = []
