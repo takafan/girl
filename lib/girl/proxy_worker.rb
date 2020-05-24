@@ -217,6 +217,12 @@ module Girl
     # resolve domain
     #
     def resolve_domain( src, domain )
+      if ( /\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\Z/ =~ domain ) && domain.split( '.' ).all? { | part | part.to_i < 256 }
+        # puts "debug1 #{ domain } is a ip"
+        deal_with_destination_ip( src, domain )
+        return
+      end
+
       if @remotes.any? { | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) }
         # puts "debug1 #{ domain } hit remotes"
         new_a_src_ext( src )
@@ -237,6 +243,9 @@ module Girl
         # puts "debug1 expire #{ domain } resolv cache"
         @resolv_caches.delete( domain )
       end
+
+      src_info = @src_infos[ src ]
+      src_info[ :proxy_type ] = :checking
 
       Thread.new do
         begin
@@ -369,11 +378,11 @@ module Girl
         datas = src_info[ :rbuffs ]
 
         if datas.empty?
-          # HTTP/1.1 CONNECT
+          # CONNECT
           # puts "debug1 add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
         else
-          # HTTP/1.1 not CONNECT
+          # not CONNECT
           # puts "debug1 add src rbuffs to dst wbuff"
 
           datas.each do | data |
@@ -432,6 +441,21 @@ module Girl
       data = [ [ 5, 0, 0, 1 ].pack( 'C4' ), IPAddr.new( proxy_ip ).hton, [ proxy_port ].pack( 'n' ) ].join
       # puts "debug1 add src wbuff socks5 conn reply #{ data.inspect }"
       add_src_wbuff( src, data )
+    end
+
+    ##
+    # sub http request
+    #
+    def sub_http_request( data )
+      method, url, proto = data.split( "\r\n" ).first.split( ' ' )
+
+      if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://'
+        domain_and_port = url.split( '/' )[ 2 ]
+        data = data.sub( "http://#{ domain_and_port }", '' )
+        # puts "debug1 subed #{ data.inspect } #{ domain_and_port }"
+      end
+
+      [ data, domain_and_port ]
     end
 
     ##
@@ -939,8 +963,8 @@ module Girl
       src_addr = addrinfo.to_sockaddr
       @src_infos[ src ] = {
         src_addr: src_addr,      # src地址
-        proxy_proto: :unchecked, # :http / :socks5
-        proxy_type: :unchecked,  # :unchecked / :direct / :tunnel / :negotiation / :udp
+        proxy_proto: :uncheck,   # :uncheck / :http / :socks5
+        proxy_type: :uncheck,    # :uncheck / :checking / :direct / :tunnel / :negotiation
         dst: nil,                # :direct的场合，对应的dst
         destination_domain: nil, # 目的地域名
         destination_port: nil,   # 目的地端口
@@ -977,63 +1001,72 @@ module Girl
       proxy_type = src_info[ :proxy_type ]
 
       case proxy_type
-      when :unchecked
+      when :uncheck
         if data[ 0, 7 ] == 'CONNECT'
-          # puts "debug1 HTTP/1.1 CONNECT"
+          # puts "debug1 CONNECT"
+          domain_and_port = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
+        elsif data[ 0 ].unpack( 'C' ).first == 5
+          # puts "debug1 socks5 #{ data.inspect }"
 
-          connect_to = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
-          domain, port = connect_to.split( ':' )
-          port = port.to_i
-        else
           # https://tools.ietf.org/html/rfc1928
-          if data[ 0 ].unpack( 'C' ).first == 5
-            # +----+----------+----------+
-            # |VER | NMETHODS | METHODS  |
-            # +----+----------+----------+
-            # | 1  |    1     | 1 to 255 |
-            # +----+----------+----------+
-            # puts "debug1 socks5 #{ data.inspect }"
-            nmethods = data[ 1 ].unpack( 'C' ).first
-            methods = data[ 2, nmethods ].unpack( 'C*' )
+          #
+          # +----+----------+----------+
+          # |VER | NMETHODS | METHODS  |
+          # +----+----------+----------+
+          # | 1  |    1     | 1 to 255 |
+          # +----+----------+----------+
+          nmethods = data[ 1 ].unpack( 'C' ).first
+          methods = data[ 2, nmethods ].unpack( 'C*' )
 
-            unless methods.include?( 0 )
-              puts "p#{ Process.pid } #{ Time.new } miss method 00"
-              set_is_closing( src )
-              return
-            end
-
-            # +----+--------+
-            # |VER | METHOD |
-            # +----+--------+
-            # | 1  |   1    |
-            # +----+--------+
-            data2 = [ 5, 0 ].pack( 'CC' )
-            add_src_wbuff( src, data2 )
-
-            src_info[ :proxy_proto ] = :socks5
-            src_info[ :proxy_type ] = :negotiation
-            return
-          end
-
-          # puts "debug1 HTTP/1.1 not CONNECT"
-          line = data.split( "\r\n" ).find { | _line | _line[ 0, 6 ] == 'Host: ' }
-
-          unless line
-            # puts "debug1 not found Host #{ data.inspect }"
+          unless methods.include?( 0 )
+            puts "p#{ Process.pid } #{ Time.new } miss method 00"
             set_is_closing( src )
             return
           end
 
-          domain, port = line.split( ' ' )[ 1 ].split( ':' )
-          port = port ? port.to_i : 80
+          # +----+--------+
+          # |VER | METHOD |
+          # +----+--------+
+          # | 1  |   1    |
+          # +----+--------+
+          data2 = [ 5, 0 ].pack( 'CC' )
+          add_src_wbuff( src, data2 )
+
+          src_info[ :proxy_proto ] = :socks5
+          src_info[ :proxy_type ] = :negotiation
+
+          return
+        else
+          # puts "debug1 not CONNECT #{ data.inspect }"
+          host_line = data.split( "\r\n" ).find { | _line | _line[ 0, 6 ] == 'Host: ' }
+
+          unless host_line
+            # puts "debug1 not found host line"
+            set_is_closing( src )
+            return
+          end
+
+          data, domain_and_port = sub_http_request( data )
+
+          unless domain_and_port
+            # puts "debug1 not HTTP"
+            domain_and_port = host_line.split( ' ' )[ 1 ]
+          end
+
           src_info[ :rbuffs ] << data
         end
+
+        domain, port = domain_and_port.split( ':' )
+        port = port ? port.to_i : 80
 
         src_info[ :proxy_proto ] = :http
         src_info[ :destination_domain ] = domain
         src_info[ :destination_port ] = port
 
         resolve_domain( src, domain )
+      when :checking
+        # puts "debug1 add src rbuff while checking #{ data.inspect }"
+        src_info[ :rbuffs ] << data
       when :negotiation
         # +----+-----+-------+------+----------+----------+
         # |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -1068,7 +1101,7 @@ module Girl
             end
           end
         else
-          # puts "debug1 cmd #{ cmd } not implement"
+          puts "p#{ Process.pid } #{ Time.new } socks5 cmd #{ cmd } not implement"
         end
       when :tunnel
         src_addr = src_info[ :src_addr ]
@@ -1087,6 +1120,10 @@ module Girl
             return
           end
 
+          if src_info[ :rbuffs ].any?
+            data, _ = sub_http_request( data )
+          end
+
           add_tun_wbuff( src_addr, data )
         else
           # puts "debug1 remote dst not ready, save data to src rbuff"
@@ -1100,6 +1137,10 @@ module Girl
             # puts "debug1 dst closed, close src"
             set_is_closing( src )
             return
+          end
+
+          if src_info[ :rbuffs ].any?
+            data, _ = sub_http_request( data )
           end
 
           add_dst_wbuff( dst, data )
@@ -1197,11 +1238,11 @@ module Girl
             datas = src_info[ :rbuffs ]
 
             if datas.empty?
-              # HTTP/1.1 CONNECT
+              # CONNECT
               # puts "debug1 add src wbuff http ok"
               add_src_wbuff( src, HTTP_OK )
             else
-              # HTTP/1.1 not CONNECT
+              # not CONNECT
               # puts "debug1 add src rbuffs to tun wbuffs"
 
               datas.each do | _data |
