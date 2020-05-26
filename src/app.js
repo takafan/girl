@@ -8,19 +8,9 @@ export default {
       this.systemctl( command, 'hostapd' )
     },
 
-    check_tun: function( checked ) {
+    check_proxy: function( checked ) {
       let command = checked ? 'enable' : 'disable'
-      this.systemctl( command, 'tun' )
-    },
-
-    check_resolv: function( checked ) {
-      let command = checked ? 'enable' : 'disable'
-      this.systemctl( command, 'resolv' )
-    },
-
-    check_udp: function( checked ) {
-      let command = checked ? 'enable' : 'disable'
-      this.systemctl( command, 'udp' )
+      this.systemctl( command, 'proxy' )
     },
 
     ip: function() {
@@ -64,6 +54,7 @@ export default {
         this.poppings = poppings
         this.loadings = loadings
         this.texts = data.texts
+        this.conf = JSON.parse( data.texts[ 'girl.conf.json' ] )
         this.is_locked = data.is_locked
         this.measure_temp = data.measure_temp
       }).catch( err => {
@@ -96,14 +87,12 @@ export default {
 
       this.editing = service
 
-      if ( service == 'tun' ) {
-        let text = this.texts[ 'girl.tund' ]
-        if ( !text ) {
+      if ( service == 'proxy' ) {
+        let conf = this.conf
+        if ( !conf ) {
           return
         }
-        let host = text.split( "\n" )[ 0 ]
-        let im = this.texts[ 'girl.im' ].split( "\n" )[ 0 ].split( ':' )[ 0 ]
-        axios.get( 'http://' + host + ':3000/expire_info/' + im ).then( res => {
+        axios.get( 'http://' + conf.proxyd_host + ':3000/expire_info/' + conf.im ).then( res => {
           let data = res.data
           this.expire_info.input = data.input
           this.expire_info.output = data.output
@@ -170,15 +159,11 @@ export default {
         start: '启动',
         status: '刷新',
         stop: '停止',
-        tun: '网关近端',
-        resolv: 'dns近端',
-        udp: 'udp近端',
+        proxy: '代理近端',
         'dnsmasq.d/wlan0.conf': 'dhcp租约配置',
         'dhcpcd.conf': '网卡配置',
-        'girl.custom.txt': '自定义',
-        'girl.tund': '远端地址',
-        'hostapd.conf': '热点配置',
-        'nameservers.txt': 'dns默认地址'
+        'girl.remote.txt': '交给远端解析的域名列表',
+        'hostapd.conf': '热点配置'
       }
     }
   }

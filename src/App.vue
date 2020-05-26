@@ -2,20 +2,20 @@
   <div id="app">
     <div id="header">
       <div><img src="./assets/bear.jpg" /></div>
-      <div v-if="texts[ 'girl.im' ]">{{ texts[ 'girl.im' ].replace( new RegExp( /\n/, 'g' ), '' ) }}</div>
+      <div v-if="conf.im">{{ conf.im }}</div>
       <div class="right" v-if="is_locked"><i class="el-icon-lock"></i></div>
     </div>
 
     <div id="main">
-      <!-- 网关近端 -->
+      <!-- 代理近端 -->
       <el-row class="row">
         <el-col>
-          <div class="title">{{ translates.tun }}</div>
-          <div class="interval" v-on:click="show_service( 'tun' )">
-            <span class="output" v-if="enableds.tun">Auto;&nbsp;</span>
-            <span class="output" v-html="colour_actives.tun"></span>
+          <div class="title">{{ translates.proxy }}</div>
+          <div class="interval" v-on:click="show_service( 'proxy' )">
+            <span class="output" v-if="enableds.proxy">Auto;&nbsp;</span>
+            <span class="output" v-html="colour_actives.proxy"></span>
           </div>
-          <div v-if="editing == 'tun' && !is_locked" class="mw600">
+          <div v-if="editing == 'proxy' && !is_locked" class="mw600">
             <div>
               <span class="label">本月in：</span>
               {{ expire_info.input }}
@@ -30,8 +30,8 @@
             </div>
             <div class="right top-interval">
               <el-checkbox
-                v-model="enableds.tun"
-                @change="check_tun">
+                v-model="enableds.proxy"
+                @change="check_proxy">
                 开机自启
               </el-checkbox>&nbsp;&nbsp;
               <el-button
@@ -39,132 +39,30 @@
                 取消
               </el-button>
               <el-button
-                @click="systemctl( 'status', 'tun' )"
-                :loading="loadings[ 'status@tun' ]">
+                @click="systemctl( 'status', 'proxy' )"
+                :loading="loadings[ 'status@proxy' ]">
                 刷新
               </el-button>
               <el-button
-                v-if="runnings.tun"
-                @click="systemctl( 'stop', 'tun' )"
-                :loading="loadings[ 'stop@tun' ]">
+                v-if="runnings.proxy"
+                @click="systemctl( 'stop', 'proxy' )"
+                :loading="loadings[ 'stop@proxy' ]">
                 停止
               </el-button>
               <el-button
-                v-if="!runnings.tun"
-                @click="systemctl( 'start', 'tun' )"
-                :loading="loadings[ 'start@tun' ]">
+                v-if="!runnings.proxy"
+                @click="systemctl( 'start', 'proxy' )"
+                :loading="loadings[ 'start@proxy' ]">
                 启动
               </el-button>
               <el-button
-                v-if="runnings.tun"
-                @click="systemctl( 'restart', 'tun' )"
-                :loading="loadings[ 'restart@tun' ]">
+                v-if="runnings.proxy"
+                @click="systemctl( 'restart', 'proxy' )"
+                :loading="loadings[ 'restart@proxy' ]">
                 重启
               </el-button>
               <el-button
-                @click="tail( 'tun' )">
-                日志
-              </el-button>
-            </div>
-          </div>
-        </el-col>
-      </el-row>
-
-      <!-- dns近端 -->
-      <el-row class="row">
-        <el-col>
-          <div class="title">{{ translates.resolv }}</div>
-          <div class="interval" v-on:click="show_service( 'resolv' )">
-            <span class="output" v-if="enableds.resolv">Auto;&nbsp;</span>
-            <span class="output" v-html="colour_actives.resolv"></span>
-          </div>
-          <div v-if="editing == 'resolv' && !is_locked" class="mw600">
-            <div class="right">
-              <el-checkbox
-                v-model="enableds.resolv"
-                @change="check_resolv">
-                开机自启
-              </el-checkbox>&nbsp;&nbsp;
-              <el-button
-                @click="editing = null">
-                取消
-              </el-button>
-              <el-button
-                @click="systemctl( 'status', 'resolv' )"
-                :loading="loadings[ 'status@resolv' ]">
-                刷新
-              </el-button>
-              <el-button
-                v-if="runnings.resolv"
-                @click="systemctl( 'stop', 'resolv' )"
-                :loading="loadings[ 'stop@resolv' ]">
-                停止
-              </el-button>
-              <el-button
-                v-if="!runnings.resolv"
-                @click="systemctl( 'start', 'resolv' )"
-                :loading="loadings[ 'start@resolv' ]">
-                启动
-              </el-button>
-              <el-button
-                v-if="runnings.resolv"
-                @click="systemctl( 'restart', 'resolv' )"
-                :loading="loadings[ 'restart@resolv' ]">
-                重启
-              </el-button>
-              <el-button
-                @click="tail( 'resolv' )">
-                日志
-              </el-button>
-            </div>
-          </div>
-        </el-col>
-      </el-row>
-
-      <!-- udp近端 -->
-      <el-row class="row">
-        <el-col>
-          <div class="title">{{ translates.udp }}</div>
-          <div class="interval" v-on:click="show_service( 'udp' )">
-            <span class="output" v-if="enableds.udp">Auto;&nbsp;</span>
-            <span class="output" v-html="colour_actives.udp"></span>
-          </div>
-          <div v-if="editing == 'udp' && !is_locked" class="mw600">
-            <div class="right">
-              <el-checkbox
-                v-model="enableds.udp"
-                @change="check_udp">
-                开机自启
-              </el-checkbox>&nbsp;&nbsp;
-              <el-button
-                @click="editing = null">
-                取消
-              </el-button>
-              <el-button
-                @click="systemctl( 'status', 'udp' )"
-                :loading="loadings[ 'status@udp' ]">
-                刷新
-              </el-button>
-              <el-button
-                v-if="runnings.udp"
-                @click="systemctl( 'stop', 'udp' )"
-                :loading="loadings[ 'stop@udp' ]">
-                停止
-              </el-button>
-              <el-button
-                v-if="!runnings.udp"
-                @click="systemctl( 'start', 'udp' )"
-                :loading="loadings[ 'start@udp' ]">
-                启动
-              </el-button>
-              <el-button
-                v-if="runnings.udp"
-                @click="systemctl( 'restart', 'udp' )"
-                :loading="loadings[ 'restart@udp' ]">
-                重启
-              </el-button>
-              <el-button
-                @click="tail( 'udp' )">
+                @click="tail( 'proxy' )">
                 日志
               </el-button>
             </div>
@@ -299,15 +197,15 @@
         </el-col>
       </el-row>
 
-      <!-- 远端地址 -->
+      <!-- 交给远端解析的域名列表 -->
       <el-row class="row">
         <el-col>
-          <div class="title">{{ translates[ 'girl.tund' ] }}</div>
-          <div v-if="editing == 'girl.tund' && !is_locked" class="interval mw300">
+          <div class="title">{{ translates[ 'girl.remote.txt' ] }}</div>
+          <div v-if="editing == 'girl.remote.txt' && !is_locked" class="interval mw300">
             <el-input
               type="textarea"
               :rows="4"
-              v-model="texts[ 'girl.tund' ]"
+              v-model="texts[ 'girl.remote.txt' ]"
               autofocus>
             </el-input>
             <div class="right top-interval">
@@ -316,89 +214,16 @@
                 取消
               </el-button>
               <el-button
-                @click="save_text( 'girl.tund' )"
-                :loading="loadings[ 'save@girl.tund' ]">
+                @click="save_text( 'girl.remote.txt' )"
+                :loading="loadings[ 'save@girl.remote.txt' ]">
                 保存
               </el-button>
             </div>
           </div>
           <div v-else class="interval mw300">
             <div
-              v-html="texts[ 'girl.tund' ] ? texts[ 'girl.tund' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
-              v-on:click="editing = 'girl.tund'"
-              class="output output-area"
-            />
-          </div>
-        </el-col>
-      </el-row>
-
-      <!-- 自定义 -->
-      <el-row class="row">
-        <el-col>
-          <div class="title">{{ translates[ 'girl.custom.txt' ] }}</div>
-          <div v-if="editing == 'girl.custom.txt' && !is_locked" class="interval mw300">
-            <el-input
-              type="textarea"
-              :rows="4"
-              v-model="texts[ 'girl.custom.txt' ]"
-              autofocus>
-            </el-input>
-            <div class="right top-interval">
-              <el-button
-                @click="editing = null">
-                取消
-              </el-button>
-              <el-button
-                @click="save_text( 'girl.custom.txt' )"
-                :loading="loadings[ 'save@girl.custom.txt' ]">
-                保存
-              </el-button>
-            </div>
-            <div>
-              例子：<br />
-              <span class="sample">
-                google.com
-              </span>
-              <span class="desc">
-                该域名dns查询走远端。
-              </span><br />
-              <span class="sample">
-                69.63.32.36
-              </span>
-              <span class="desc">
-                69.63.32.36 走远端。
-              </span><br />
-              <span class="sample">
-                # 忽略tasvideos
-              </span>
-              <span class="desc">
-                “#” 接注释。
-              </span><br />
-              <span class="sample">
-                !69.63.32.36
-              </span>
-              <span class="desc">
-                “!” 接ip，表示该ip不走远端。
-              </span><br />
-              <span class="sample">
-                &nbsp;
-              </span>
-              <span class="desc">
-                默认<a target="_blank" :href="http_host + '/chnroute.txt'">国内ip段</a>不走远端。
-              </span><br />
-
-              <span class="sample">
-                &nbsp;
-              </span>
-              <span class="desc">
-                一行一个。
-              </span><br />
-            </div>
-          </div>
-          <div v-else class="interval mw300">
-            <div
-              v-html="texts[ 'girl.custom.txt' ] ? texts[ 'girl.custom.txt' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
-              v-on:click="editing = 'girl.custom.txt'"
+              v-html="texts[ 'girl.remote.txt' ] ? texts[ 'girl.remote.txt' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
+              v-on:click="editing = 'girl.remote.txt'"
               class="output output-area"
             />
           </div>
@@ -437,39 +262,6 @@
             <div
               v-html="texts[ 'hostapd.conf' ] ? texts[ 'hostapd.conf' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
               v-on:click="editing = 'hostapd.conf'"
-              class="output output-area"
-            />
-          </div>
-        </el-col>
-      </el-row>
-
-      <!-- dns默认地址 -->
-      <el-row class="row">
-        <el-col>
-          <div class="title">{{ translates[ 'nameservers.txt' ] }}</div>
-          <div v-if="editing == 'nameservers.txt' && !is_locked" class="interval mw300">
-            <el-input
-              type="textarea"
-              :rows="4"
-              v-model="texts[ 'nameservers.txt' ]"
-              autofocus>
-            </el-input>
-            <div class="right top-interval">
-              <el-button
-                @click="editing = null">
-                取消
-              </el-button>
-              <el-button
-                @click="save_text( 'nameservers.txt' )"
-                :loading="loadings[ 'save@nameservers.txt' ]">
-                保存
-              </el-button>
-            </div>
-          </div>
-          <div v-else class="interval mw300">
-            <div
-              v-html="texts[ 'nameservers.txt' ] ? texts[ 'nameservers.txt' ].replace( new RegExp( /\n/, 'g' ), '<br />' ) : ''"
-              v-on:click="editing = 'nameservers.txt'"
               class="output output-area"
             />
           </div>
@@ -547,7 +339,6 @@
     </div>
 
     <div id="footer">
-      <img src="./assets/fun.jpg" />
     </div>
   </div>
 </template>

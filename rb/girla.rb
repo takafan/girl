@@ -4,20 +4,19 @@ require 'sinatra'
 set :public_folder, '/srv/girl/dist'
 set :server, 'webrick'
 
-SERVICES = %w[ dhcpcd dnsmasq hostapd resolv tun udp ]
+SERVICES = %w[ dhcpcd dnsmasq hostapd proxy ]
 
-CUSTOM_SERVICES = %w[ hostapd resolv tun udp ]
+CUSTOM_SERVICES = %w[ hostapd proxy ]
 
 CONFIG_DIR = '/boot'
 
 CONFIG_FILES = %w[
   dnsmasq.d/wlan0.conf
   dhcpcd.conf
-  girl.custom.txt
-  girl.im
-  girl.tund
+  girl.conf.json
+  girl.direct.txt
+  girl.remote.txt
   hostapd.conf
-  nameservers.txt
 ]
 
 require File.expand_path( '../helpers.rb', __FILE__ )

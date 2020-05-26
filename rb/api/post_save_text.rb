@@ -18,14 +18,14 @@ post '/api/save_text' do
     'dnsmasq'
   when 'dhcpcd.conf'
     'dhcpcd'
-  when 'girl.custom.txt'
-    'resolv tun'
-  when 'girl.tund'
-    'p1 resolv tun'
+  when 'girl.conf.json'
+    'proxy'
+  when 'girl.direct.txt'
+    'proxy'
+  when 'girl.remote.txt'
+    'proxy'
   when 'hostapd.conf'
     'hostapd'
-  when 'nameservers.txt'
-    'resolv'
   end
 
   if servs
