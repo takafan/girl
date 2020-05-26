@@ -149,6 +149,7 @@ export default {
       poppings: {},
       runnings: {},
       texts: {},
+      conf: {},
       translates: {
         dhcpcd: '网卡',
         disable: '关闭自动启动',
