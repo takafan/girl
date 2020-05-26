@@ -65,17 +65,23 @@ export default {
     save_text: function( file ) {
       this.loadings[ 'save@' + file ] = true
       axios.post( this.http_host + '/api/save_text', { file: file, text: this.texts[ file ] } ).then( res => {
-        this.loadings[ 'save@' + file ] = false
-        let data = res.data
-        this.editing = null
-        this.load()
-        this.$notify.success({
-          title: '成功',
-          message: this.translates[ file ] + ' 已更新',
-          type: 'success'
-        })
+        this.saved_file( file )
       }).catch( err => {
         console.log( err )
+        if ( file == 'girl.remote.txt' ) {
+          this.saved_file( file )
+        }
+      })
+    },
+
+    saved_file: function( file ) {
+      this.loadings[ 'save@' + file ] = false
+      this.editing = null
+      this.load()
+      this.$notify.success({
+        title: '成功',
+        message: this.translates[ file ] + ' 已更新',
+        type: 'success'
       })
     },
 
@@ -106,18 +112,25 @@ export default {
     systemctl: function( command, service ) {
       this.loadings[ command + '@' + service ] = true
       axios.post( this.http_host + '/api/systemctl', { command: command, service: service } ).then( res => {
-        this.loadings[ command + '@' + service ] = false
-        if ( [ 'start', 'stop', 'restart' ].includes( command ) ) {
-          this.editing = null
-        }
-        this.load()
-        this.$notify.success({
-          title: '成功',
-          message: this.translates[ service ] + ' 已' + this.translates[ command ],
-          type: 'success'
-        })
+        this.executed_command( command, service )
       }).catch( err => {
         console.log( err )
+        if ( service == 'proxy' ) {
+          this.executed_command( command, service )
+        }
+      })
+    },
+
+    executed_command: function( command, service ) {
+      this.loadings[ command + '@' + service ] = false
+      if ( [ 'start', 'stop', 'restart' ].includes( command ) ) {
+        this.editing = null
+      }
+      this.load()
+      this.$notify.success({
+        title: '成功',
+        message: this.translates[ service ] + ' 已' + this.translates[ command ],
+        type: 'success'
       })
     },
 
