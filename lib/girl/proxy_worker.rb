@@ -292,8 +292,12 @@ module Girl
     def new_a_proxy( proxy_port )
       proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' )
+        proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      end
+
       proxy.bind( Socket.sockaddr_in( proxy_port, '0.0.0.0' ) )
       proxy.listen( 511 )
       puts "p#{ Process.pid } #{ Time.new } proxy listen on #{ proxy_port }"
@@ -343,7 +347,10 @@ module Girl
       src_info = @src_infos[ src ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], destination_ip )
       dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' )
+        dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      end
 
       begin
         dst.connect_nonblock( destination_addr )

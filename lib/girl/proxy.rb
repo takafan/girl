@@ -163,35 +163,39 @@ module Girl
       puts "im #{ im }"
       puts "worker count #{ worker_count }"
 
-      $0 = title
-      workers = []
+      if RUBY_PLATFORM.include?( 'linux' )
+        $0 = title
+        workers = []
 
-      worker_count.times do | i |
-        workers << fork do
-          $0 = 'girl proxy worker'
-          worker = Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, src_chunk_dir, dst_chunk_dir, tun_chunk_dir, im )
+        worker_count.times do | i |
+          workers << fork do
+            $0 = 'girl proxy worker'
+            worker = Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, src_chunk_dir, dst_chunk_dir, tun_chunk_dir, im )
 
-          Signal.trap( :TERM ) do
-            puts "w#{ i } exit"
-            worker.quit!
-          end
+            Signal.trap( :TERM ) do
+              puts "w#{ i } exit"
+              worker.quit!
+            end
 
-          worker.looping
-        end
-      end
-
-      Signal.trap( :TERM ) do
-        puts 'trap TERM'
-        workers.each do | pid |
-          begin
-            Process.kill( :TERM, pid )
-          rescue Errno::ESRCH => e
-            puts e.class
+            worker.looping
           end
         end
-      end
 
-      Process.waitall
+        Signal.trap( :TERM ) do
+          puts 'trap TERM'
+          workers.each do | pid |
+            begin
+              Process.kill( :TERM, pid )
+            rescue Errno::ESRCH => e
+              puts e.class
+            end
+          end
+        end
+
+        Process.waitall
+      else
+        Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, src_chunk_dir, dst_chunk_dir, tun_chunk_dir, im ).looping
+      end
     end
 
   end
