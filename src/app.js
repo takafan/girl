@@ -90,14 +90,15 @@ export default {
         this.editing = null
         return
       }
-
       this.editing = service
-
       if ( service == 'proxy' ) {
-        let conf = this.conf
-        if ( !conf ) {
-          return
-        }
+        this.set_expire_info()
+      }
+    },
+
+    set_expire_info: function() {
+      let conf = this.conf
+      if ( conf ) {
         axios.get( 'http://' + conf.proxyd_host + ':3000/expire_info/' + conf.im ).then( res => {
           let data = res.data
           this.expire_info.input = data.input
@@ -127,6 +128,9 @@ export default {
         this.editing = null
       }
       this.load()
+      if ( service == 'proxy' ) {
+        this.set_expire_info()
+      }
       this.$notify.success({
         title: '成功',
         message: this.translates[ service ] + ' 已' + this.translates[ command ],
