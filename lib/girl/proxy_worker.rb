@@ -491,7 +491,7 @@ module Girl
         spring = @tun_info[ :chunks ].size > 0 ? ( @tun_info[ :spring ] + 1 ) : 0
         filename = "#{ Process.pid }-#{ @tun_info[ :port ] }.#{ spring }"
         chunk_path = File.join( @tun_chunk_dir, filename )
-        wbuffs = @tun_info[ :wbuffs ].map{ | _src_addr, _data | [ _src_addr, _data.bytesize.pack( 'n' ), _data ].join }
+        wbuffs = @tun_info[ :wbuffs ].map{ | _src_addr, _data | [ _src_addr, [ _data.bytesize ].pack( 'n' ), _data ].join }
 
         begin
           IO.binwrite( chunk_path, wbuffs.join )
