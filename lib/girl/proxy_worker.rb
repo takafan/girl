@@ -454,7 +454,13 @@ module Girl
     # sub http request
     #
     def sub_http_request( data )
-      method, url, proto = data.split( "\r\n" ).first.split( ' ' )
+      lines = data.split( "\r\n" )
+
+      if lines.empty?
+        return [ data, nil ]
+      end
+
+      method, url, proto = lines.first.split( ' ' )
 
       if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://'
         domain_and_port = url.split( '/' )[ 2 ]
@@ -1012,6 +1018,12 @@ module Girl
         if data[ 0, 7 ] == 'CONNECT'
           # puts "debug1 CONNECT"
           domain_and_port = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
+
+          unless domain_and_port
+            puts "p#{ Process.pid } #{ Time.new } CONNECT miss domain"
+            set_is_closing( src )
+            return
+          end
         elsif data[ 0 ].unpack( 'C' ).first == 5
           # puts "debug1 socks5 #{ data.inspect }"
 
@@ -1058,6 +1070,12 @@ module Girl
           unless domain_and_port
             # puts "debug1 not HTTP"
             domain_and_port = host_line.split( ' ' )[ 1 ]
+
+            unless domain_and_port
+              puts "p#{ Process.pid } #{ Time.new } Host line miss domain"
+              set_is_closing( src )
+              return
+            end
           end
 
           src_info[ :rbuffs ] << data
