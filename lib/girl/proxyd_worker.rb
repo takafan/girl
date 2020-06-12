@@ -791,8 +791,13 @@ module Girl
       tund_info = @tund_infos[ tund ]
 
       if from_addr != tund_info[ :tun_addr ]
-        puts "p#{ Process.pid } #{ Time.new } #{ addrinfo.inspect } not match #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
-        return
+        if addrinfo.ip_port == Addrinfo.new( tund_info[ :tun_addr ] ).ip_port
+          puts "p#{ Process.pid } #{ Time.new } tun ip changed #{ addrinfo.inspect }"
+          tund_info[ :tun_addr ] = from_addr
+        else
+          puts "p#{ Process.pid } #{ Time.new } #{ addrinfo.inspect } not match #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
+          return
+        end
       end
 
       tund_info[ :is_tunneled ] = true
