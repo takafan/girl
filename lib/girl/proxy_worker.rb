@@ -102,7 +102,7 @@ module Girl
             now = Time.new
 
             if @tun && !@tun.closed?
-              is_expired = @tun_info[ :last_recv_at ] ? ( now - @tun_info[ :last_recv_at ] > EXPIRE_AFTER ) : ( now - @tun_info[ :created_at ] > EXPIRE_NEW )
+              is_expired = @tun_info[ :last_recv_at ].nil? && ( now - @tun_info[ :created_at ] > EXPIRE_NEW )
 
               if is_expired
                 puts "p#{ Process.pid } #{ Time.new } expire tun"
@@ -113,7 +113,7 @@ module Girl
 
                 @tun_info[ :src_exts ].each do | src_addr, src_ext |
                   if src_ext[ :src ].closed? && ( now - src_ext[ :last_continue_at ] > EXPIRE_AFTER )
-                    puts "p#{ Process.pid } #{ Time.new } expire src_ext"
+                    puts "p#{ Process.pid } #{ Time.new } expire src ext"
                     del_src_ext( src_addr )
                   end
                 end

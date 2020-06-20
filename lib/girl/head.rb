@@ -7,7 +7,7 @@ module Girl
   WMEMS_LIMIT           = 100_000                # 写后上限，达到上限暂停写
   RESUME_BELOW          = 50_000                 # 降到多少以下恢复写
   EXPIRE_NEW            = 10                     # 创建之后多久没有流量进来，过期
-  EXPIRE_AFTER          = 900                    # 多久没有新流量进来，过期
+  EXPIRE_AFTER          = 3600                   # 多久没有新流量进来，过期
   CHECK_EXPIRE_INTERVAL = 30                     # 检查过期间隔
   HEARTBEAT_INTERVAL    = 30                     # 心跳间隔
   STATUS_INTERVAL       = 0.3                    # 发送状态间隔

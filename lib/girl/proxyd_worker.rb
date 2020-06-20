@@ -109,7 +109,7 @@ module Girl
                 else
                   tund_info[ :dst_exts ].each do | dst_local_port, dst_ext |
                     if dst_ext[ :dst ].closed? && ( now - dst_ext[ :last_continue_at ] > EXPIRE_AFTER )
-                      puts "p#{ Process.pid } #{ Time.new } expire dst_ext #{ dst_local_port }"
+                      puts "p#{ Process.pid } #{ Time.new } expire dst ext #{ dst_local_port }"
                       del_dst_ext( tund, dst_local_port )
                       need_trigger = true
                     end
@@ -119,7 +119,7 @@ module Girl
             end
 
             @dst_infos.each do | dst, dst_info |
-              is_expired = dst_info[ :last_recv_at ] ? ( now - dst_info[ :last_recv_at ] > EXPIRE_AFTER ) : ( now - dst_info[ :created_at ] > EXPIRE_NEW )
+              is_expired = dst_info[ :last_recv_at ].nil? && ( now - dst_info[ :created_at ] > EXPIRE_NEW )
 
               if is_expired
                 puts "p#{ Process.pid } #{ Time.new } expire dst"
