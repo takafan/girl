@@ -363,7 +363,7 @@ module Girl
       end
 
       # puts "debug1 a new dst #{ dst.local_address.inspect }"
-      local_port = dst.local_address.ip_unpack
+      local_port = dst.local_address.ip_unpack.last
       @dsts[ local_port ] = dst
       @dst_infos[ dst ] = {
         local_port: local_port, # 本地端口
