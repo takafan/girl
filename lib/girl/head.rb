@@ -1,8 +1,6 @@
 module Girl
-  PACK_SIZE             = 1328                   # 包大小 1400(console MTU) - 8(PPPoE header) - 40(IPv6 header) - 8(UDP header) - 8(source/dest id) - 8(pack id) = 1328
+  PACK_SIZE             = 1328                   # 包大小 1400(console MTU) - 8(PPPoE header) - 40(IPv6 header) - 8(UDP header) - 8(pack id) - 8(src id) = 1328
   CHUNK_SIZE            = PACK_SIZE * 1000       # 块大小
-  PROXY_PACK_SIZE       = 1320                   # 1400(console MTU) - 8(PPPoE header) - 40(IPv6 header) - 8(UDP header) - 8(pack id) - 16(src_addr) = 1320
-  PROXY_CHUNK_SIZE      = PROXY_PACK_SIZE * 1000 # proxy块大小
   WBUFFS_LIMIT          = 1000                   # 写前上限，超过上限结一个块
   WMEMS_LIMIT           = 100_000                # 写后上限，达到上限暂停写
   RESUME_BELOW          = 50_000                 # 降到多少以下恢复写

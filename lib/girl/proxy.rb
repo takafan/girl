@@ -24,19 +24,19 @@ require 'socket'
 # tun-tund:
 #
 # Q>: 0 ctlmsg -> C: 2 heartbeat  -> C: random char
-#                    3 a new src  -> src_addr -> encoded destination address
-#                    4 paired     -> src_addr -> n: dst_port
+#                    3 a new src  -> Q>: src_id -> encoded destination address
+#                    4 paired     -> Q>: src_id -> n: dst_port
 #                    5 dst status -> n: dst_port -> Q>Q>: biggest_dst_pack_id continue_src_pack_id
-#                    6 src status -> src_addr -> Q>Q>: biggest_src_pack_id continue_dst_pack_id
-#                    7 miss       -> src_addr/n: dst_port -> Q>Q>: pack_id_begin pack_id_end
-#                    8 fin1       -> src_addr/n: dst_port -> Q>Q>: biggest_src_pack_id continue_dst_pack_id / biggest_dst_pack_id continue_src_pack_id
+#                    6 src status -> Q>: src_id -> Q>Q>: biggest_src_pack_id continue_dst_pack_id
+#                    7 miss       -> Q>: src_id/n: dst_port -> Q>Q>: pack_id_begin pack_id_end
+#                    8 fin1       -> Q>: src_id/n: dst_port -> Q>Q>: biggest_src_pack_id continue_dst_pack_id / biggest_dst_pack_id continue_src_pack_id
 #                    9 not use
-#                   10 fin2       -> src_addr/n: dst_port
+#                   10 fin2       -> Q>: src_id/n: dst_port
 #                   11 not use
 #                   12 tund fin
 #                   13 tun fin
 #
-# Q>: 1+ pack_id -> src_addr/n: dst_port -> traffic
+# Q>: 1+ pack_id -> Q>: src_id/n: dst_port -> traffic
 #
 # close logic
 # ===========

@@ -183,7 +183,7 @@ module Girl
     ##
     # resolve domain
     #
-    def resolve_domain( tund, src_addr, destination_domain_port )
+    def resolve_domain( tund, src_id, destination_domain_port )
       resolv_cache = @resolv_caches[ destination_domain_port ]
 
       if resolv_cache
@@ -191,7 +191,7 @@ module Girl
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE
           # puts "debug1 #{ destination_domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
-          deal_with_destination_addr( tund, src_addr, destination_addr )
+          deal_with_destination_addr( tund, src_id, destination_addr )
           return
         end
 
@@ -215,7 +215,7 @@ module Girl
             @resolv_caches[ destination_domain_port ] = [ destination_addr, Time.new ]
 
             unless tund.closed?
-              if deal_with_destination_addr( tund, src_addr, destination_addr )
+              if deal_with_destination_addr( tund, src_id, destination_addr )
                 next_tick
               end
             end
@@ -227,7 +227,7 @@ module Girl
     ##
     # deal with destination addr
     #
-    def deal_with_destination_addr( tund, src_addr, destination_addr )
+    def deal_with_destination_addr( tund, src_id, destination_addr )
       dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
@@ -239,7 +239,7 @@ module Girl
         return false
       end
 
-      local_port = dst.local_address.ip_unpack.last
+      local_port = dst.local_address.ip_port
 
       @dst_infos[ dst ] = {
         local_port: local_port, # 本地端口
@@ -255,10 +255,10 @@ module Girl
       add_read( dst, :dst )
 
       tund_info = @tund_infos[ tund ]
-      tund_info[ :dst_local_ports ][ src_addr ] = local_port
+      tund_info[ :dst_local_ports ][ src_id ] = local_port
       tund_info[ :dst_exts ][ local_port ] = {
         dst: dst,                  # dst
-        src_addr: src_addr,        # 近端src地址
+        src_id: src_id,            # 近端src id
         wmems: {},                 # 写后 pack_id => data
         send_ats: {},              # 上一次发出时间 pack_id => send_at
         biggest_pack_id: 0,        # 发到几
@@ -270,7 +270,7 @@ module Girl
         last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
       }
 
-      data = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ local_port ].pack( 'n' ) ].join
+      data = [ 0, PAIRED, src_id, local_port ].pack( 'Q>CQ>n' )
       # puts "debug1 add ctlmsg paired #{ data.inspect }"
       add_tund_ctlmsg( tund, data )
 
@@ -344,7 +344,7 @@ module Girl
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
 
-      if dst_info[ :wbuff ].bytesize >= PROXY_CHUNK_SIZE
+      if dst_info[ :wbuff ].bytesize >= CHUNK_SIZE
         spring = dst_info[ :chunks ].size > 0 ? ( dst_info[ :spring ] + 1 ) : 0
         filename = "#{ Process.pid }-#{ dst_info[ :local_port ] }.#{ spring }"
         chunk_path = File.join( @dst_chunk_dir, filename )
@@ -480,7 +480,7 @@ module Girl
       dst_ext = tund_info[ :dst_exts ].delete( dst_local_port )
 
       if dst_ext
-        tund_info[ :dst_local_ports ].delete( dst_ext[ :src_addr ] )
+        tund_info[ :dst_local_ports ].delete( dst_ext[ :src_id ] )
       end
     end
 
@@ -724,7 +724,7 @@ module Girl
 
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-      port = tund.local_address.ip_unpack.last
+      port = tund.local_address.ip_port
 
       @tunneling_tunds[ from_addr ] = tund
       @tunds[ port ] = tund
@@ -738,7 +738,7 @@ module Girl
         tun_addr: from_addr,  # tun地址
         is_tunneled: false,   # 是否已和tun打通
         dst_exts: {},         # dst额外信息 dst_addr => {}
-        dst_local_ports: {},  # src_addr => dst_local_port
+        dst_local_ports: {},  # src_id => dst_local_port
         paused: false,        # 是否暂停写
         resendings: [],       # 重传队列 [ dst_addr, pack_id ]
         created_at: Time.new, # 创建时间
@@ -758,7 +758,7 @@ module Girl
     #
     def read_dst( dst )
       begin
-        data = dst.read_nonblock( PROXY_PACK_SIZE )
+        data = dst.read_nonblock( PACK_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
         return
       rescue Exception => e
@@ -808,9 +808,9 @@ module Girl
 
         case ctl_num
         when A_NEW_SOURCE
-          src_addr = data[ 9, 16 ]
-          dst_local_port = tund_info[ :dst_local_ports ][ src_addr ]
-          # puts "debug1 got a new source #{ Addrinfo.new( src_addr ).inspect }"
+          src_id = data[ 9, 8 ].unpack( 'Q>' ).first
+          dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
+          # puts "debug1 got a new source #{ src_id }"
 
           if dst_local_port
             dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
@@ -821,22 +821,21 @@ module Girl
             end
 
             # puts "debug1 readd ctlmsg paired #{ dst_local_port }"
-            data2 = [ [ 0, PAIRED ].pack( 'Q>C' ), src_addr, [ dst_local_port ].pack( 'n' ) ].join
+            data2 = [ 0, PAIRED, src_id, dst_local_port ].pack( 'Q>CQ>n' )
             add_tund_ctlmsg( tund, data2 )
             return
           end
 
           tund_info[ :last_recv_at ] = now
 
-          data = data[ 25..-1 ]
+          data = data[ 17..-1 ]
           # puts "debug1 #{ data }"
           destination_domain_port = @custom.decode( data )
-          resolve_domain( tund, src_addr, destination_domain_port )
+          resolve_domain( tund, src_id, destination_domain_port )
         when SOURCE_STATUS
-          src_addr = data[ 9, 16 ]
-          biggest_src_pack_id, continue_dst_pack_id  = data[ 25, 16 ].unpack( 'Q>Q>' )
+          src_id, biggest_src_pack_id, continue_dst_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
 
-          dst_local_port = tund_info[ :dst_local_ports ][ src_addr ]
+          dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
           return unless dst_local_port
 
           dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
@@ -885,7 +884,7 @@ module Girl
                 break
               end
 
-              data2 = [ [ 0, MISS ].pack( 'Q>C' ), src_addr, [ pack_id_begin, pack_id_end ].pack( 'Q>Q>' ) ].join
+              data2 = [ 0, MISS, src_id, pack_id_begin, pack_id_end ].pack( 'Q>CQ>Q>Q>' )
               add_tund_ctlmsg( tund, data2 )
               pack_count += ( pack_id_end - pack_id_begin + 1 )
             end
@@ -909,10 +908,9 @@ module Girl
 
           add_write( tund )
         when FIN1
-          src_addr = data[ 9, 16 ]
-          biggest_src_pack_id, continue_dst_pack_id = data[ 25, 16 ].unpack( 'Q>Q>' )
+          src_id, biggest_src_pack_id, continue_dst_pack_id = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
 
-          dst_local_port = tund_info[ :dst_local_ports ][ src_addr ]
+          dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
           return unless dst_local_port
 
           dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
@@ -920,7 +918,7 @@ module Girl
 
           tund_info[ :last_recv_at ] = now
 
-          # puts "debug1 got fin1 #{ Addrinfo.new( src_addr ).inspect } biggest src pack #{ biggest_src_pack_id } completed dst pack #{ continue_dst_pack_id }"
+          # puts "debug1 got fin1 #{ src_id } biggest src pack #{ biggest_src_pack_id } completed dst pack #{ continue_dst_pack_id }"
           dst_ext[ :is_src_closed ] = true
           dst_ext[ :biggest_src_pack_id ] = biggest_src_pack_id
           release_wmems( dst_ext, continue_dst_pack_id )
@@ -931,9 +929,9 @@ module Girl
             set_is_closing( dst_ext[ :dst ] )
           end
         when FIN2
-          src_addr = data[ 9, 16 ]
+          src_id = data[ 9, 8 ].unpack( 'Q>' ).first
 
-          dst_local_port = tund_info[ :dst_local_ports ][ src_addr ]
+          dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
           return unless dst_local_port
 
           tund_info[ :last_recv_at ] = now
@@ -949,9 +947,9 @@ module Girl
         return
       end
 
-      src_addr = data[ 8, 16 ]
+      src_id = data[ 8, 8 ].unpack( 'Q>' ).first
 
-      dst_local_port = tund_info[ :dst_local_ports ][ src_addr ]
+      dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
       return unless dst_local_port
 
       dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
@@ -960,7 +958,7 @@ module Girl
 
       tund_info[ :last_recv_at ] = now
 
-      data = data[ 24..-1 ]
+      data = data[ 16..-1 ]
       # puts "debug2 got pack #{ pack_id }"
 
       if pack_id <= CONFUSE_UNTIL
