@@ -5,10 +5,10 @@ module Girl
   WMEMS_LIMIT           = 100_000                # 写后上限，达到上限暂停写
   RESUME_BELOW          = 50_000                 # 降到多少以下恢复写
   EXPIRE_NEW            = 10                     # 创建之后多久没有流量进来，过期
-  EXPIRE_AFTER          = 3600                   # 多久没有新流量进来，过期
+  EXPIRE_AFTER          = 300                    # 多久没有新流量，过期
   CHECK_EXPIRE_INTERVAL = 30                     # 检查过期间隔
   HEARTBEAT_INTERVAL    = 30                     # 心跳间隔
-  STATUS_INTERVAL       = 0.3                    # 发送状态间隔
+  STATUS_INTERVAL       = 0.5                    # 发送状态间隔
   SEND_STATUS_UNTIL     = 10                     # 持续的告之对面状态，直到没有流量往来，持续多少秒
   BREAK_SEND_MISS       = 10_000                 # miss包个数上限，达到上限忽略要后面的段，可控碎片缓存
   CONFUSE_UNTIL         = 5                      # 混淆前几个包

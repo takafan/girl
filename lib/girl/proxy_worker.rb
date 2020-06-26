@@ -102,13 +102,14 @@ module Girl
             now = Time.new
 
             if @tun && !@tun.closed?
-              is_expired = @tun_info[ :last_recv_at ].nil? && ( now - @tun_info[ :created_at ] > EXPIRE_NEW )
+              is_expired = @tun_info[ :last_recv_at ] ? ( now - @tun_info[ :last_recv_at ] > EXPIRE_AFTER ) : ( now - @tun_info[ :created_at ] > EXPIRE_NEW )
 
               if is_expired
                 puts "p#{ Process.pid } #{ Time.new } expire tun"
                 set_is_closing( @tun )
               else
                 data = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
+                # puts "debug1 #{ Time.new } heartbeat"
                 add_tun_ctlmsg( data )
 
                 @tun_info[ :src_exts ].each do | src_id, src_ext |
@@ -1211,8 +1212,8 @@ module Girl
       data, addrinfo, rflags, *controls = tun.recvmsg
       from_addr = addrinfo.to_sockaddr
       now = Time.new
-      pack_id = data[ 0, 8 ].unpack( 'Q>' ).first
       @tun_info[ :last_recv_at ] = now
+      pack_id = data[ 0, 8 ].unpack( 'Q>' ).first
 
       if pack_id == 0
         ctl_num = data[ 8 ].unpack( 'C' ).first

@@ -103,18 +103,22 @@ module Girl
                 is_expired = tund_info[ :last_recv_at ] ? ( now - tund_info[ :last_recv_at ] > EXPIRE_AFTER ) : ( now - tund_info[ :created_at ] > EXPIRE_NEW )
 
                 if is_expired
-                  puts "p#{ Process.pid } #{ Time.new } expire tund"
+                  puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
                   set_is_closing( tund )
-                  need_trigger = true
                 else
+                  data = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
+                  # puts "debug1 #{ Time.new } #{ tund_info[ :port ] } heartbeat"
+                  add_tund_ctlmsg( tund, data )
+
                   tund_info[ :dst_exts ].each do | dst_local_port, dst_ext |
                     if dst_ext[ :dst ].closed? && ( now - dst_ext[ :last_continue_at ] > EXPIRE_AFTER )
                       puts "p#{ Process.pid } #{ Time.new } expire dst ext #{ dst_local_port }"
                       del_dst_ext( tund, dst_local_port )
-                      need_trigger = true
                     end
                   end
                 end
+
+                need_trigger = true
               end
             end
 
@@ -736,7 +740,6 @@ module Girl
         chunks: [],           # 块队列 filename
         spring: 0,            # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
         tun_addr: from_addr,  # tun地址
-        is_tunneled: false,   # 是否已和tun打通
         dst_exts: {},         # dst额外信息 dst_addr => {}
         dst_local_ports: {},  # src_id => dst_local_port
         paused: false,        # 是否暂停写
@@ -800,7 +803,7 @@ module Girl
         end
       end
 
-      tund_info[ :is_tunneled ] = true
+      tund_info[ :last_recv_at ] = now
       pack_id = data[ 0, 8 ].unpack( 'Q>' ).first
 
       if pack_id == 0
@@ -826,8 +829,6 @@ module Girl
             return
           end
 
-          tund_info[ :last_recv_at ] = now
-
           data = data[ 17..-1 ]
           # puts "debug1 #{ data }"
           destination_domain_port = @custom.decode( data )
@@ -842,7 +843,6 @@ module Girl
           return unless dst_ext
 
           # puts "debug2 got source status"
-          tund_info[ :last_recv_at ] = now
 
           # 更新对面发到几
           if biggest_src_pack_id > dst_ext[ :biggest_src_pack_id ]
@@ -895,8 +895,6 @@ module Girl
           dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
           return unless dst_ext
 
-          tund_info[ :last_recv_at ] = now
-
           ( pack_id_begin..pack_id_end ).each do | pack_id |
             send_at = dst_ext[ :send_ats ][ pack_id ]
 
@@ -916,8 +914,6 @@ module Girl
           dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
           return unless dst_ext
 
-          tund_info[ :last_recv_at ] = now
-
           # puts "debug1 got fin1 #{ src_id } biggest src pack #{ biggest_src_pack_id } completed dst pack #{ continue_dst_pack_id }"
           dst_ext[ :is_src_closed ] = true
           dst_ext[ :biggest_src_pack_id ] = biggest_src_pack_id
@@ -934,13 +930,10 @@ module Girl
           dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
           return unless dst_local_port
 
-          tund_info[ :last_recv_at ] = now
-
           # puts "debug1 1-2. recv fin2 -> del dst ext"
           del_dst_ext( tund, dst_local_port )
         when TUN_FIN
           puts "p#{ Process.pid } #{ Time.new } recv tun fin"
-          tund_info[ :last_recv_at ] = now
           set_is_closing( tund )
         end
 
@@ -955,8 +948,6 @@ module Girl
       dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
       return if dst_ext.nil? || dst_ext[ :dst ].closed?
       return if ( pack_id <= dst_ext[ :continue_src_pack_id ] ) || dst_ext[ :pieces ].include?( pack_id )
-
-      tund_info[ :last_recv_at ] = now
 
       data = data[ 16..-1 ]
       # puts "debug2 got pack #{ pack_id }"
