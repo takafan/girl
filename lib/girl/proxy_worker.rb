@@ -768,13 +768,17 @@ module Girl
 
       if data.empty?
         if src_info[ :is_closing ]
-          if @tun.closed?
-            close_src( src )
-          elsif @tun_info[ :paused ]
-            @writes.delete( src )
-          elsif !@writes.include?( @tun )
-            # 转发光了，正式关闭
-            # puts "debug2 close src after tun empty"
+          if @tun
+            if @tun.closed?
+              close_src( src )
+            elsif @tun_info[ :paused ]
+              @writes.delete( src )
+            elsif !@writes.include?( @tun )
+              # 转发光了，正式关闭
+              # puts "debug2 close src after tun empty"
+              close_src( src )
+            end
+          else
             close_src( src )
           end
         else
