@@ -592,7 +592,7 @@ module Girl
     # add write
     #
     def add_write( sock )
-      unless @writes.include?( sock )
+      if sock && !sock.closed? && !@writes.include?( sock )
         @writes << sock
       end
     end
