@@ -180,6 +180,11 @@ module Girl
                 puts "p#{ Process.pid } #{ Time.new } resume tun"
                 @tun_info[ :paused ] = false
                 add_write( @tun )
+
+                @tun_info[ :src_exts ].each do | _, src_ext |
+                  add_write( src_ext[ :src ] )
+                end
+
                 need_trigger = true
               end
 
@@ -763,7 +768,15 @@ module Girl
 
       if data.empty?
         if src_info[ :is_closing ]
-          close_src( src )
+          if @tun.closed?
+            close_src( src )
+          elsif @tun_info[ :paused ]
+            @writes.delete( src )
+          elsif !@writes.include?( @tun )
+            # 转发光了，正式关闭
+            # puts "debug2 close src after tun empty"
+            close_src( src )
+          end
         else
           @writes.delete( src )
         end

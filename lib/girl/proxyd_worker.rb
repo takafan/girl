@@ -171,6 +171,11 @@ module Girl
                   puts "p#{ Process.pid } #{ Time.new } resume tund"
                   tund_info[ :paused ] = false
                   add_write( tund )
+
+                  tund_info[ :dst_exts ].each do | _, dst_ext |
+                    add_write( dst_ext[ :dst ] )
+                  end
+
                   need_trigger = true
                 end
               end
@@ -560,7 +565,19 @@ module Girl
 
       if data.empty?
         if dst_info[ :is_closing ]
-          close_dst( dst )
+          if dst_info[ :tund ].closed?
+            close_dst( dst )
+          else
+            tund_info = @tund_infos[ dst_info[ :tund ] ]
+
+            if tund_info[ :paused ]
+              @writes.delete( dst )
+            elsif !@writes.include?( dst_info[ :tund ] )
+              # 转发光了，正式关闭
+              # puts "debug2 close dst after tund empty"
+              close_dst( dst )
+            end
+          end
         else
           @writes.delete( dst )
         end
