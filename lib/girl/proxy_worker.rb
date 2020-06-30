@@ -192,6 +192,28 @@ module Girl
     end
 
     ##
+    # loop send a new source
+    #
+    def loop_send_a_new_source( src_ext, data )
+      Thread.new do
+        EXPIRE_NEW.times do
+          if src_ext[ :src ].closed? || src_ext[ :dst_port ]
+            # puts "debug1 break loop send a new source #{ src_ext[ :dst_port ] }"
+            break
+          end
+
+          @mutex.synchronize do
+            # puts "debug1 send a new source #{ data.inspect }"
+            add_tun_ctlmsg( data )
+            next_tick
+          end
+
+          sleep 1
+        end
+      end
+    end
+
+    ##
     # resolve domain
     #
     def resolve_domain( src, domain )
@@ -408,7 +430,7 @@ module Girl
       destination_domain = src_info[ :destination_domain ]
       destination_domain_port = [ destination_domain, destination_port ].join( ':' )
       data = [ [ 0, A_NEW_SOURCE, src_id ].pack( 'Q>CQ>' ), @custom.encode( destination_domain_port ) ].join
-      add_tun_ctlmsg( data )
+      loop_send_a_new_source( src_ext, data )
     end
 
     ##
