@@ -19,17 +19,12 @@ girl.gemspec
 lib/girl.rb
 lib/girl/custom.rb
 lib/girl/head.rb
-lib/girl/hex.rb
 lib/girl/proxy_custom.rb
 lib/girl/proxy_worker.rb
 lib/girl/proxy.rb
 lib/girl/proxyd_custom.rb
 lib/girl/proxyd_worker.rb
 lib/girl/proxyd.rb
-lib/girl/resolv.rb
-lib/girl/resolvd.rb
-lib/girl/tun.rb
-lib/girl/tund.rb
 lib/girl/udp.rb
 lib/girl/udpd.rb
 lib/girl/version.rb

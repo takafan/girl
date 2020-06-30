@@ -24,28 +24,36 @@ require 'socket'
 # tun-tund:
 #
 # Q>: 0 ctlmsg -> C: 2 heartbeat  -> C: random char
-#                    3 a new src  -> Q>: src_id -> encoded destination address
-#                    4 paired     -> Q>: src_id -> n: dst_port
-#                    5 dst status -> n: dst_port -> Q>Q>: biggest_dst_pack_id continue_src_pack_id
-#                    6 src status -> Q>: src_id -> Q>Q>: biggest_src_pack_id continue_dst_pack_id
-#                    7 miss       -> Q>: src_id/n: dst_port -> Q>Q>: pack_id_begin pack_id_end
-#                    8 fin1       -> Q>: src_id/n: dst_port -> Q>Q>: biggest_src_pack_id continue_dst_pack_id / biggest_dst_pack_id continue_src_pack_id
+#                    3 a new src  -> Q>: src id -> encoded destination address
+#                    4 paired     -> Q>: src id -> n: dst port
+#                    5 dst status -> n: dst port -> Q>: biggest relayed dst pack id -> Q>: continue src pack id
+#                    6 src status -> Q>: src id -> Q>: biggest relayed src pack id -> Q>: continue dst pack id
+#                    7 miss       -> Q>/n: src id / dst port -> Q>: pack id begin -> Q>:  pack id end
+#                    8 fin1       -> Q>/n: src id / dst port -> Q>: biggest src pack id / biggest dst pack id -> Q>: continue dst pack id / continue src pack id
 #                    9 not use
-#                   10 fin2       -> Q>: src_id/n: dst_port
+#                   10 fin2       -> Q>/n: src id / dst port
 #                   11 not use
 #                   12 tund fin
 #                   13 tun fin
 #
-# Q>: 1+ pack_id -> Q>: src_id/n: dst_port -> traffic
+# Q>: 1+ pack_id -> Q>/n: src id / dst port -> traffic
 #
 # close logic
 # ===========
 #
 # 1-1. after close src -> dst closed ? no -> send fin1
-# 1-2. recv fin2 -> del src ext
+# 1-2. tun recv fin2 -> del src ext
 #
-# 2-1. recv traffic/fin1/dst status -> dst closed and all traffic received ? -> close src after write
-# 2-2. after close src -> dst closed ? yes -> del src ext -> send fin2
+# 2-1. tun recv fin1 -> all traffic received ? -> close src after write
+# 2-2. tun recv traffic -> dst closed and all traffic received ? -> close src after write
+# 2-3. after close src -> dst closed ? yes -> del src ext -> send fin2
+#
+# 3-1. after close dst -> src closed ? no -> send fin1
+# 3-2. tund recv fin2 -> del dst ext
+#
+# 4-1. tund recv fin1 -> all traffic received ? -> close dst after write
+# 4-2. tund recv traffic -> src closed and all traffic received ? -> close dst after write
+# 4-3. after close dst -> src closed ? yes -> del dst ext -> send fin2
 #
 module Girl
   class Proxy

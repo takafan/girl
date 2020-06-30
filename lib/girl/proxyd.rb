@@ -9,15 +9,6 @@ require 'socket'
 ##
 # Girl::Proxyd - 代理服务，远端。
 #
-# close logic
-# ===========
-#
-# 1-1. after close dst -> src closed ? no -> send fin1
-# 1-2. recv fin2 -> del dst ext
-#
-# 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write
-# 2-2. after close dst -> src closed ? yes -> del dst ext -> send fin2
-#
 module Girl
   class Proxyd
 

@@ -7,7 +7,6 @@ module Girl
   EXPIRE_NEW            = 10                     # 创建之后多久没有流量进来，过期
   EXPIRE_AFTER          = 300                    # 多久没有新流量，过期
   CHECK_EXPIRE_INTERVAL = 30                     # 检查过期间隔
-  HEARTBEAT_INTERVAL    = 30                     # 心跳间隔
   STATUS_INTERVAL       = 0.5                    # 发送状态间隔
   SEND_STATUS_UNTIL     = 10                     # 持续的告之对面状态，直到没有流量往来，持续多少秒
   BREAK_SEND_MISS       = 10_000                 # miss包个数上限，达到上限忽略要后面的段，可控碎片缓存
@@ -26,8 +25,6 @@ module Girl
   GOT_FIN2              = 11
   TUND_FIN              = 12
   TUN_FIN               = 13
-  CTL_CLOSE             = 1
-  CTL_RESUME            = 2
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
   RESERVED_ROUTE = <<EOF

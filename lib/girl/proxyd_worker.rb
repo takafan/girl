@@ -160,7 +160,7 @@ module Girl
 
                   tund_info[ :dst_exts ].each do | dst_local_port, dst_ext |
                     if now - dst_ext[ :last_continue_at ] < SEND_STATUS_UNTIL
-                      data = [ 0, DEST_STATUS, dst_local_port, dst_ext[ :biggest_pack_id ], dst_ext[ :continue_src_pack_id ] ].pack( 'Q>CnQ>Q>' )
+                      data = [ 0, DEST_STATUS, dst_local_port, dst_ext[ :relay_pack_id ], dst_ext[ :continue_src_pack_id ] ].pack( 'Q>CnQ>Q>' )
                       add_tund_ctlmsg( tund, data )
                       need_trigger = true
                     end
@@ -171,11 +171,6 @@ module Girl
                   puts "p#{ Process.pid } #{ Time.new } resume tund"
                   tund_info[ :paused ] = false
                   add_write( tund )
-
-                  tund_info[ :dst_exts ].each do | _, dst_ext |
-                    add_write( dst_ext[ :dst ] )
-                  end
-
                   need_trigger = true
                 end
               end
@@ -253,6 +248,7 @@ module Girl
       @dst_infos[ dst ] = {
         local_port: local_port, # 本地端口
         tund: tund,             # 对应tund
+        biggest_pack_id: 0,     # 最大包号码
         wbuff: '',              # 写前
         cache: '',              # 块读出缓存
         chunks: [],             # 块队列，写前达到块大小时结一个块 filename
@@ -270,11 +266,11 @@ module Girl
         src_id: src_id,            # 近端src id
         wmems: {},                 # 写后 pack_id => data
         send_ats: {},              # 上一次发出时间 pack_id => send_at
-        biggest_pack_id: 0,        # 发到几
+        relay_pack_id: 0,          # 转发到几
         continue_src_pack_id: 0,   # 收到几
         pieces: {},                # 跳号包 src_pack_id => data
-        is_src_closed: false,      # 对面是否已关闭
-        biggest_src_pack_id: 0,    # 对面发到几
+        is_src_closed: false,      # src是否已关闭
+        biggest_src_pack_id: 0,    # src最大包号码
         completed_pack_id: 0,      # 完成到几（对面收到几）
         last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
       }
@@ -320,18 +316,18 @@ module Girl
     ##
     # add tund wbuff
     #
-    def add_tund_wbuff( tund, dst_local_port, data )
+    def add_tund_wbuff( tund, dst_local_port, pack_id, data )
       tund_info = @tund_infos[ tund ]
-      tund_info[ :wbuffs ] << [ dst_local_port, data ]
+      tund_info[ :wbuffs ] << [ dst_local_port, pack_id, data ]
 
       if tund_info[ :wbuffs ].size >= WBUFFS_LIMIT
         spring = tund_info[ :chunks ].size > 0 ? ( tund_info[ :spring ] + 1 ) : 0
         filename = "#{ Process.pid }-#{ tund_info[ :port ] }.#{ spring }"
         chunk_path = File.join( @tund_chunk_dir, filename )
-        wbuffs = tund_info[ :wbuffs ].map{ | _dst_local_port, _data | [ [ _dst_local_port, _data.bytesize ].pack( 'nn' ), _data ].join }
+        datas = tund_info[ :wbuffs ].map{ | _dst_local_port, _pack_id, _data | [ [ _dst_local_port, _pack_id, _data.bytesize ].pack( 'nQ>n' ), _data ].join }
 
         begin
-          IO.binwrite( chunk_path, wbuffs.join )
+          IO.binwrite( chunk_path, datas.join )
         rescue Errno::ENOSPC => e
           puts "p#{ Process.pid } #{ Time.new } #{ e.class }, close tund"
           set_is_closing( tund )
@@ -440,13 +436,13 @@ module Girl
       return unless dst_ext
 
       if dst_ext[ :is_src_closed ]
-        # puts "debug1 2-2. after close dst -> src closed ? yes -> del dst ext -> send fin2"
+        # puts "debug1 4-3. after close dst -> src closed ? yes -> del dst ext -> send fin2"
         del_dst_ext( tund, local_port )
         data = [ 0, FIN2, local_port ].pack( 'Q>Cn' )
         add_tund_ctlmsg( tund, data )
       else
-        # puts "debug1 1-1. after close dst -> src closed ? no -> send fin1"
-        data = [ 0, FIN1, local_port, dst_ext[ :biggest_pack_id ], dst_ext[ :continue_src_pack_id ] ].pack( 'Q>CnQ>Q>' )
+        # puts "debug1 3-1. after close dst -> src closed ? no -> send fin1"
+        data = [ 0, FIN1, local_port, dst_info[ :biggest_pack_id ], dst_ext[ :continue_src_pack_id ] ].pack( 'Q>CnQ>Q>' )
         add_tund_ctlmsg( tund, data )
       end
     end
@@ -565,19 +561,7 @@ module Girl
 
       if data.empty?
         if dst_info[ :is_closing ]
-          if dst_info[ :tund ].closed?
-            close_dst( dst )
-          else
-            tund_info = @tund_infos[ dst_info[ :tund ] ]
-
-            if tund_info[ :paused ]
-              @writes.delete( dst )
-            elsif !@writes.include?( dst_info[ :tund ] )
-              # 转发光了，正式关闭
-              # puts "debug2 close dst after tund empty"
-              close_dst( dst )
-            end
-          end
+          close_dst( dst )
         else
           @writes.delete( dst )
         end
@@ -658,7 +642,7 @@ module Girl
 
       # 取写前
       if tund_info[ :caches ].any?
-        dst_local_port, data = tund_info[ :caches ].first
+        dst_local_port, pack_id, data = tund_info[ :caches ].first
         from = :caches
       elsif tund_info[ :chunks ].any?
         path = File.join( @tund_chunk_dir, tund_info[ :chunks ].shift )
@@ -675,16 +659,16 @@ module Girl
         caches = []
 
         until data.empty?
-          _dst_local_port, pack_size = data[ 0, 4 ].unpack( 'nn' )
-          caches << [ _dst_local_port, data[ 4, pack_size ] ]
-          data = data[ ( 4 + pack_size )..-1 ]
+          _dst_local_port, _pack_id, pack_size = data[ 0, 12 ].unpack( 'nQ>n' )
+          caches << [ _dst_local_port, _pack_id, data[ 12, pack_size ] ]
+          data = data[ ( 12 + pack_size )..-1 ]
         end
 
         tund_info[ :caches ] = caches
-        dst_local_port, data = caches.first
+        dst_local_port, pack_id, data = caches.first
         from = :caches
       elsif tund_info[ :wbuffs ].any?
-        dst_local_port, data = tund_info[ :wbuffs ].first
+        dst_local_port, pack_id, data = tund_info[ :wbuffs ].first
         from = :wbuffs
       else
         @writes.delete( tund )
@@ -694,8 +678,6 @@ module Girl
       dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
 
       if dst_ext
-        pack_id = dst_ext[ :biggest_pack_id ] + 1
-
         if pack_id <= CONFUSE_UNTIL
           data = @custom.encode( data )
           # puts "debug1 encoded pack #{ pack_id }"
@@ -711,7 +693,7 @@ module Girl
 
         # puts "debug2 written pack #{ pack_id }"
         now = Time.new
-        dst_ext[ :biggest_pack_id ] = pack_id
+        dst_ext[ :relay_pack_id ] = pack_id
         dst_ext[ :wmems ][ pack_id ] = data
         dst_ext[ :send_ats ][ pack_id ] = now
         dst_ext[ :last_continue_at ] = now
@@ -752,15 +734,15 @@ module Girl
       @tund_infos[ tund ] = {
         port: port,           # 端口
         ctlmsgs: [],          # data
-        wbuffs: [],           # 写前缓存 [ src_dst_addr, data ]
-        caches: [],           # 块读出缓存 [ src_dst_addr, data ]
+        wbuffs: [],           # 写前缓存 [ dst_local_port, pack_id, data ]
+        caches: [],           # 块读出缓存 [ dst_local_port, pack_id, data ]
         chunks: [],           # 块队列 filename
         spring: 0,            # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
         tun_addr: from_addr,  # tun地址
-        dst_exts: {},         # dst额外信息 dst_addr => {}
+        dst_exts: {},         # dst额外信息 dst_local_port => {}
         dst_local_ports: {},  # src_id => dst_local_port
         paused: false,        # 是否暂停写
-        resendings: [],       # 重传队列 [ dst_addr, pack_id ]
+        resendings: [],       # 重传队列 [ dst_local_port, pack_id ]
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间，过期关闭
         is_closing: false     # 是否准备关闭
@@ -798,7 +780,9 @@ module Girl
         return
       end
 
-      add_tund_wbuff( tund, dst_info[ :local_port ], data )
+      pack_id = dst_info[ :biggest_pack_id ] + 1
+      dst_info[ :biggest_pack_id ] = pack_id
+      add_tund_wbuff( tund, dst_info[ :local_port ], pack_id, data )
     end
 
     ##
@@ -851,7 +835,7 @@ module Girl
           destination_domain_port = @custom.decode( data )
           resolve_domain( tund, src_id, destination_domain_port )
         when SOURCE_STATUS
-          src_id, biggest_src_pack_id, continue_dst_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
+          src_id, relay_src_pack_id, continue_dst_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
 
           dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
           return unless dst_local_port
@@ -861,22 +845,10 @@ module Girl
 
           # puts "debug2 got source status"
 
-          # 更新对面发到几
-          if biggest_src_pack_id > dst_ext[ :biggest_src_pack_id ]
-            # puts "debug2 update biggest src pack #{ biggest_src_pack_id }"
-            dst_ext[ :biggest_src_pack_id ] = biggest_src_pack_id
-
-            # 接到对面状态，若对面已关闭，且最后一个包已经进写前，关闭dst
-            if dst_ext[ :is_src_closed ] && ( biggest_src_pack_id == dst_ext[ :continue_src_pack_id ] )
-              # puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
-              set_is_closing( dst_ext[ :dst ] )
-            end
-          end
-
           release_wmems( dst_ext, continue_dst_pack_id )
 
           # 发miss
-          if !dst_ext[ :dst ].closed? && ( dst_ext[ :continue_src_pack_id ] < dst_ext[ :biggest_src_pack_id ] )
+          if !dst_ext[ :dst ].closed? && ( dst_ext[ :continue_src_pack_id ] < relay_src_pack_id )
             ranges = []
             curr_pack_id = dst_ext[ :continue_src_pack_id ] + 1
 
@@ -888,12 +860,12 @@ module Girl
               curr_pack_id = pack_id + 1
             end
 
-            if curr_pack_id <= dst_ext[ :biggest_src_pack_id ]
-              ranges << [ curr_pack_id, dst_ext[ :biggest_src_pack_id ] ]
+            if curr_pack_id <= relay_src_pack_id
+              ranges << [ curr_pack_id, relay_src_pack_id ]
             end
 
             pack_count = 0
-            # puts "debug1 continue/biggest #{ dst_ext[ :continue_src_pack_id ] }/#{ dst_ext[ :biggest_src_pack_id ] } send MISS #{ ranges.size }"
+            # puts "debug1 continue/relay #{ dst_ext[ :continue_src_pack_id ] }/#{ relay_src_pack_id } send MISS #{ ranges.size }"
 
             ranges.each do | pack_id_begin, pack_id_end |
               if pack_count >= BREAK_SEND_MISS
@@ -938,7 +910,7 @@ module Girl
 
           # 接到对面已关闭，若最后一个包已经进写前，关闭dst
           if biggest_src_pack_id == dst_ext[ :continue_src_pack_id ]
-            # puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
+            # puts "debug1 4-1. tund recv fin1 -> all traffic received ? -> close dst after write"
             set_is_closing( dst_ext[ :dst ] )
           end
         when FIN2
@@ -947,7 +919,7 @@ module Girl
           dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
           return unless dst_local_port
 
-          # puts "debug1 1-2. recv fin2 -> del dst ext"
+          # puts "debug1 3-2. tund recv fin2 -> del dst ext"
           del_dst_ext( tund, dst_local_port )
         when TUN_FIN
           puts "p#{ Process.pid } #{ Time.new } recv tun fin"
@@ -989,7 +961,7 @@ module Girl
 
         # 接到流量，若对面已关闭，且流量正好收全，关闭dst
         if dst_ext[ :is_src_closed ] && ( pack_id == dst_ext[ :biggest_src_pack_id ] )
-          # puts "debug1 2-1. recv traffic/fin1/src status -> src closed and all traffic received ? -> close dst after write"
+          # puts "debug1 4-2. tund recv traffic -> src closed and all traffic received ? -> close dst after write"
           set_is_closing( dst_ext[ :dst ] )
           return
         end
