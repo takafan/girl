@@ -908,7 +908,6 @@ module Girl
           dst_ext[ :biggest_src_pack_id ] = biggest_src_pack_id
           release_wmems( dst_ext, continue_dst_pack_id )
 
-          # 接到对面已关闭，若最后一个包已经进写前，关闭dst
           if biggest_src_pack_id == dst_ext[ :continue_src_pack_id ]
             # puts "debug1 4-1. tund recv fin1 -> all traffic received ? -> close dst after write"
             set_is_closing( dst_ext[ :dst ] )

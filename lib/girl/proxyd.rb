@@ -37,15 +37,12 @@ module Girl
       end
 
       dst_chunk_dir = File.join( proxyd_tmp_dir, 'dst.chunk' )
-      tund_chunk_dir = File.join( proxyd_tmp_dir, 'tund.chunk' )
-
-      unless Dir.exist?( proxyd_tmp_dir )
-        Dir.mkdir( proxyd_tmp_dir )
-      end
 
       unless Dir.exist?( dst_chunk_dir )
         Dir.mkdir( dst_chunk_dir )
       end
+
+      tund_chunk_dir = File.join( proxyd_tmp_dir, 'tund.chunk' )
 
       unless Dir.exist?( tund_chunk_dir )
         Dir.mkdir( tund_chunk_dir )

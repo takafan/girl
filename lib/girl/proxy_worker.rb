@@ -383,11 +383,9 @@ module Girl
 
       if src_info[ :proxy_proto ] == :http
         if src_info[ :is_connect ]
-          # CONNECT
           # puts "debug1 add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
         else
-          # not CONNECT
           # puts "debug1 add src rbuffs to dst wbuff"
 
           src_info[ :rbuffs ].each do | _, data |
@@ -1264,11 +1262,9 @@ module Girl
 
           if src_info[ :proxy_proto ] == :http
             if src_info[ :is_connect ]
-              # CONNECT
               # puts "debug1 add src wbuff http ok"
               add_src_wbuff( src, HTTP_OK )
             else
-              # not CONNECT
               # puts "debug1 add src rbuffs to tun wbuffs"
 
               src_info[ :rbuffs ].each do | pack_id, _data |
@@ -1358,7 +1354,6 @@ module Girl
           src_ext[ :biggest_dst_pack_id ] = biggest_dst_pack_id
           release_wmems( src_ext, continue_src_pack_id )
 
-          # 接到对面已关闭，若最后一个包已经进写前，关闭src
           if ( biggest_dst_pack_id == src_ext[ :continue_dst_pack_id ] )
             # puts "debug1 2-1. tun recv fin1 -> all traffic received ? -> close src after write"
             set_is_closing( src_ext[ :src ] )

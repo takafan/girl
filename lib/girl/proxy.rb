@@ -23,15 +23,15 @@ require 'socket'
 #
 # tun-tund:
 #
-# Q>: 0 ctlmsg -> C: 2 heartbeat  -> C: random char
-#                    3 a new src  -> Q>: src id -> encoded destination address
-#                    4 paired     -> Q>: src id -> n: dst port
-#                    5 dst status -> n: dst port -> Q>: biggest relayed dst pack id -> Q>: continue src pack id
-#                    6 src status -> Q>: src id -> Q>: biggest relayed src pack id -> Q>: continue dst pack id
-#                    7 miss       -> Q>/n: src id / dst port -> Q>: pack id begin -> Q>:  pack id end
-#                    8 fin1       -> Q>/n: src id / dst port -> Q>: biggest src pack id / biggest dst pack id -> Q>: continue dst pack id / continue src pack id
+# Q>: 0 ctlmsg -> C: 2 heartbeat     -> C: random char
+#                    3 a new source  -> Q>: src id -> encoded destination address
+#                    4 paired        -> Q>: src id -> n: dst port
+#                    5 dest status   -> n: dst port -> Q>: biggest relayed dst pack id -> Q>: continue src pack id
+#                    6 source status -> Q>: src id -> Q>: biggest relayed src pack id -> Q>: continue dst pack id
+#                    7 miss          -> Q>/n: src id / dst port -> Q>: pack id begin -> Q>:  pack id end
+#                    8 fin1          -> Q>/n: src id / dst port -> Q>: biggest src pack id / biggest dst pack id -> Q>: continue dst pack id / continue src pack id
 #                    9 not use
-#                   10 fin2       -> Q>/n: src id / dst port
+#                   10 fin2          -> Q>/n: src id / dst port
 #                   11 not use
 #                   12 tund fin
 #                   13 tun fin
@@ -129,20 +129,18 @@ module Girl
       end
 
       src_chunk_dir = File.join( proxy_tmp_dir, 'src.chunk' )
-      dst_chunk_dir = File.join( proxy_tmp_dir, 'dst.chunk' )
-      tun_chunk_dir = File.join( proxy_tmp_dir, 'tun.chunk' )
-
-      unless Dir.exist?( proxy_tmp_dir )
-        Dir.mkdir( proxy_tmp_dir )
-      end
 
       unless Dir.exist?( src_chunk_dir )
         Dir.mkdir( src_chunk_dir )
       end
 
+      dst_chunk_dir = File.join( proxy_tmp_dir, 'dst.chunk' )
+
       unless Dir.exist?( dst_chunk_dir )
         Dir.mkdir( dst_chunk_dir )
       end
+
+      tun_chunk_dir = File.join( proxy_tmp_dir, 'tun.chunk' )
 
       unless Dir.exist?( tun_chunk_dir )
         Dir.mkdir( tun_chunk_dir )
