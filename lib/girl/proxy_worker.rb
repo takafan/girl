@@ -18,7 +18,6 @@ module Girl
       @writes = []
       @roles = {}         # sock => :dotr / :proxy / :src / :dst / :tun
       @src_infos = {}     # src => {}
-      @dsts = {}          # local_port => dst
       @dst_infos = {}     # dst => {}
       @resolv_caches = {} # domain => [ ip, created_at ]
 
@@ -364,7 +363,6 @@ module Girl
 
       # puts "debug1 a new dst #{ dst.local_address.inspect }"
       local_port = dst.local_address.ip_port
-      @dsts[ local_port ] = dst
       @dst_infos[ dst ] = {
         local_port: local_port, # 本地端口
         src: src,               # 对应src
@@ -664,7 +662,6 @@ module Girl
         end
       end
 
-      @dsts.delete( dst_info[ :local_port ] )
       set_is_closing( dst_info[ :src ] )
     end
 
