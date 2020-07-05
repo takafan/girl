@@ -1,4 +1,4 @@
-# girl - while internet is evil, here's a girl.
+# girl
 
 妹子让你的vps变快。
 
