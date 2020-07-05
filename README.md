@@ -1,6 +1,6 @@
 # girl - while internet is evil, here's a girl.
 
-妹子传的快。
+妹子让你的vps变快。
 
 我在vps上放一个文件，然后下载它。速度只有10K。
 
