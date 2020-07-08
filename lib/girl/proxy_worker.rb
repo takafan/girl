@@ -847,6 +847,10 @@ module Girl
           tun.sendmsg( data, 0, to_addr )
         rescue IO::WaitWritable, Errno::EINTR
           return
+        rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
+          puts "#{ Time.new } #{ e.class }, close tun"
+          close_tun( tun )
+          return
         end
 
         @tun_info[ :ctlmsgs ].shift
@@ -864,6 +868,10 @@ module Girl
             begin
               tun.sendmsg( data, 0, @tun_info[ :tund_addr ] )
             rescue IO::WaitWritable, Errno::EINTR
+              return
+            rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
+              puts "#{ Time.new } #{ e.class }, close tun"
+              close_tun( tun )
               return
             end
           end
@@ -932,6 +940,10 @@ module Girl
         begin
           tun.sendmsg( data, 0, @tun_info[ :tund_addr ] )
         rescue IO::WaitWritable, Errno::EINTR
+          return
+        rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
+          puts "#{ Time.new } #{ e.class }, close tun"
+          close_tun( tun )
           return
         end
 
