@@ -118,7 +118,9 @@ girl.conf.json的格式：
 获取注册在亚太的CN的ip段：
 
 ```bash
-curl 'http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest' | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > girl.direct.txt
+curl -O http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
+cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > girl.direct.txt
+cat delegated-apnic-latest | grep ipv6 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, $5) }' >> girl.direct.txt
 ```
 
 girl.remote.txt的格式：

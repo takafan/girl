@@ -204,13 +204,17 @@ module Girl
       end
 
       Thread.new do
-        destination_domain, destination_port = destination_domain_port.split( ':' )
-        destination_port = destination_port.to_i
+        colon_idx = destination_domain_port.rindex( ':' )
 
-        begin
-          destination_addr = Socket.sockaddr_in( destination_port, destination_domain )
-        rescue Exception => e
-          puts "p#{ Process.pid } #{ Time.new } sockaddr in #{ destination_domain_port } #{ e.class }"
+        if colon_idx
+          destination_domain = destination_domain_port[ 0...colon_idx ]
+          destination_port = destination_domain_port[ ( colon_idx + 1 )..-1 ].to_i
+
+          begin
+            destination_addr = Socket.sockaddr_in( destination_port, destination_domain )
+          rescue Exception => e
+            puts "p#{ Process.pid } #{ Time.new } sockaddr in #{ destination_domain_port } #{ e.class }"
+          end
         end
 
         @mutex.synchronize do
@@ -232,7 +236,7 @@ module Girl
     # deal with destination addr
     #
     def deal_with_destination_addr( tund, src_id, destination_addr )
-      dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
@@ -814,7 +818,6 @@ module Girl
         when A_NEW_SOURCE
           src_id = data[ 9, 8 ].unpack( 'Q>' ).first
           dst_local_port = tund_info[ :dst_local_ports ][ src_id ]
-          # puts "debug1 got a new source #{ src_id }"
 
           if dst_local_port
             dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
@@ -831,8 +834,8 @@ module Girl
           end
 
           data = data[ 17..-1 ]
-          # puts "debug1 #{ data }"
           destination_domain_port = @custom.decode( data )
+          puts "p#{ Process.pid } #{ Time.new } a new source #{ src_id } #{ destination_domain_port }"
           resolve_domain( tund, src_id, destination_domain_port )
         when SOURCE_STATUS
           src_id, relay_src_pack_id, continue_dst_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )

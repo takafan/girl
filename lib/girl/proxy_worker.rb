@@ -216,12 +216,6 @@ module Girl
     # resolve domain
     #
     def resolve_domain( src, domain )
-      if ( /\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\Z/ =~ domain ) && domain.split( '.' ).all? { | part | part.to_i < 256 }
-        # puts "debug1 #{ domain } is a ip"
-        deal_with_destination_ip( src, domain )
-        return
-      end
-
       if @remotes.any? { | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) }
         # puts "debug1 #{ domain } hit remotes"
         new_a_src_ext( src )
@@ -231,11 +225,11 @@ module Girl
       resolv_cache = @resolv_caches[ domain ]
 
       if resolv_cache
-        destination_ip, created_at = resolv_cache
+        ip_info, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE
-          # puts "debug1 #{ domain } hit resolv cache #{ destination_ip }"
-          deal_with_destination_ip( src, destination_ip )
+          # puts "debug1 #{ domain } hit resolv cache #{ ip_info.inspect }"
+          deal_with_destination_ip( src, ip_info )
           return
         end
 
@@ -255,12 +249,11 @@ module Girl
 
         @mutex.synchronize do
           if ip_info
-            destination_ip = ip_info.ip_address
-            # puts "debug1 resolved #{ domain } #{ destination_ip }"
-            @resolv_caches[ domain ] = [ destination_ip, Time.new ]
+            @resolv_caches[ domain ] = [ ip_info, Time.new ]
 
             unless src.closed?
-              deal_with_destination_ip( src, destination_ip )
+              puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
+              deal_with_destination_ip( src, ip_info )
             end
           else
             set_is_closing( src )
@@ -274,11 +267,11 @@ module Girl
     ##
     # deal with destination ip
     #
-    def deal_with_destination_ip( src, destination_ip )
-      if @directs.any? { | direct | direct.include?( destination_ip ) }
+    def deal_with_destination_ip( src, ip_info )
+      if @directs.any? { | direct | direct.include?( ip_info.ip_address ) }
         # ip命中直连列表，直连
-        # puts "debug1 #{ destination_ip } hit directs"
-        new_a_dst( src, destination_ip )
+        # puts "debug1 #{ ip_info.inspect } hit directs"
+        new_a_dst( src, ip_info )
       else
         # 走远端
         new_a_src_ext( src )
@@ -342,10 +335,10 @@ module Girl
     ##
     # new a dst
     #
-    def new_a_dst( src, destination_ip )
+    def new_a_dst( src, ip_info )
       src_info = @src_infos[ src ]
-      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], destination_ip )
-      dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
+      dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
 
       if RUBY_PLATFORM.include?( 'linux' )
         dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
@@ -1122,7 +1115,7 @@ module Girl
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
             # puts "debug1 IP V4 address #{ destination_addrinfo.inspect }"
-            deal_with_destination_ip( src, destination_ip )
+            deal_with_destination_ip( src, destination_addrinfo )
           elsif atyp == 3
             domain_len = data[ 4 ].unpack( 'C' ).first
 
