@@ -123,10 +123,8 @@ module Girl
             end
 
             @dst_infos.each do | dst, dst_info |
-              is_expired = dst_info[ :last_recv_at ].nil? && ( now - dst_info[ :created_at ] > EXPIRE_NEW )
-
-              if is_expired
-                puts "p#{ Process.pid } #{ Time.new } expire dst"
+              if now - dst_info[ :last_continue_at ] > EXPIRE_AFTER
+                puts "p#{ Process.pid } #{ Time.new } expire dst #{ dst_info[ :domain_port ] }"
                 set_is_closing( dst )
                 need_trigger = true
               end
@@ -195,7 +193,7 @@ module Girl
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE
           # puts "debug1 #{ destination_domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
-          deal_with_destination_addr( tund, src_id, destination_addr )
+          deal_with_destination_addr( tund, src_id, destination_addr, destination_domain_port )
           return
         end
 
@@ -223,7 +221,7 @@ module Girl
             @resolv_caches[ destination_domain_port ] = [ destination_addr, Time.new ]
 
             unless tund.closed?
-              if deal_with_destination_addr( tund, src_id, destination_addr )
+              if deal_with_destination_addr( tund, src_id, destination_addr, destination_domain_port )
                 next_tick
               end
             end
@@ -235,7 +233,7 @@ module Girl
     ##
     # deal with destination addr
     #
-    def deal_with_destination_addr( tund, src_id, destination_addr )
+    def deal_with_destination_addr( tund, src_id, destination_addr, destination_domain_port )
       dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
@@ -250,16 +248,16 @@ module Girl
       local_port = dst.local_address.ip_port
 
       @dst_infos[ dst ] = {
-        local_port: local_port, # 本地端口
-        tund: tund,             # 对应tund
-        biggest_pack_id: 0,     # 最大包号码
-        wbuff: '',              # 写前
-        cache: '',              # 块读出缓存
-        chunks: [],             # 块队列，写前达到块大小时结一个块 filename
-        spring: 0,              # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
-        created_at: Time.new,   # 创建时间
-        last_recv_at: nil,      # 上一次收到流量的时间，过期关闭
-        is_closing: false       # 是否准备关闭
+        local_port: local_port,               # 本地端口
+        tund: tund,                           # 对应tund
+        domain_port: destination_domain_port, # 域名和端口
+        biggest_pack_id: 0,                   # 最大包号码
+        wbuff: '',                            # 写前
+        cache: '',                            # 块读出缓存
+        chunks: [],                           # 块队列，写前达到块大小时结一个块 filename
+        spring: 0,                            # 块后缀，结块时，如果块队列不为空，则自增，为空，则置为0
+        last_continue_at: Time.new,           # 上一次发生流量的时间
+        is_closing: false                     # 是否准备关闭
       }
       add_read( dst, :dst )
 
@@ -276,7 +274,7 @@ module Girl
         is_src_closed: false,      # src是否已关闭
         biggest_src_pack_id: 0,    # src最大包号码
         completed_pack_id: 0,      # 完成到几（对面收到几）
-        last_continue_at: Time.new # 创建，或者上一次收到连续流量，或者发出新包的时间
+        last_continue_at: Time.new # 上一次发生流量的时间
       }
 
       data = [ 0, PAIRED, src_id, local_port ].pack( 'Q>CQ>n' )
@@ -586,6 +584,7 @@ module Girl
       # puts "debug2 write dst #{ written }"
       data = data[ written..-1 ]
       dst_info[ from ] = data
+      dst_info[ :last_continue_at ] = Time.new
     end
 
     ##
@@ -775,7 +774,7 @@ module Girl
 
       # puts "debug2 read dst #{ data.inspect }"
       dst_info = @dst_infos[ dst ]
-      dst_info[ :last_recv_at ] = Time.new
+      dst_info[ :last_continue_at ] = Time.new
       tund = dst_info[ :tund ]
 
       if tund.closed?
