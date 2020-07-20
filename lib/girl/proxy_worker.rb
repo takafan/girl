@@ -113,7 +113,7 @@ module Girl
 
                 @tun_info[ :src_exts ].each do | src_id, src_ext |
                   if src_ext[ :src ].closed? && ( now - src_ext[ :last_continue_at ] > EXPIRE_AFTER )
-                    puts "p#{ Process.pid } #{ Time.new } expire src ext #{ src_id }"
+                    puts "p#{ Process.pid } #{ Time.new } expire src ext #{ src_ext[ :destination_domain ] }"
                     del_src_ext( src_id )
                   end
                 end
@@ -124,7 +124,7 @@ module Girl
 
             @src_infos.each do | src, src_info |
               if now - src_info[ :last_continue_at ] > EXPIRE_AFTER
-                puts "p#{ Process.pid } #{ Time.new } expire src"
+                puts "p#{ Process.pid } #{ Time.new } expire src #{ src_info[ :destination_domain ] }"
                 set_is_closing( src )
                 need_trigger = true
               end
@@ -393,27 +393,29 @@ module Girl
         new_a_tun
       end
 
-      src_ext = {
-        src: src,                  # src
-        dst_port: nil,             # 远端dst端口
-        wmems: {},                 # 写后 pack_id => data
-        send_ats: {},              # 上一次发出时间 pack_id => send_at
-        relay_pack_id: 0,          # 转发到几
-        continue_dst_pack_id: 0,   # 收到几
-        pieces: {},                # 跳号包 dst_pack_id => data
-        is_dst_closed: false,      # dst是否已关闭
-        biggest_dst_pack_id: 0,    # dst最大包号码
-        completed_pack_id: 0,      # 完成到几（对面收到几）
-        last_continue_at: Time.new # 上一次发生流量的时间
-      }
-
       src_info = @src_infos[ src ]
       src_id = src_info[ :id ]
+      destination_port = src_info[ :destination_port ]
+      destination_domain = src_info[ :destination_domain ]
+
+      src_ext = {
+        src: src,                               # src
+        dst_port: nil,                          # 远端dst端口
+        destination_domain: destination_domain, # 目的地域名
+        wmems: {},                              # 写后 pack_id => data
+        send_ats: {},                           # 上一次发出时间 pack_id => send_at
+        relay_pack_id: 0,                       # 转发到几
+        continue_dst_pack_id: 0,                # 收到几
+        pieces: {},                             # 跳号包 dst_pack_id => data
+        is_dst_closed: false,                   # dst是否已关闭
+        biggest_dst_pack_id: 0,                 # dst最大包号码
+        completed_pack_id: 0,                   # 完成到几（对面收到几）
+        last_continue_at: Time.new              # 上一次发生流量的时间
+      }
+
       @tun_info[ :src_exts ][ src_id ] = src_ext
       src_info[ :proxy_type ] = :tunnel
 
-      destination_port = src_info[ :destination_port ]
-      destination_domain = src_info[ :destination_domain ]
       destination_domain_port = [ destination_domain, destination_port ].join( ':' )
       data = [ [ 0, A_NEW_SOURCE, src_id ].pack( 'Q>CQ>' ), @custom.encode( destination_domain_port ) ].join
       loop_send_a_new_source( src_ext, data )

@@ -112,7 +112,7 @@ module Girl
 
                   tund_info[ :dst_exts ].each do | dst_local_port, dst_ext |
                     if dst_ext[ :dst ].closed? && ( now - dst_ext[ :last_continue_at ] > EXPIRE_AFTER )
-                      puts "p#{ Process.pid } #{ Time.new } expire dst ext #{ dst_local_port }"
+                      puts "p#{ Process.pid } #{ Time.new } expire dst ext #{ dst_ext[ :domain_port ] }"
                       del_dst_ext( tund, dst_local_port )
                     end
                   end
@@ -264,17 +264,18 @@ module Girl
       tund_info = @tund_infos[ tund ]
       tund_info[ :dst_local_ports ][ src_id ] = local_port
       tund_info[ :dst_exts ][ local_port ] = {
-        dst: dst,                  # dst
-        src_id: src_id,            # 近端src id
-        wmems: {},                 # 写后 pack_id => data
-        send_ats: {},              # 上一次发出时间 pack_id => send_at
-        relay_pack_id: 0,          # 转发到几
-        continue_src_pack_id: 0,   # 收到几
-        pieces: {},                # 跳号包 src_pack_id => data
-        is_src_closed: false,      # src是否已关闭
-        biggest_src_pack_id: 0,    # src最大包号码
-        completed_pack_id: 0,      # 完成到几（对面收到几）
-        last_continue_at: Time.new # 上一次发生流量的时间
+        dst: dst,                             # dst
+        src_id: src_id,                       # 近端src id
+        domain_port: destination_domain_port, # 域名和端口
+        wmems: {},                            # 写后 pack_id => data
+        send_ats: {},                         # 上一次发出时间 pack_id => send_at
+        relay_pack_id: 0,                     # 转发到几
+        continue_src_pack_id: 0,              # 收到几
+        pieces: {},                           # 跳号包 src_pack_id => data
+        is_src_closed: false,                 # src是否已关闭
+        biggest_src_pack_id: 0,               # src最大包号码
+        completed_pack_id: 0,                 # 完成到几（对面收到几）
+        last_continue_at: Time.new            # 上一次发生流量的时间
       }
 
       data = [ 0, PAIRED, src_id, local_port ].pack( 'Q>CQ>n' )
