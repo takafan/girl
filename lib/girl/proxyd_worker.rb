@@ -416,6 +416,23 @@ module Girl
     end
 
     ##
+    # send data
+    #
+    def send_data( tund, data, to_addr )
+      begin
+        tund.sendmsg( data, 0, to_addr )
+      rescue IO::WaitWritable, Errno::EINTR
+        return false
+      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+        puts "#{ Time.new } #{ e.class }, close tund"
+        close_tund( tund )
+        return false
+      end
+
+      true
+    end
+
+    ##
     # close dst
     #
     def close_dst( dst )
@@ -603,9 +620,7 @@ module Girl
       while tund_info[ :ctlmsgs ].any?
         data = tund_info[ :ctlmsgs ].first
 
-        begin
-          tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
-        rescue IO::WaitWritable, Errno::EINTR
+        unless send_data( tund, data, tund_info[ :tun_addr ] )
           return
         end
 
@@ -621,9 +636,7 @@ module Girl
           data = dst_ext[ :wmems ][ pack_id ]
 
           if data
-            begin
-              tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
-            rescue IO::WaitWritable, Errno::EINTR
+            unless send_data( tund, data, tund_info[ :tun_addr ] )
               return
             end
           end
@@ -689,9 +702,7 @@ module Girl
 
         data = [ [ pack_id, dst_local_port ].pack( 'Q>n' ), data ].join
 
-        begin
-          tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
-        rescue IO::WaitWritable, Errno::EINTR
+        unless send_data( tund, data, tund_info[ :tun_addr ] )
           return
         end
 

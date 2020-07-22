@@ -602,6 +602,23 @@ module Girl
     end
 
     ##
+    # send data
+    #
+    def send_data( tun, data, to_addr )
+      begin
+        tun.sendmsg( data, 0, to_addr )
+      rescue IO::WaitWritable, Errno::EINTR
+        return false
+      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+        puts "#{ Time.new } #{ e.class }, close tun"
+        close_tun( tun )
+        return false
+      end
+
+      true
+    end
+
+    ##
     # close src
     #
     def close_src( src )
@@ -837,13 +854,7 @@ module Girl
       while @tun_info[ :ctlmsgs ].any?
         to_addr, data = @tun_info[ :ctlmsgs ].first
 
-        begin
-          tun.sendmsg( data, 0, to_addr )
-        rescue IO::WaitWritable, Errno::EINTR
-          return
-        rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
-          puts "#{ Time.new } #{ e.class }, close tun"
-          close_tun( tun )
+        unless send_data( tun, data, to_addr )
           return
         end
 
@@ -859,13 +870,7 @@ module Girl
           data = src_ext[ :wmems ][ pack_id ]
 
           if data
-            begin
-              tun.sendmsg( data, 0, @tun_info[ :tund_addr ] )
-            rescue IO::WaitWritable, Errno::EINTR
-              return
-            rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
-              puts "#{ Time.new } #{ e.class }, close tun"
-              close_tun( tun )
+            unless send_data( tun, data, @tun_info[ :tund_addr ] )
               return
             end
           end
@@ -931,13 +936,7 @@ module Girl
 
         data = [ [ pack_id, src_id ].pack( 'Q>Q>' ), data ].join
 
-        begin
-          tun.sendmsg( data, 0, @tun_info[ :tund_addr ] )
-        rescue IO::WaitWritable, Errno::EINTR
-          return
-        rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
-          puts "#{ Time.new } #{ e.class }, close tun"
-          close_tun( tun )
+        unless send_data( tun, data, @tun_info[ :tund_addr ] )
           return
         end
 
