@@ -967,7 +967,7 @@ module Girl
         return
       end
 
-      id = rand( ( 2 ** 64 ) - 1 ) + 1
+      id = rand( ( 2 ** 64 ) - 2 ) + 1
       # puts "debug1 accept a src #{ addrinfo.inspect } #{ id }"
 
       @src_infos[ src ] = {
