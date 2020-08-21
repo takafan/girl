@@ -873,6 +873,8 @@ module Girl
             unless send_data( tun, data, @tun_info[ :tund_addr ] )
               return
             end
+
+            src_ext[ :last_continue_at ] = now
           end
         end
 

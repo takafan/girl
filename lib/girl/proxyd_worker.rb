@@ -609,6 +609,7 @@ module Girl
     # write tund
     #
     def write_tund( tund )
+      now = Time.new
       tund_info = @tund_infos[ tund ]
 
       if tund_info[ :is_closing ]
@@ -639,6 +640,8 @@ module Girl
             unless send_data( tund, data, tund_info[ :tun_addr ] )
               return
             end
+
+            dst_ext[ :last_continue_at ] = now
           end
         end
 
@@ -707,7 +710,6 @@ module Girl
         end
 
         # puts "debug2 written pack #{ pack_id }"
-        now = Time.new
         dst_ext[ :relay_pack_id ] = pack_id
         dst_ext[ :wmems ][ pack_id ] = data
         dst_ext[ :send_ats ][ pack_id ] = now
