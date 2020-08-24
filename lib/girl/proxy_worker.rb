@@ -741,15 +741,14 @@ module Girl
     #
     def write_src( src )
       src_info = @src_infos[ src ]
-      data = src_info[ :cache ]
-      from = :cache
+      from, data = :cache, src_info[ :cache ]
 
       if data.empty?
         if src_info[ :chunks ].any?
           path = File.join( @src_chunk_dir, src_info[ :chunks ].shift )
 
           begin
-            src_info[ :cache ] = data = IO.binread( path )
+            data = src_info[ :cache ] = IO.binread( path )
             File.delete( path )
           rescue Errno::ENOENT => e
             puts "p#{ Process.pid } #{ Time.new } read #{ path } #{ e.class }"
@@ -757,8 +756,7 @@ module Girl
             return
           end
         else
-          data = src_info[ :wbuff ]
-          from = :wbuff
+          from, data = :wbuff, src_info[ :wbuff ]
         end
       end
 
@@ -792,15 +790,14 @@ module Girl
     #
     def write_dst( dst )
       dst_info = @dst_infos[ dst ]
-      data = dst_info[ :cache ]
-      from = :cache
+      from, data = :cache, dst_info[ :cache ]
 
       if data.empty?
         if dst_info[ :chunks ].any?
           path = File.join( @dst_chunk_dir, dst_info[ :chunks ].shift )
 
           begin
-            dst_info[ :cache ] = data = IO.binread( path )
+            data = dst_info[ :cache ] = IO.binread( path )
             File.delete( path )
           rescue Errno::ENOENT => e
             puts "p#{ Process.pid } #{ Time.new } read #{ path } #{ e.class }"
@@ -808,8 +805,7 @@ module Girl
             return
           end
         else
-          data = dst_info[ :wbuff ]
-          from = :wbuff
+          from, data = :wbuff, dst_info[ :wbuff ]
         end
       end
 
@@ -879,7 +875,6 @@ module Girl
         end
 
         @tun_info[ :resendings ].shift
-        return
       end
 
       # 若写后达到上限，暂停取写前
@@ -895,8 +890,7 @@ module Girl
 
       # 取写前
       if @tun_info[ :caches ].any?
-        src_id, pack_id, data = @tun_info[ :caches ].first
-        from = :caches
+        datas = @tun_info[ :caches ]
       elsif @tun_info[ :chunks ].any?
         path = File.join( @tun_chunk_dir, @tun_info[ :chunks ].shift )
 
@@ -917,39 +911,39 @@ module Girl
           data = data[ ( 18 + pack_size )..-1 ]
         end
 
-        @tun_info[ :caches ] = caches
-        src_id, pack_id, data = caches.first
-        from = :caches
+        datas = @tun_info[ :caches ] = caches
       elsif @tun_info[ :wbuffs ].any?
-        src_id, pack_id, data = @tun_info[ :wbuffs ].first
-        from = :wbuffs
+        datas = @tun_info[ :wbuffs ]
       else
         @writes.delete( tun )
         return
       end
 
-      src_ext = @tun_info[ :src_exts ][ src_id ]
+      while datas.any?
+        src_id, pack_id, data = datas.first
+        src_ext = @tun_info[ :src_exts ][ src_id ]
 
-      if src_ext
-        if pack_id <= CONFUSE_UNTIL
-          data = @custom.encode( data )
-          # puts "debug1 encoded pack #{ pack_id }"
+        if src_ext
+          if pack_id <= CONFUSE_UNTIL
+            data = @custom.encode( data )
+            # puts "debug1 encoded pack #{ pack_id }"
+          end
+
+          data = [ [ pack_id, src_id ].pack( 'Q>Q>' ), data ].join
+
+          unless send_data( tun, data, @tun_info[ :tund_addr ] )
+            return
+          end
+
+          # puts "debug2 written pack #{ pack_id }"
+          src_ext[ :relay_pack_id ] = pack_id
+          src_ext[ :wmems ][ pack_id ] = data
+          src_ext[ :send_ats ][ pack_id ] = now
+          src_ext[ :last_continue_at ] = now
         end
 
-        data = [ [ pack_id, src_id ].pack( 'Q>Q>' ), data ].join
-
-        unless send_data( tun, data, @tun_info[ :tund_addr ] )
-          return
-        end
-
-        # puts "debug2 written pack #{ pack_id }"
-        src_ext[ :relay_pack_id ] = pack_id
-        src_ext[ :wmems ][ pack_id ] = data
-        src_ext[ :send_ats ][ pack_id ] = now
-        src_ext[ :last_continue_at ] = now
+        datas.shift
       end
-
-      @tun_info[ from ].shift
     end
 
     ##
