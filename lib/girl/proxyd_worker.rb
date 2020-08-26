@@ -808,13 +808,10 @@ module Girl
       tund_info = @tund_infos[ tund ]
 
       if from_addr != tund_info[ :tun_addr ]
-        if addrinfo.ip_port == Addrinfo.new( tund_info[ :tun_addr ] ).ip_port
-          puts "p#{ Process.pid } #{ Time.new } tun ip changed #{ addrinfo.inspect }"
-          tund_info[ :tun_addr ] = from_addr
-        else
-          puts "p#{ Process.pid } #{ Time.new } #{ addrinfo.inspect } not match #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
-          return
-        end
+        # 通常是光猫刷新ip（端口也会变），但万一不是，为了避免脏数据注入，关闭tund
+        puts "p#{ Process.pid } #{ Time.new } from #{ addrinfo.inspect } not match tun addr #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
+        set_is_closing( tund )
+        return
       end
 
       tund_info[ :last_recv_at ] = now
