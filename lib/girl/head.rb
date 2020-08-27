@@ -25,6 +25,7 @@ module Girl
   GOT_FIN2              = 11
   TUND_FIN              = 12
   TUN_FIN               = 13
+  IP_CHANGED            = 14
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
   RESERVED_ROUTE = <<EOF

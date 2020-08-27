@@ -35,6 +35,7 @@ require 'socket'
 #                   11 not use
 #                   12 tund fin
 #                   13 tun fin
+#                   14 tun ip changed
 #
 # Q>: 1+ pack_id -> Q>/n: src id / dst port -> traffic
 #

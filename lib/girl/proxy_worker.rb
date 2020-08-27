@@ -1370,6 +1370,11 @@ module Girl
 
           puts "p#{ Process.pid } #{ Time.new } recv tund fin"
           set_is_closing( tun )
+        when IP_CHANGED
+          return if from_addr != @tun_info[ :tund_addr ]
+
+          puts "p#{ Process.pid } #{ Time.new } recv ip changed"
+          set_is_closing( tun )
         end
 
         return

@@ -611,6 +611,11 @@ module Girl
       tund_info = @tund_infos[ tund ]
 
       if tund_info[ :is_closing ]
+        if tund_info[ :changed_tun_addr ]
+          data = [ 0, IP_CHANGED ].pack( 'Q>C' )
+          send_data( tund, data, tund_info[ :changed_tun_addr ] )
+        end
+
         close_tund( tund )
         return
       end
@@ -758,7 +763,8 @@ module Girl
         resendings: [],       # 重传队列 [ dst_local_port, pack_id ]
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间，过期关闭
-        is_closing: false     # 是否准备关闭
+        is_closing: false,    # 是否准备关闭
+        changed_tun_addr: nil # 记录到和tun addr不符的来源地址
       }
 
       add_read( tund, :tund )
@@ -810,6 +816,7 @@ module Girl
       if from_addr != tund_info[ :tun_addr ]
         # 通常是光猫刷新ip（端口也会变），但万一不是，为了避免脏数据注入，关闭tund
         puts "p#{ Process.pid } #{ Time.new } from #{ addrinfo.inspect } not match tun addr #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
+        tund_info[ :changed_tun_addr ] = from_addr
         set_is_closing( tund )
         return
       end
