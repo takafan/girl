@@ -65,12 +65,10 @@ export default {
     save_text: function( file ) {
       this.loadings[ 'save@' + file ] = true
       axios.post( this.http_host + '/api/save_text', { file: file, text: this.texts[ file ] } ).then( res => {
+        console.log( res.data )
         this.saved_file( file )
       }).catch( err => {
         console.log( err )
-        if ( file == 'girl.remote.txt' ) {
-          this.saved_file( file )
-        }
       })
     },
 
@@ -113,6 +111,7 @@ export default {
     systemctl: function( command, service ) {
       this.loadings[ command + '@' + service ] = true
       axios.post( this.http_host + '/api/systemctl', { command: command, service: service } ).then( res => {
+        console.log( res.data )
         this.executed_command( command, service )
       }).catch( err => {
         console.log( err )
@@ -147,6 +146,7 @@ export default {
     }
   },
   mounted: function () {
+    console.log( 'VUE_APP_HOST: ' + process.env.VUE_APP_HOST )
     this.load()
   },
   data () {
