@@ -418,15 +418,17 @@ module Girl
     ##
     # send data
     #
-    def send_data( tund, data, to_addr )
+    def send_data( sock, data, to_addr )
       begin
-        tund.sendmsg( data, 0, to_addr )
+        sock.sendmsg( data, 0, to_addr )
       rescue IO::WaitWritable, Errno::EINTR
         return false
       rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-        puts "#{ Time.new } #{ e.class }, close tund"
-        close_tund( tund )
-        return false
+        if @roles[ sock ] == :tund
+          puts "#{ Time.new } #{ e.class }, close tund"
+          close_tund( sock )
+          return false
+        end
       end
 
       true
@@ -541,9 +543,7 @@ module Girl
       while @proxyd_ctlmsgs.any?
         to_addr, data = @proxyd_ctlmsgs.first
 
-        begin
-          proxyd.sendmsg( data, 0, to_addr )
-        rescue IO::WaitWritable, Errno::EINTR
+        unless send_data( proxyd, data, to_addr )
           return
         end
 

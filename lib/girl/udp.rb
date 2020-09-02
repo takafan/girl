@@ -17,25 +17,12 @@ module Girl
   class Udp
 
     def initialize( udpd_host, udpd_port = 3030, redir_port = 1313 )
-      ctlr, ctlw = IO.pipe
-
-      redir = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
-      puts "redir bound on #{ redir_port } #{ Time.new }"
-
-      @mutex = Mutex.new
       @udpd_host = udpd_host
       @udpd_addr = Socket.sockaddr_in( udpd_port, udpd_host )
-      @ctlw = ctlw
-      @redir = redir
-      @reads = [ ctlr, redir ]
+      @mutex = Mutex.new
+      @reads = []
       @writes = []
-      @closings = []
-      @roles = {
-        ctlr => :ctlr,   # :ctlr / :redir / :tun
-        redir => :redir
-      }
+      @roles = {}        # :dotr / :redir / :tun
       @redir_wbuffs = [] # [ src_addr data ] ...
       @tuns = {}         # [ orig_src_addr dst_addr ]=> tun
       @mappings = {}     # src_addr => [ orig_src_addr dst_addr ]
@@ -47,6 +34,10 @@ module Girl
                          #   rbuffs: []
                          #   wbuffs: []
                          #   last_traff_at: now
+      dotr, dotw = IO.pipe
+      @dotw = dotw
+      add_read( dotr, :dotr )
+      new_a_redir( redir_port )
     end
 
     def looping
@@ -56,23 +47,23 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
-          rs.each do | sock |
-            case @roles[ sock ]
-            when :ctlr
-              read_ctlr( sock )
-            when :redir
-              read_redir( sock )
-            when :tun
-              read_tun( sock )
-            end
-          end
-
           ws.each do | sock |
             case @roles[ sock ]
             when :redir
               write_redir( sock )
             when :tun
               write_tun( sock )
+            end
+          end
+
+          rs.each do | sock |
+            case @roles[ sock ]
+            when :dotr
+              read_dotr( sock )
+            when :redir
+              read_redir( sock )
+            when :tun
+              read_tun( sock )
             end
           end
         end
@@ -85,13 +76,174 @@ module Girl
 
     private
 
-    def read_ctlr( ctlr )
-      od_addr = ctlr.read( 32 )
-      tun = @tuns[ od_addr ]
+    def loop_expire
+      Thread.new do
+        loop do
+          sleep 30
 
-      if tun
-        add_closing( tun )
+          @mutex.synchronize do
+            need_trigger = false
+            now = Time.new
+
+            @tun_infos.each do | tun, tun_info |
+              # net.netfilter.nf_conntrack_udp_timeout_stream
+              if now - tun_info[ :last_traff_at ] > 180
+                set_is_closing( tun )
+                need_trigger = true
+              end
+            end
+
+            if need_trigger
+              next_tick
+            end
+          end
+        end
       end
+    end
+
+    def new_a_redir( redir_port )
+      redir = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
+      puts "redir bound on #{ redir_port } #{ Time.new }"
+      @redir = redir
+      add_read( redir, :redir )
+    end
+
+    def new_a_tun( orig_src_addr, dst_addr, src_addr )
+      tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      tun.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+
+      @tun_infos[ tun ] = {
+        orig_src_addr: orig_src_addr,
+        dst_addr: dst_addr,
+        src_addr: src_addr,
+        tund_addr: nil,
+        rbuffs: [],
+        wbuffs: [],
+        last_traff_at: Time.new,
+        is_closing: false
+      }
+
+      @tuns[ [ orig_src_addr, dst_addr ].join ] = tun
+      add_read( tun, :tun )
+
+      tun
+    end
+
+    def add_redir_wbuff( redir, to_addr, data )
+      @redir_wbuffs << [ to_addr, data ]
+      add_write( redir )
+    end
+
+    def add_tun_wbuff( tun, to_addr, data )
+      tun_info = @tun_infos[ tun ]
+
+      if to_addr
+        tun_info[ :wbuffs ] << [ to_addr, data ]
+        add_write( tun )
+      else
+        tun_info[ :rbuffs ] << data
+      end
+    end
+
+    def add_read( sock, role )
+      unless @reads.include?( sock )
+        @reads << sock
+      end
+
+      @roles[ sock ] = role
+    end
+
+    def add_write( sock )
+      unless @writes.include?( sock )
+        @writes << sock
+      end
+    end
+
+    def set_is_closing( tun )
+      if tun && !tun.closed?
+        # puts "debug1 set tun is closing"
+
+        tun_info = @tun_infos[ tun ]
+        tun_info[ :is_closing ] = true
+
+        @reads.delete( tun )
+        add_write( tun )
+      end
+    end
+
+    def send_data( sock, data, to_addr )
+      begin
+        sock.sendmsg( data, 0, to_addr )
+      rescue IO::WaitWritable, Errno::EINTR
+        return false
+      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+        if @roles[ sock ] == :tun
+          puts "#{ Time.new } #{ e.class }, close tun"
+          close_tun( sock )
+          return false
+        end
+      end
+
+      true
+    end
+
+    def close_tun( tun )
+      tun.close
+      @reads.delete( tun )
+      @writes.delete( tun )
+      @roles.delete( tun )
+      tun_info = @tun_infos.delete( tun )
+      @tuns.delete( [ tun_info[ :orig_src_addr ], tun_info[ :dst_addr ] ].join )
+
+      if @mappings.include?( tun_info[ :src_addr ] )
+        orig_src_addr, dst_addr, timeout, read_at = @mappings[ tun_info[ :src_addr ] ]
+
+        if orig_src_addr == tun_info[ :orig_src_addr ] && dst_addr == tun_info[ :dst_addr ]
+          @mappings.delete( tun_info[ :src_addr ] )
+        end
+      end
+    end
+
+    def write_redir( redir )
+      while @redir_wbuffs.any?
+        to_addr, data = @redir_wbuffs.first
+
+        unless send_data( redir, data, to_addr )
+          return
+        end
+
+        @redir_wbuffs.shift
+      end
+
+      @writes.delete( redir )
+    end
+
+    def write_tun( tun )
+      tun_info = @tun_infos[ tun ]
+
+      if tun_info[ :is_closing ]
+        close_tun( tun )
+        return
+      end
+
+      while tun_info[ :wbuffs ].any?
+        to_addr, data = tun_info[ :wbuffs ].first
+
+        unless send_data( tun, data, to_addr )
+          return
+        end
+
+        tun_info[ :wbuffs ].shift
+      end
+
+      @writes.delete( tun )
+    end
+
+    def read_dotr( dotr )
+      dotr.read( 1 )
     end
 
     def read_redir( redir )
@@ -177,122 +329,6 @@ module Girl
 
       elsif from_addr == tun_info[ :tund_addr ]
         add_redir_wbuff( @redir, tun_info[ :src_addr ], data )
-      end
-    end
-
-    def write_redir( redir )
-      if @redir_wbuffs.empty?
-        @writes.delete( redir )
-        return
-      end
-
-      src_addr, data = @redir_wbuffs.shift
-      redir.sendmsg( data, 0, src_addr )
-    end
-
-    def write_tun( tun )
-      if @closings.include?( tun )
-        close_tun( tun )
-        return
-      end
-
-      tun_info = @tun_infos[ tun ]
-
-      if tun_info[ :wbuffs ].empty?
-        @writes.delete( tun )
-        return
-      end
-
-      to_addr, data = tun_info[ :wbuffs ].shift
-      tun.sendmsg( data, 0, to_addr )
-    end
-
-    def add_redir_wbuff( redir, to_addr, data )
-      @redir_wbuffs << [ to_addr, data ]
-      add_write( redir )
-    end
-
-    def add_tun_wbuff( tun, to_addr, data )
-      tun_info = @tun_infos[ tun ]
-
-      if to_addr
-        tun_info[ :wbuffs ] << [ to_addr, data ]
-        add_write( tun )
-      else
-        tun_info[ :rbuffs ] << data
-      end
-    end
-
-    def add_write( sock )
-      unless @writes.include?( sock )
-        @writes << sock
-      end
-    end
-
-    def add_closing( tun )
-      unless @closings.include?( tun )
-        @closings << tun
-      end
-
-      add_write( tun )
-    end
-
-    def close_tun( tun )
-      tun.close
-      @reads.delete( tun )
-      @writes.delete( tun )
-      @closings.delete( tun )
-      @roles.delete( tun )
-      tun_info = @tun_infos.delete( tun )
-      @tuns.delete( [ tun_info[ :orig_src_addr ], tun_info[ :dst_addr ] ].join )
-
-      if @mappings.include?( tun_info[ :src_addr ] )
-        orig_src_addr, dst_addr, timeout, read_at = @mappings[ tun_info[ :src_addr ] ]
-
-        if orig_src_addr == tun_info[ :orig_src_addr ] && dst_addr == tun_info[ :dst_addr ]
-          @mappings.delete( tun_info[ :src_addr ] )
-        end
-      end
-    end
-
-    def new_a_tun( orig_src_addr, dst_addr, src_addr )
-      tun = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      tun.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-
-      @tun_infos[ tun ] = {
-        orig_src_addr: orig_src_addr,
-        dst_addr: dst_addr,
-        src_addr: src_addr,
-        tund_addr: nil,
-        rbuffs: [],
-        wbuffs: [],
-        last_traff_at: Time.new
-      }
-
-      @tuns[ [ orig_src_addr, dst_addr ].join ] = tun
-      @roles[ tun ] = :tun
-      @reads << tun
-
-      tun
-    end
-
-    def loop_expire
-      Thread.new do
-        loop do
-          sleep 30
-
-          @mutex.synchronize do
-            now = Time.new
-
-            @tun_infos.values.each do | tun_info |
-              # net.netfilter.nf_conntrack_udp_timeout_stream
-              if now - tun_info[ :last_traff_at ] > 180
-                @ctlw.write( [ tun_info[ :orig_src_addr ], tun_info[ :dst_addr ] ].join )
-              end
-            end
-          end
-        end
       end
     end
 

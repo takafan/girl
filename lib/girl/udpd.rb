@@ -8,23 +8,10 @@ module Girl
   class Udpd
 
     def initialize( port = 3030 )
-      ctlr, ctlw = IO.pipe
-
-      udpd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      udpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      udpd.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
-      puts "udpd bound on #{ port } #{ Time.new }"
-
       @mutex = Mutex.new
-      @ctlw = ctlw
-      @udpd = udpd
-      @reads = [ ctlr, udpd ]
+      @reads = []
       @writes = []
-      @closings = []
-      @roles = {
-        ctlr => :ctlr,  # :ctlr / :udpd / :tund
-        udpd => :udpd
-      }
+      @roles = {}       # :dotr / :udpd / :tund
       @udpd_wbuffs = [] # [ tun_addr ctlmsg ] ...
       @tunds = {}       # [ tun_ip_addr orig_src_addr ] => tund
       @tund_infos = {}  # tund => {}
@@ -37,6 +24,10 @@ module Girl
                         #   is_tunneleds: { [ tun_addr dst_addr ] => false }
                         #   unpaired_dst_rbuffs: { dst_addr => [] }
                         #   last_traff_at: now
+      dotr, dotw = IO.pipe
+      @dotw = dotw
+      add_read( dotr, :dotr )
+      new_a_udpd( port )
     end
 
     def looping
@@ -46,23 +37,23 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
-          rs.each do | sock |
-            case @roles[ sock ]
-            when :ctlr
-              read_ctlr( sock )
-            when :udpd
-              read_udpd( sock )
-            when :tund
-              read_tund( sock )
-            end
-          end
-
           ws.each do | sock |
             case @roles[ sock ]
             when :udpd
               write_udpd( sock )
             when :tund
               write_tund( sock )
+            end
+          end
+
+          rs.each do | sock |
+            case @roles[ sock ]
+            when :dotr
+              read_dotr( sock )
+            when :udpd
+              read_udpd( sock )
+            when :tund
+              read_tund( sock )
             end
           end
         end
@@ -75,13 +66,176 @@ module Girl
 
     private
 
-    def read_ctlr( ctlr )
-      to_addr = ctlr.read( 32 )
-      tund = @tunds[ to_addr ]
+    def loop_expire
+      Thread.new do
+        loop do
+          sleep 30
+
+          @mutex.synchronize do
+            need_trigger = false
+            now = Time.new
+
+            @tund_infos.each do | tund, tund_info |
+              # net.netfilter.nf_conntrack_udp_timeout_stream
+              if now - tund_info[ :last_traff_at ] > 180
+                set_is_closing( tund )
+                need_trigger = true
+              end
+            end
+
+            if need_trigger
+              next_tick
+            end
+          end
+        end
+      end
+    end
+
+    def new_a_udpd( port )
+      udpd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      udpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      udpd.bind( Socket.sockaddr_in( port, '0.0.0.0' ) )
+      puts "udpd bound on #{ port } #{ Time.new }"
+      @udpd = udpd
+      add_read( udpd, :udpd )
+    end
+
+    def pair_tund( tun_addr, tun_ip_addr, orig_src_addr, dst_addr )
+      from_addr = [ tun_ip_addr, orig_src_addr ].join
+      td_addr = [ tun_addr, dst_addr ].join
+      tund = @tunds[ from_addr ]
 
       if tund
-        add_closing( tund )
+        tund_info = @tund_infos[ tund ]
+        tund_info[ :dst_addrs ][ tun_addr ] = dst_addr
+        tund_info[ :tun_addrs ][ dst_addr ] = tun_addr
+        tund_info[ :is_tunneleds ][ td_addr ] = false
+      else
+        tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+        tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_BROADCAST, 1 )
+        tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+        tund_port = tund.local_address.ip_unpack.last
+
+        @tund_infos[ tund ] = {
+          port: tund_port,
+          tun_ip_addr: tun_ip_addr,
+          orig_src_addr: orig_src_addr,
+          wbuffs: [],
+          dst_addrs: { tun_addr => dst_addr },
+          tun_addrs: { dst_addr => tun_addr },
+          is_tunneleds: { td_addr => false },
+          unpaired_dst_rbuffs: {},
+          last_traff_at: Time.new,
+          is_closing: false
+        }
+
+        @tunds[ from_addr ] = tund
+        add_read( tund, :tund )
       end
+
+      tund
+    end
+
+    def add_tund_wbuff( tund, to_addr, data )
+      tund_info = @tund_infos[ tund ]
+      tund_info[ :wbuffs ] << [ to_addr, data ]
+
+      add_write( tund )
+    end
+
+    def add_read( sock, role )
+      unless @reads.include?( sock )
+        @reads << sock
+      end
+
+      @roles[ sock ] = role
+    end
+
+    def add_write( sock )
+      unless @writes.include?( sock )
+        @writes << sock
+      end
+    end
+
+    def set_is_closing( tund )
+      if tund && !tund.closed?
+        # puts "debug1 set tund is closing"
+
+        tund_info = @tund_infos[ tund ]
+        tund_info[ :is_closing ] = true
+
+        @reads.delete( tund )
+        add_write( tund )
+      end
+    end
+
+    def send_data( sock, data, to_addr )
+      begin
+        sock.sendmsg( data, 0, to_addr )
+      rescue IO::WaitWritable, Errno::EINTR
+        return false
+      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+        if @roles[ sock ] == :tund
+          puts "#{ Time.new } #{ e.class }, close tund"
+          close_tund( sock )
+          return false
+        end
+      end
+
+      true
+    end
+
+    def close_tund( tund )
+      tund.close
+      @reads.delete( tund )
+      @writes.delete( tund )
+      @roles.delete( tund )
+      tund_info = @tund_infos.delete( tund )
+      @tunds.delete( [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ] ].join )
+    end
+
+    def next_tick
+      @dotw.write( '.' )
+    end
+
+    def write_udpd( udpd )
+      while @udpd_wbuffs.any?
+        to_addr, data = @udpd_wbuffs.first
+
+        unless send_data( udpd, data, to_addr )
+          return
+        end
+
+        @udpd_wbuffs.shift
+      end
+
+      @writes.delete( udpd )
+    end
+
+    def write_tund( tund )
+      tund_info = @tund_infos[ tund ]
+
+      if tund_info[ :is_closing ]
+        close_tund( tund )
+        return
+      end
+
+      while tund_info[ :wbuffs ].any?
+        to_addr, data = tund_info[ :wbuffs ].first
+
+        unless send_data( tund, data, to_addr )
+          return
+        end
+
+        tund_info[ :wbuffs ].shift
+      end
+
+      @writes.delete( tund )
+    end
+
+    def read_dotr( dotr )
+      dotr.read( 1 )
     end
 
     def read_udpd( udpd )
@@ -165,120 +319,6 @@ module Girl
       if tund_info[ :unpaired_dst_rbuffs ][ from_addr ].size < 5
         # puts "debug save other dst rbuff #{ addrinfo.inspect } #{ data.inspect }"
         tund_info[ :unpaired_dst_rbuffs ][ from_addr ] << data
-      end
-    end
-
-    def write_udpd( udpd )
-      if @udpd_wbuffs.empty?
-        @writes.delete( udpd )
-        return
-      end
-
-      tun_addr, ctlmsg = @udpd_wbuffs.shift
-      udpd.sendmsg( ctlmsg, 0, tun_addr )
-    end
-
-    def write_tund( tund )
-      if @closings.include?( tund )
-        close_tund( tund )
-        return
-      end
-
-      tund_info = @tund_infos[ tund ]
-
-      if tund_info[ :wbuffs ].empty?
-        @writes.delete( tund )
-        return
-      end
-
-      to_addr, data = tund_info[ :wbuffs ].shift
-      tund.sendmsg( data, 0, to_addr )
-    end
-
-    def add_tund_wbuff( tund, to_addr, data )
-      tund_info = @tund_infos[ tund ]
-      tund_info[ :wbuffs ] << [ to_addr, data ]
-
-      add_write( tund )
-    end
-
-    def add_write( sock )
-      unless @writes.include?( sock )
-        @writes << sock
-      end
-    end
-
-    def add_closing( tund )
-      unless @closings.include?( tund )
-        @closings << tund
-      end
-
-      add_write( tund )
-    end
-
-    def close_tund( tund )
-      tund.close
-      @reads.delete( tund )
-      @writes.delete( tund )
-      @closings.delete( tund )
-      @roles.delete( tund )
-      tund_info = @tund_infos.delete( tund )
-      @tunds.delete( [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ] ].join )
-    end
-
-    def pair_tund( tun_addr, tun_ip_addr, orig_src_addr, dst_addr )
-      from_addr = [ tun_ip_addr, orig_src_addr ].join
-      td_addr = [ tun_addr, dst_addr ].join
-      tund = @tunds[ from_addr ]
-
-      if tund
-        tund_info = @tund_infos[ tund ]
-        tund_info[ :dst_addrs ][ tun_addr ] = dst_addr
-        tund_info[ :tun_addrs ][ dst_addr ] = tun_addr
-        tund_info[ :is_tunneleds ][ td_addr ] = false
-      else
-        tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-        tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_BROADCAST, 1 )
-        tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-        tund_port = tund.local_address.ip_unpack.last
-
-        @tund_infos[ tund ] = {
-          port: tund_port,
-          tun_ip_addr: tun_ip_addr,
-          orig_src_addr: orig_src_addr,
-          wbuffs: [],
-          dst_addrs: { tun_addr => dst_addr },
-          tun_addrs: { dst_addr => tun_addr },
-          is_tunneleds: { td_addr => false },
-          unpaired_dst_rbuffs: {},
-          last_traff_at: Time.new
-        }
-
-        @roles[ tund ] = :tund
-        @reads << tund
-        @tunds[ from_addr ] = tund
-      end
-
-      tund
-    end
-
-    def loop_expire
-      Thread.new do
-        loop do
-          sleep 30
-
-          @mutex.synchronize do
-            now = Time.new
-
-            @tund_infos.values.each do | tund_info |
-              # net.netfilter.nf_conntrack_udp_timeout_stream
-              if now - tund_info[ :last_traff_at ] > 180
-                @ctlw.write( [ tund_info[ :tun_ip_addr ], tund_info[ :orig_src_addr ] ].join )
-              end
-            end
-          end
-        end
       end
     end
 
