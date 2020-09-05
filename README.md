@@ -161,6 +161,26 @@ curl -x socks5h://127.0.0.1:6666 https://www.google.com/
 
 妹子同时支持http和socks5代理。
 
+## 或者docker
+
+下载镜像：
+
+```bash
+docker pull takafan/girl
+```
+
+远端一键启动：
+
+```bash
+docker run -d -e USE=proxyd --network=host -it takafan/girl
+```
+
+近端一键启动：
+
+```bash
+docker run -d -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666/udp -it takafan/girl
+```
+
 ## 设备端
 
 远端近端启好后，在想用的设备上设代理，填近端的地址。
