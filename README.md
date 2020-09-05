@@ -172,13 +172,13 @@ docker pull takafan/girl
 远端一键启动：
 
 ```bash
-docker run -d -e USE=proxyd --network=host -it takafan/girl
+docker run -d --restart=always -e USE=proxyd --network=host -it takafan/girl
 ```
 
 近端一键启动：
 
 ```bash
-docker run -d -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -it takafan/girl
+docker run -d --restart=always -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -it takafan/girl
 ```
 
 ## 设备端
