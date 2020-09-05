@@ -108,7 +108,7 @@ module Girl
           raise "not found direct file #{ direct_path }"
         end
 
-        directs = ( [ Addrinfo.ip( proxyd_host ).ip_address ] + RESERVED_ROUTE.split( "\n" ) + IO.binread( direct_path ).split( "\n" ) ).map { | line | IPAddr.new( line.strip ) }
+        directs = ( RESERVED_ROUTE.split( "\n" ) + IO.binread( direct_path ).split( "\n" ) ).map { | line | IPAddr.new( line.strip ) }
       end
 
       remotes = []

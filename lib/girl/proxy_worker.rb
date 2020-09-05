@@ -264,8 +264,10 @@ module Girl
     # deal with destination ip
     #
     def deal_with_destination_ip( src, ip_info )
-      if @directs.any? { | direct | direct.include?( ip_info.ip_address ) }
-        # ip命中直连列表，直连
+      src_info = @src_infos[ src ]
+
+      if ( @directs.any? { | direct | direct.include?( ip_info.ip_address ) } ) || ( ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) )
+        # ip命中直连列表，或者访问远端非80/443端口，直连
         # puts "debug1 #{ ip_info.inspect } hit directs"
         new_a_dst( src, ip_info )
       else
