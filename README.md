@@ -152,7 +152,7 @@ ytimg.com
 
 不写问题也不大。不写的话，本地解析google.com会得到假ip，但国内ip段并不在假ip的取值范围内，所以还是会走远端重新解析。
 
-好了，测试一下：
+启好了，测试一下：
 
 ```bash
 curl -x http://127.0.0.1:6666 https://www.google.com/
@@ -161,13 +161,9 @@ curl -x socks5h://127.0.0.1:6666 https://www.google.com/
 
 妹子同时支持http和socks5代理。
 
-## 或者docker
+## docker
 
-下载镜像：
-
-```bash
-docker pull takafan/girl
-```
+没有特别需求，可以直接使用我发布在docker hub的妹子镜像。
 
 远端一键启动：
 
@@ -181,6 +177,16 @@ docker run -d --restart=always -e USE=proxyd --network=host -it takafan/girl
 docker run -d --restart=always -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -it takafan/girl
 ```
 
+## mac版docker，cpu爆满bug
+
+bug细节，可以不看：容器里，当妹子近端发起向目的地的连接，docker会查看当前网络，如果当前网络勾了https代理，会生成一段针对目的地的CONNECT，改为请求代理地址，于是妹子又得到一个CONNECT，我连我自己，无限连，cpu爆满。
+
+不勾https代理，避免bug。
+
+不勾的话chrome有问题，好在有兼顾chrome的设法：只勾socks代理。
+
+dropbox又有问题，自动检测不灵了，好在dropbox支持设手动。
+
 ## 设备端
 
 远端近端启好后，在想用的设备上设代理，填近端的地址。
@@ -189,7 +195,7 @@ docker run -d --restart=always -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -
 
 windows: 开始 > 设置 > 网络和Internet > 代理 > 手动设置代理 > 使用代理服务器 > 开 > 填写地址和端口 > 保存
 
-macos: 系统偏好设置 > 网络 > 选中一个连接 > 高级 > 代理 > 打勾：网页代理(HTTP)，安全网页代理(HTTPS) > 填写服务器和端口 > 好 > 应用
+macos: 系统偏好设置 > 网络 > 选中一个连接 > 高级 > 代理 > 打勾SOCKS代理 > 填写地址和端口 > 好 > 应用
 
 ios: 设置 > 无线局域网 > wifi详情 > 配置代理 > 手动 > 填写服务器和端口 > 存储
 
