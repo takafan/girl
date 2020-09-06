@@ -209,6 +209,13 @@ switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置
 
 windows: 开始 > 设置 > 网络和Internet > 以太网 > 更改适配器选项 > 右键属性 > 取消勾选Internet协议版本6（TCP/IPv6）
 
+mac:
+
+```bash
+networksetup -setv6off Ethernet
+networksetup -setv6off Wi-Fi
+```
+
 linux:
 
 ```bash
