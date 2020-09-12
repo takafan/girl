@@ -246,9 +246,9 @@ sysctl --system
 CONNECT google.com HTTP/1.1\r\n\r\n
 ```
 
-妹子不用tcp，而是把流量打包成udp，邪恶没有管udp。
+妹子不用tcp，而是把流量打包成udp，udp邪恶没管。
 
-但妹子还是提供开放式的加解密，照顾人。
+但妹子还是提供加解密，开放式的。
 
 覆盖下面两个方法即可：
 
