@@ -152,7 +152,7 @@ module Girl
     def loop_check_status
       Thread.new do
         loop do
-          sleep STATUS_INTERVAL
+          sleep CHECK_STATUS_INTERVAL
 
           @mutex.synchronize do
             if @tun && !@tun.closed? && @tun_info[ :tund_addr ]
@@ -1226,7 +1226,7 @@ module Girl
 
           tund_port = data[ 9, 2 ].unpack( 'n' ).first
 
-          # puts "debug1 got tund port #{ tund_port }"
+          puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
           tund_addr = Socket.sockaddr_in( tund_port, @proxyd_host )
           @tun_info[ :tund_addr ] = tund_addr
 
@@ -1291,36 +1291,36 @@ module Girl
           # 发miss
           if !src_ext[ :src ].closed? && ( src_ext[ :continue_dst_pack_id ] < relay_dst_pack_id )
             ranges = []
+            ignored = false
             curr_pack_id = src_ext[ :continue_dst_pack_id ] + 1
 
             src_ext[ :pieces ].keys.sort.each do | pack_id |
               if pack_id > curr_pack_id
                 ranges << [ curr_pack_id, pack_id - 1 ]
+
+                if range.size >= MISS_RANGE_LIMIT
+                  puts "p#{ Process.pid } #{ Time.new } break add miss range at #{ pack_id }"
+                  ignored = true
+                  break
+                end
               end
 
               curr_pack_id = pack_id + 1
             end
 
-            if curr_pack_id <= relay_dst_pack_id
+            if !ignored && ( curr_pack_id <= relay_dst_pack_id )
               ranges << [ curr_pack_id, relay_dst_pack_id ]
             end
 
-            pack_count = 0
             # puts "debug1 continue/relay #{ src_ext[ :continue_dst_pack_id ] }/#{ relay_dst_pack_id } send MISS #{ ranges.size }"
 
             ranges.each do | pack_id_begin, pack_id_end |
-              if pack_count >= BREAK_SEND_MISS
-                puts "p#{ Process.pid } #{ Time.new } break send miss at #{ pack_id_begin }"
-                break
-              end
-
               data2 = [ 0, MISS, dst_port, pack_id_begin, pack_id_end ].pack( 'Q>CnQ>Q>' )
               add_tun_ctlmsg( data2 )
-              pack_count += ( pack_id_end - pack_id_begin + 1 )
             end
           end
         when MISS
-          return if from_addr != @tun_info[ :tund_addr ]
+          return if ( from_addr != @tun_info[ :tund_addr ] ) || ( @tun_info[ :resendings ].size >= RESENDING_LIMIT )
 
           src_id, pack_id_begin, pack_id_end = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
 
@@ -1331,7 +1331,7 @@ module Girl
             send_at = src_ext[ :send_ats ][ pack_id ]
 
             if send_at
-              break if now - send_at < STATUS_INTERVAL
+              break if now - send_at < CHECK_STATUS_INTERVAL
               @tun_info[ :resendings ] << [ src_id, pack_id ]
             end
           end

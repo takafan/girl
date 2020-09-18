@@ -144,7 +144,7 @@ module Girl
     def loop_check_status
       Thread.new do
         loop do
-          sleep STATUS_INTERVAL
+          sleep CHECK_STATUS_INTERVAL
 
           if @tunds.any?
             @mutex.synchronize do
@@ -866,35 +866,37 @@ module Girl
           # 发miss
           if !dst_ext[ :dst ].closed? && ( dst_ext[ :continue_src_pack_id ] < relay_src_pack_id )
             ranges = []
+            ignored = false
             curr_pack_id = dst_ext[ :continue_src_pack_id ] + 1
 
             dst_ext[ :pieces ].keys.sort.each do | pack_id |
               if pack_id > curr_pack_id
                 ranges << [ curr_pack_id, pack_id - 1 ]
+
+                if range.size >= MISS_RANGE_LIMIT
+                  puts "p#{ Process.pid } #{ Time.new } break add miss range at #{ pack_id }"
+                  ignored = true
+                  break
+                end
               end
 
               curr_pack_id = pack_id + 1
             end
 
-            if curr_pack_id <= relay_src_pack_id
+            if !ignored && ( curr_pack_id <= relay_src_pack_id )
               ranges << [ curr_pack_id, relay_src_pack_id ]
             end
 
-            pack_count = 0
             # puts "debug1 continue/relay #{ dst_ext[ :continue_src_pack_id ] }/#{ relay_src_pack_id } send MISS #{ ranges.size }"
 
             ranges.each do | pack_id_begin, pack_id_end |
-              if pack_count >= BREAK_SEND_MISS
-                puts "p#{ Process.pid } #{ Time.new } break send miss at #{ pack_id_begin }"
-                break
-              end
-
               data2 = [ 0, MISS, src_id, pack_id_begin, pack_id_end ].pack( 'Q>CQ>Q>Q>' )
               add_tund_ctlmsg( tund, data2 )
-              pack_count += ( pack_id_end - pack_id_begin + 1 )
             end
           end
         when MISS
+          return if tund_info[ :resendings ].size >= RESENDING_LIMIT
+
           dst_local_port, pack_id_begin, pack_id_end = data[ 9, 18 ].unpack( 'nQ>Q>' )
 
           dst_ext = tund_info[ :dst_exts ][ dst_local_port ]
@@ -904,7 +906,7 @@ module Girl
             send_at = dst_ext[ :send_ats ][ pack_id ]
 
             if send_at
-              break if now - send_at < STATUS_INTERVAL
+              break if now - send_at < CHECK_STATUS_INTERVAL
               tund_info[ :resendings ] << [ dst_local_port, pack_id ]
             end
           end
