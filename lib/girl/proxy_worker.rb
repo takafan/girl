@@ -1298,7 +1298,7 @@ module Girl
               if pack_id > curr_pack_id
                 ranges << [ curr_pack_id, pack_id - 1 ]
 
-                if range.size >= MISS_RANGE_LIMIT
+                if ranges.size >= MISS_RANGE_LIMIT
                   puts "p#{ Process.pid } #{ Time.new } break add miss range at #{ pack_id }"
                   ignored = true
                   break
