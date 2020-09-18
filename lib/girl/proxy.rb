@@ -170,6 +170,29 @@ module Girl
       puts "im #{ im }"
       puts "worker count #{ worker_count }"
 
+      names = %w[
+        PACK_SIZE
+        CHUNK_SIZE
+        WBUFFS_LIMIT
+        WMEMS_LIMIT
+        RESUME_BELOW
+        EXPIRE_NEW
+        EXPIRE_AFTER
+        CHECK_EXPIRE_INTERVAL
+        CHECK_STATUS_INTERVAL
+        SEND_STATUS_UNTIL
+        MISS_RANGE_LIMIT
+        RESENDING_LIMIT
+        CONFUSE_UNTIL
+        RESOLV_CACHE_EXPIRE
+      ]
+
+      len = names.map{ | name | name.size }.max
+
+      names.each do | name |
+        puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
+      end
+
       if RUBY_PLATFORM.include?( 'linux' )
         $0 = title
         workers = []

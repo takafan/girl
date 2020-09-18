@@ -9,7 +9,7 @@ module Girl
   CHECK_EXPIRE_INTERVAL = 30               # 检查过期间隔
   CHECK_STATUS_INTERVAL = 0.5              # 发送状态间隔
   SEND_STATUS_UNTIL     = 10               # 持续的告之对面状态，直到没有流量往来，持续多少秒
-  MISS_RANGE_LIMIT      = 100              # miss段上限，达到上限忽略要后面的段
+  MISS_RANGE_LIMIT      = 500              # miss段上限，达到上限忽略要后面的段
   RESENDING_LIMIT       = 5000             # 重传队列上限
   CONFUSE_UNTIL         = 5                # 混淆前几个包
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
