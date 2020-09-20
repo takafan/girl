@@ -20,32 +20,11 @@ module Girl
 
         conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
         proxyd_port = conf[ :proxyd_port ]
-        proxyd_tmp_dir = conf[ :proxyd_tmp_dir ]
         worker_count = conf[ :worker_count ]
       end
 
       unless proxyd_port
         proxyd_port = 6060
-      end
-
-      unless proxyd_tmp_dir
-        proxyd_tmp_dir = '/tmp/girl.proxyd'
-      end
-
-      unless File.exist?( proxyd_tmp_dir )
-        Dir.mkdir( proxyd_tmp_dir )
-      end
-
-      dst_chunk_dir = File.join( proxyd_tmp_dir, 'dst.chunk' )
-
-      unless Dir.exist?( dst_chunk_dir )
-        Dir.mkdir( dst_chunk_dir )
-      end
-
-      tund_chunk_dir = File.join( proxyd_tmp_dir, 'tund.chunk' )
-
-      unless Dir.exist?( tund_chunk_dir )
-        Dir.mkdir( tund_chunk_dir )
       end
 
       nprocessors = Etc.nprocessors
@@ -57,9 +36,29 @@ module Girl
       title = "girl proxyd #{ Girl::VERSION }"
       puts title
       puts "proxyd port #{ proxyd_port }"
-      puts "dst chunk dir #{ dst_chunk_dir }"
-      puts "tund chunk dir #{ tund_chunk_dir }"
       puts "worker count #{ worker_count }"
+
+      names = %w[
+        PACK_SIZE
+        READ_SIZE
+        WMEMS_LIMIT
+        RESUME_BELOW
+        EXPIRE_NEW
+        EXPIRE_AFTER
+        CHECK_EXPIRE_INTERVAL
+        CHECK_STATUS_INTERVAL
+        SEND_STATUS_UNTIL
+        MULTI_MISS_SIZE
+        MISS_RANGE_LIMIT
+        CONFUSE_UNTIL
+        RESOLV_CACHE_EXPIRE
+      ]
+
+      len = names.map{ | name | name.size }.max
+
+      names.each do | name |
+        puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
+      end
 
       $0 = title
       workers = []
@@ -67,7 +66,7 @@ module Girl
       worker_count.times do | i |
         workers << fork do
           $0 = 'girl proxyd worker'
-          worker = Girl::ProxydWorker.new( proxyd_port, dst_chunk_dir, tund_chunk_dir )
+          worker = Girl::ProxydWorker.new( proxyd_port )
 
           Signal.trap( :TERM ) do
             puts "w#{ i } exit"

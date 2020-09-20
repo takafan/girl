@@ -36,6 +36,7 @@ require 'socket'
 #                   12 tund fin
 #                   13 tun fin
 #                   14 tun ip changed
+#                   15 multi miss     -> Q>/n: src id / dst port -> Q>: pack id begin -> Q>: pack id end -> Q>*
 #
 # Q>: 1+ pack_id -> Q>/n: src id / dst port -> traffic
 #
@@ -74,8 +75,6 @@ module Girl
       #     "proxyd_port": 6060,                  // 代理服务，远端端口
       #     "direct_path": "girl.direct.txt",     // 直连ip段
       #     "remote_path": "girl.remote.txt",     // 交给远端解析的域名列表
-      #     "proxy_tmp_dir": "/tmp/girl.proxy",   // 近端缓存根路径
-      #     "proxyd_tmp_dir": "/tmp/girl.proxyd", // 远端缓存根路径
       #     "im": "girl",                         // 标识，用来识别近端
       #     "worker_count": 4                     // 子进程数，默认取cpu个数
       # }
@@ -85,7 +84,6 @@ module Girl
       proxyd_port = conf[ :proxyd_port ]
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
-      proxy_tmp_dir = conf[ :proxy_tmp_dir ]
       im = conf[ :im ]
       worker_count = conf[ :worker_count ]
 
@@ -121,32 +119,6 @@ module Girl
         remotes = IO.binread( remote_path ).split( "\n" ).map { | line | line.strip }
       end
 
-      unless proxy_tmp_dir
-        proxy_tmp_dir = '/tmp/girl.proxy'
-      end
-
-      unless File.exist?( proxy_tmp_dir )
-        Dir.mkdir( proxy_tmp_dir )
-      end
-
-      src_chunk_dir = File.join( proxy_tmp_dir, 'src.chunk' )
-
-      unless Dir.exist?( src_chunk_dir )
-        Dir.mkdir( src_chunk_dir )
-      end
-
-      dst_chunk_dir = File.join( proxy_tmp_dir, 'dst.chunk' )
-
-      unless Dir.exist?( dst_chunk_dir )
-        Dir.mkdir( dst_chunk_dir )
-      end
-
-      tun_chunk_dir = File.join( proxy_tmp_dir, 'tun.chunk' )
-
-      unless Dir.exist?( tun_chunk_dir )
-        Dir.mkdir( tun_chunk_dir )
-      end
-
       unless im
         im = 'girl'
       end
@@ -164,16 +136,12 @@ module Girl
       puts "proxyd port #{ proxyd_port }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
-      puts "src chunk dir #{ src_chunk_dir }"
-      puts "dst chunk dir #{ dst_chunk_dir }"
-      puts "tun chunk dir #{ tun_chunk_dir }"
       puts "im #{ im }"
       puts "worker count #{ worker_count }"
 
       names = %w[
         PACK_SIZE
-        CHUNK_SIZE
-        WBUFFS_LIMIT
+        READ_SIZE
         WMEMS_LIMIT
         RESUME_BELOW
         EXPIRE_NEW
@@ -181,8 +149,8 @@ module Girl
         CHECK_EXPIRE_INTERVAL
         CHECK_STATUS_INTERVAL
         SEND_STATUS_UNTIL
+        MULTI_MISS_SIZE
         MISS_RANGE_LIMIT
-        RESENDING_LIMIT
         CONFUSE_UNTIL
         RESOLV_CACHE_EXPIRE
       ]
@@ -200,7 +168,7 @@ module Girl
         worker_count.times do | i |
           workers << fork do
             $0 = 'girl proxy worker'
-            worker = Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, src_chunk_dir, dst_chunk_dir, tun_chunk_dir, im )
+            worker = Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, im )
 
             Signal.trap( :TERM ) do
               puts "w#{ i } exit"
@@ -224,7 +192,7 @@ module Girl
 
         Process.waitall
       else
-        Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, src_chunk_dir, dst_chunk_dir, tun_chunk_dir, im ).looping
+        Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, im ).looping
       end
     end
 
