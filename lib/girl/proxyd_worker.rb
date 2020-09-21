@@ -640,7 +640,7 @@ module Girl
         wbuffs: [],           # 写前 [ dst_id, pack_id, data ]
         wmems: {},            # 写后 [ dst_id, pack_id ] => data
         tun_addr: from_addr,  # tun地址
-        dsts: {},             # dst额外信息 dst_id => dst
+        dsts: {},             # dst_id => dst
         dst_ids: {},          # src_id => dst_id
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间，过期关闭
