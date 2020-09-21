@@ -905,7 +905,7 @@ module Girl
           # puts "debug1 4-2. tund recv traffic -> src closed and all traffic received ? -> close dst after write"
           set_is_closing( dst )
         end
-      elsif !dst_info[ :pieces ].include?( pack_id )
+      else
         dst_info[ :pieces ][ pack_id ] = data
         dst_info[ :last_continue_at ] = now
       end

@@ -197,6 +197,9 @@ module Girl
       end
     end
 
+    ##
+    # loop send hello
+    #
     def loop_send_hello
       data = @custom.hello
 
@@ -355,8 +358,6 @@ module Girl
         tund_addr: nil,       # tund地址
         srcs: {},             # src_id => src
         src_ids: {},          # dst_id => src_id
-        paused: false,        # 是否暂停写
-        resendings: [],       # 重传队列 [ src_id, pack_id ]
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间，过期关闭
         is_closing: false     # 是否准备关闭
@@ -1310,7 +1311,7 @@ module Girl
           # puts "debug1 2-2. tun recv traffic -> dst closed and all traffic received ? -> close src after write"
           set_is_closing( src )
         end
-      elsif !src_info[ :pieces ].include?( pack_id )
+      else
         src_info[ :pieces ][ pack_id ] = data
         src_info[ :last_continue_at ] = now
       end
