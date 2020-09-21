@@ -95,7 +95,7 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
 
           @mutex.synchronize do
-            need_trigger = false
+            trigger = false
             now = Time.new
 
             if @tun && !@tun.closed?
@@ -104,7 +104,7 @@ module Girl
               if is_expired
                 puts "p#{ Process.pid } #{ Time.new } expire tun"
                 set_is_closing( @tun )
-                need_trigger = true
+                trigger = true
               else
                 data = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
                 # puts "debug1 #{ Time.new } heartbeat"
@@ -117,7 +117,7 @@ module Girl
 
                     if src_info && ( now - src_info[ :last_continue_at ] > EXPIRE_AFTER )
                       puts "p#{ Process.pid } #{ Time.new } expire src ext #{ src_info[ :destination_domain ] }"
-                      @tun_info[ :wmems ].delete_if { | src_id_and_pack_id, _ | src_id_and_pack_id.first == src_id }
+                      @tun_info[ :wmems ].delete_if { | src_id_pack_id, _ | src_id_pack_id.first == src_id }
                       @tun_info[ :src_ids ].delete( src_info[ :dst_id ] )
                       @src_infos.delete( src )
                       del_src_ids << src_id
@@ -135,7 +135,7 @@ module Girl
               if now - src_info[ :last_continue_at ] > EXPIRE_AFTER
                 puts "p#{ Process.pid } #{ Time.new } expire src #{ src_info[ :destination_domain ] }"
                 set_is_closing( src )
-                need_trigger = true
+                trigger = true
               end
             end
 
@@ -143,11 +143,11 @@ module Girl
               if now - dst_info[ :last_continue_at ] > EXPIRE_AFTER
                 puts "p#{ Process.pid } #{ Time.new } expire dst #{ dst_info[ :domain ] }"
                 set_is_closing( dst )
-                need_trigger = true
+                trigger = true
               end
             end
 
-            if need_trigger
+            if trigger
               next_tick
             end
           end
@@ -179,17 +179,23 @@ module Girl
               end
 
               if @pause_srcs.any? && ( @tun_info[ :wmems ].size < RESUME_BELOW )
+                trigger = false
+
                 @pause_srcs.each do | src |
                   src_info = @src_infos[ src ]
 
                   if src_info
                     puts "p#{ Process.pid } #{ Time.new } resume src #{ src_info[ :destination_domain ] }"
                     add_read( src )
+                    trigger = true
                   end
                 end
 
                 @pause_srcs.clear
-                next_tick
+
+                if trigger
+                  next_tick
+                end
               end
             end
           end
@@ -229,7 +235,7 @@ module Girl
     def loop_send_a_new_source( src )
       src_info = @src_infos[ src ]
 
-      if src_info && @tun_info[ :tund_addr ]
+      if src_info
         destination_domain = src_info[ :destination_domain ]
         destination_port = src_info[ :destination_port ]
         domain_port = [ destination_domain, destination_port ].join( ':' )
@@ -237,7 +243,7 @@ module Girl
 
         Thread.new do
           EXPIRE_NEW.times do | i |
-            if src.closed? || src_info[ :dst_id ]
+            if @tun.nil? || @tun.closed? || src.closed? || src_info[ :dst_id ]
               # puts "debug1 break loop send a new source #{ src_info[ :dst_port ] }"
               break
             end
@@ -469,12 +475,12 @@ module Girl
       method, url, proto = lines.first.split( ' ' )
 
       if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://'
-        domain_and_port = url.split( '/' )[ 2 ]
-        data = data.sub( "http://#{ domain_and_port }", '' )
-        # puts "debug1 subed #{ data.inspect } #{ domain_and_port }"
+        domain_port = url.split( '/' )[ 2 ]
+        data = data.sub( "http://#{ domain_port }", '' )
+        # puts "debug1 subed #{ data.inspect } #{ domain_port }"
       end
 
-      [ data, domain_and_port ]
+      [ data, domain_port ]
     end
 
     ##
@@ -556,9 +562,9 @@ module Girl
     # tunnel data
     #
     def tunnel_data( src, data )
+      now = Time.new
       src_info = @src_infos[ src ]
       src_id = src_info[ :id ]
-      now = Time.new
       pack_id = src_info[ :biggest_pack_id ]
       idx = 0
       len = data.bytesize
@@ -682,10 +688,11 @@ module Girl
     # del src ext
     #
     def del_src_ext( src_id )
-      @tun_info[ :wmems ].delete_if { | src_id_and_pack_id, _ | src_id_and_pack_id.first == src_id }
-      src = @tun_info[ :srcs ].delete( src_id )
+      src = @tun_info[ :srcs ][ src_id ]
 
-      if src
+      if src && src.closed?
+        @tun_info[ :wmems ].delete_if { | src_id_pack_id, _ | src_id_pack_id.first == src_id }
+        @tun_info[ :srcs ].delete( src_id )
         src_info = @src_infos.delete( src )
 
         if src_info
@@ -865,9 +872,9 @@ module Girl
       when :uncheck
         if data[ 0, 7 ] == 'CONNECT'
           # puts "debug1 CONNECT"
-          domain_and_port = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
+          domain_port = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
 
-          unless domain_and_port
+          unless domain_port
             puts "p#{ Process.pid } #{ Time.new } CONNECT miss domain"
             set_is_closing( src )
             return
@@ -913,13 +920,13 @@ module Girl
             return
           end
 
-          data, domain_and_port = sub_http_request( data )
+          data, domain_port = sub_http_request( data )
 
-          unless domain_and_port
+          unless domain_port
             # puts "debug1 not HTTP"
-            domain_and_port = host_line.split( ' ' )[ 1 ]
+            domain_port = host_line.split( ' ' )[ 1 ]
 
-            unless domain_and_port
+            unless domain_port
               puts "p#{ Process.pid } #{ Time.new } Host line miss domain"
               set_is_closing( src )
               return
@@ -930,7 +937,7 @@ module Girl
           src_info[ :rbuff ] << data
         end
 
-        domain, port = domain_and_port.split( ':' )
+        domain, port = domain_port.split( ':' )
         port = port ? port.to_i : 80
 
         src_info[ :proxy_proto ] = :http
@@ -1036,7 +1043,7 @@ module Girl
       src = dst_info[ :src ]
 
       if src.closed?
-        puts "p#{ Process.pid } #{ Time.new } src closed, close dst"
+        puts "p#{ Process.pid } #{ Time.new } src closed, close dst #{ dst_info[ :domain ] }"
         set_is_closing( dst )
         return
       end
@@ -1082,10 +1089,10 @@ module Girl
           src_id, dst_id = data[ 9, 10 ].unpack( 'Q>n' )
 
           src = @tun_info[ :srcs ][ src_id ]
-          return if src.closed?
+          return if src.nil? || src.closed?
 
           src_info = @src_infos[ src ]
-          return if src_info[ :dst_id ]
+          return if src_info.nil? || src_info[ :dst_id ]
 
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
 
@@ -1278,7 +1285,7 @@ module Girl
       return unless src_id
 
       src = @tun_info[ :srcs ][ src_id ]
-      return unless src
+      return if src.nil? || src.closed?
 
       src_info = @src_infos[ src ]
       return unless src_info

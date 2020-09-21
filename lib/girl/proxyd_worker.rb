@@ -92,7 +92,7 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
 
           @mutex.synchronize do
-            need_trigger = false
+            trigger = false
             now = Time.new
 
             @tund_infos.each do | tund, tund_info |
@@ -102,7 +102,7 @@ module Girl
                 if is_expired
                   puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
                   set_is_closing( tund )
-                  need_trigger = true
+                  trigger = true
                 else
                   data = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
                   # puts "debug1 #{ Time.new } #{ tund_info[ :port ] } heartbeat"
@@ -115,7 +115,7 @@ module Girl
 
                       if dst_info && ( now - dst_info[ :last_continue_at ] > EXPIRE_AFTER )
                         puts "p#{ Process.pid } #{ Time.new } expire dst ext #{ dst_info[ :domain_port ] }"
-                        tund_info[ :wmems ].delete_if { | port_and_pack_id, _ | port_and_pack_id.first == dst_id }
+                        tund_info[ :wmems ].delete_if { | dst_id_pack_id, _ | dst_id_pack_id.first == dst_id }
                         tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
                         @dst_infos.delete( dst )
                         del_dst_ids << dst_id
@@ -134,11 +134,11 @@ module Girl
               if now - dst_info[ :last_continue_at ] > EXPIRE_AFTER
                 puts "p#{ Process.pid } #{ Time.new } expire dst #{ dst_info[ :domain_port ] }"
                 set_is_closing( dst )
-                need_trigger = true
+                trigger = true
               end
             end
 
-            if need_trigger
+            if trigger
               next_tick
             end
           end
@@ -155,8 +155,6 @@ module Girl
           sleep CHECK_STATUS_INTERVAL
 
           @mutex.synchronize do
-            need_trigger = false
-
             if @tunds.any?
               @tunds.each do | tund_port, tund |
                 tund_info = @tund_infos[ tund ]
@@ -206,17 +204,13 @@ module Girl
                   add_read( dst )
                 end
 
+                next_tick
                 @pause_dsts -= resume_dsts
-                need_trigger = true
               end
 
               if ignore_dsts.any?
                 @pause_dsts -= ignore_dsts
               end
-            end
-
-            if need_trigger
-              next_tick
             end
           end
         end
@@ -394,14 +388,14 @@ module Girl
       tund = dst_info[ :tund ]
 
       if tund.closed?
-        puts "p#{ Process.pid } #{ Time.new } tund closed, close dst"
+        puts "p#{ Process.pid } #{ Time.new } tund closed, close dst #{ dst_info[ :domain_port ] } #{ dst_info[ :biggest_pack_id ] }"
         set_is_closing( dst )
         return
       end
 
+      now = Time.new
       tund_info = @tund_infos[ tund ]
       dst_id = dst_info[ :id ]
-      now = Time.new
       pack_id = dst_info[ :biggest_pack_id ]
       idx = 0
       len = data.bytesize
@@ -437,6 +431,10 @@ module Girl
     # send data
     #
     def send_data( sock, data, to_addr )
+      unless to_addr
+        return false
+      end
+
       begin
         sock.sendmsg( data, 0, to_addr )
       rescue IO::WaitWritable, Errno::EINTR
@@ -508,10 +506,11 @@ module Girl
     # del dst ext
     #
     def del_dst_ext( tund_info, dst_id )
-      tund_info[ :wmems ].delete_if { | port_and_pack_id, _ | port_and_pack_id.first == dst_id }
-      dst = tund_info[ :dsts ].delete( dst_id )
+      dst = tund_info[ :dsts ][ dst_id ]
 
-      if dst
+      if dst && dst.closed?
+        tund_info[ :wmems ].delete_if { | dst_id_pack_id, _ | dst_id_pack_id.first == dst_id }
+        tund_info[ :dsts ].delete( dst_id )
         dst_info = @dst_infos.delete( dst )
 
         if dst_info
@@ -716,7 +715,7 @@ module Girl
 
           data = data[ 17..-1 ]
           domain_port = @custom.decode( data )
-          puts "p#{ Process.pid } #{ Time.new } a new source #{ src_id } #{ domain_port }"
+          # puts "debug1 a new source #{ src_id } #{ domain_port }"
           resolve_domain( tund, src_id, domain_port )
         when SOURCE_STATUS
           src_id, relay_src_pack_id, continue_dst_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
@@ -871,7 +870,7 @@ module Girl
       return unless dst_id
 
       dst = tund_info[ :dsts ][ dst_id ]
-      return unless dst
+      return if dst.nil? || dst.closed?
 
       dst_info = @dst_infos[ dst ]
       return unless dst_info
