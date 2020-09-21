@@ -483,7 +483,7 @@ module Girl
     end
 
     ##
-    # close tun
+    # close tund
     #
     def close_tund( tund )
       # puts "debug1 close tund"
