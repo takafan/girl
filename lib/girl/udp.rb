@@ -49,20 +49,20 @@ module Girl
         @mutex.synchronize do
           ws.each do | sock |
             case @roles[ sock ]
-            when :redir
+            when :redir then
               write_redir( sock )
-            when :tun
+            when :tun then
               write_tun( sock )
             end
           end
 
           rs.each do | sock |
             case @roles[ sock ]
-            when :dotr
+            when :dotr then
               read_dotr( sock )
-            when :redir
+            when :redir then
               read_redir( sock )
-            when :tun
+            when :tun then
               read_tun( sock )
             end
           end
@@ -82,18 +82,18 @@ module Girl
           sleep 30
 
           @mutex.synchronize do
-            need_trigger = false
+            trigger = false
             now = Time.new
 
             @tun_infos.each do | tun, tun_info |
               # net.netfilter.nf_conntrack_udp_timeout_stream
-              if now - tun_info[ :last_traff_at ] > 180
+              if now - tun_info[ :last_traff_at ] > 180 then
                 set_is_closing( tun )
-                need_trigger = true
+                trigger = true
               end
             end
 
-            if need_trigger
+            if trigger then
               next_tick
             end
           end
@@ -140,7 +140,7 @@ module Girl
     def add_tun_wbuff( tun, to_addr, data )
       tun_info = @tun_infos[ tun ]
 
-      if to_addr
+      if to_addr then
         tun_info[ :wbuffs ] << [ to_addr, data ]
         add_write( tun )
       else
@@ -149,7 +149,7 @@ module Girl
     end
 
     def add_read( sock, role )
-      unless @reads.include?( sock )
+      unless @reads.include?( sock ) then
         @reads << sock
       end
 
@@ -157,13 +157,13 @@ module Girl
     end
 
     def add_write( sock )
-      unless @writes.include?( sock )
+      unless @writes.include?( sock ) then
         @writes << sock
       end
     end
 
     def set_is_closing( tun )
-      if tun && !tun.closed?
+      if tun && !tun.closed? then
         # puts "debug1 set tun is closing"
 
         tun_info = @tun_infos[ tun ]
@@ -180,7 +180,7 @@ module Girl
       rescue IO::WaitWritable, Errno::EINTR
         return false
       rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-        if @roles[ sock ] == :tun
+        if @roles[ sock ] == :tun then
           puts "#{ Time.new } #{ e.class }, close tun"
           close_tun( sock )
           return false
@@ -198,10 +198,10 @@ module Girl
       tun_info = @tun_infos.delete( tun )
       @tuns.delete( [ tun_info[ :orig_src_addr ], tun_info[ :dst_addr ] ].join )
 
-      if @mappings.include?( tun_info[ :src_addr ] )
+      if @mappings.include?( tun_info[ :src_addr ] ) then
         orig_src_addr, dst_addr, timeout, read_at = @mappings[ tun_info[ :src_addr ] ]
 
-        if orig_src_addr == tun_info[ :orig_src_addr ] && dst_addr == tun_info[ :dst_addr ]
+        if orig_src_addr == tun_info[ :orig_src_addr ] && dst_addr == tun_info[ :dst_addr ] then
           @mappings.delete( tun_info[ :src_addr ] )
         end
       end
@@ -211,9 +211,7 @@ module Girl
       while @redir_wbuffs.any?
         to_addr, data = @redir_wbuffs.first
 
-        unless send_data( redir, data, to_addr )
-          return
-        end
+        return unless send_data( redir, data, to_addr )
 
         @redir_wbuffs.shift
       end
@@ -224,7 +222,7 @@ module Girl
     def write_tun( tun )
       tun_info = @tun_infos[ tun ]
 
-      if tun_info[ :is_closing ]
+      if tun_info[ :is_closing ] then
         close_tun( tun )
         return
       end
@@ -232,7 +230,7 @@ module Girl
       while tun_info[ :wbuffs ].any?
         to_addr, data = tun_info[ :wbuffs ].first
 
-        unless send_data( tun, data, to_addr )
+        unless send_data( tun, data, to_addr ) then
           return
         end
 
@@ -253,10 +251,10 @@ module Girl
       now = Time.new
       # puts "debug redir recv #{ data.inspect } from #{ addrinfo.inspect }"
 
-      if @mappings.include?( src_addr )
+      if @mappings.include?( src_addr ) then
         orig_src_addr, dst_addr, timeout, read_at = @mappings[ src_addr ]
 
-        if now - read_at < timeout
+        if now - read_at < timeout then
           # puts "debug hit cache #{ addrinfo.inspect }"
           is_hit_cache = true
         else
@@ -265,14 +263,14 @@ module Girl
         end
       end
 
-      unless is_hit_cache
+      unless is_hit_cache then
         # 2 udp 4 timeout 5 src 7 sport 9 [UNREPLIED] 11 dst 13 dport
         # 2 udp 4 timeout 5 src 7 sport 10 dst 12 dport
         bin = IO.binread( '/proc/net/nf_conntrack' )
         rows = bin.split( "\n" ).map { | line | line.split( ' ' ) }
         row = rows.find { | _row | _row[ 2 ] == 'udp' && ( ( _row[ 10 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 12 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port ) || ( _row[ 9 ] == '[UNREPLIED]' && _row[ 11 ].split( '=' )[ 1 ] == addrinfo.ip_address && _row[ 13 ].split( '=' )[ 1 ].to_i == addrinfo.ip_port ) ) }
 
-        unless row
+        unless row then
           puts "miss conntrack #{ addrinfo.inspect } #{ Time.new }"
           IO.binwrite( '/tmp/nf_conntrack', bin )
           return
@@ -286,7 +284,7 @@ module Girl
         orig_src_addr = Socket.sockaddr_in( orig_src_port, orig_src_ip )
         dst_addr = Socket.sockaddr_in( dst_port, dst_ip )
 
-        if Addrinfo.new( dst_addr ).ipv4_private?
+        if Addrinfo.new( dst_addr ).ipv4_private? then
           puts "dst is private? #{ Addrinfo.new( dst_addr ).inspect } #{ Addrinfo.new( src_addr ).inspect } #{ Addrinfo.new( orig_src_addr ).inspect } #{ Time.new }"
           add_redir_wbuff( redir, dst_addr, data )
           return
@@ -298,7 +296,7 @@ module Girl
 
       tun = @tuns[ [ orig_src_addr, dst_addr ].join ]
 
-      unless tun
+      unless tun then
         tun = new_a_tun( orig_src_addr, dst_addr, src_addr )
 
         # puts "debug tun send to udpd #{ Addrinfo.new( orig_src_addr ).inspect } #{ Addrinfo.new( dst_addr ).inspect }"
@@ -316,18 +314,18 @@ module Girl
       tun_info = @tun_infos[ tun ]
       tun_info[ :last_traff_at ] = Time.new
 
-      if from_addr == @udpd_addr
+      if from_addr == @udpd_addr then
         tund_port = data[ 0, 2 ].unpack( 'n' ).first
         tund_addr = Socket.sockaddr_in( tund_port, @udpd_host )
         tun_info[ :tund_addr ] = tund_addr
 
-        if tun_info[ :rbuffs ].any?
+        if tun_info[ :rbuffs ].any? then
           tun_info[ :wbuffs ] += tun_info[ :rbuffs ].map{ | rbuff | [ tund_addr, rbuff ] }
           tun_info[ :rbuffs ].clear
           add_write( tun )
         end
 
-      elsif from_addr == tun_info[ :tund_addr ]
+      elsif from_addr == tun_info[ :tund_addr ] then
         add_redir_wbuff( @redir, tun_info[ :src_addr ], data )
       end
     end

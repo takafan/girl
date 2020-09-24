@@ -23,22 +23,24 @@ require 'socket'
 #
 # tun-tund:
 #
-# Q>: 0 ctlmsg -> C: 2 heartbeat     -> C: random char
-#                    3 a new source  -> Q>: src id -> encoded destination address
-#                    4 paired        -> Q>: src id -> n: dst port
-#                    5 dest status   -> n: dst port -> Q>: biggest relayed dst pack id -> Q>: continue src pack id
-#                    6 source status -> Q>: src id -> Q>: biggest relayed src pack id -> Q>: continue dst pack id
-#                    7 miss          -> Q>/n: src id / dst port -> Q>: pack id begin -> Q>:  pack id end
-#                    8 fin1          -> Q>/n: src id / dst port -> Q>: biggest src pack id / biggest dst pack id -> Q>: continue dst pack id / continue src pack id
-#                    9 not use
-#                   10 fin2          -> Q>/n: src id / dst port
-#                   11 not use
+# Q>: 0 ctlmsg -> C: 2 heartbeat      -> C: random char
+#                    3 a new source   -> Q>: src id -> encoded destination address
+#                    4 paired         -> Q>: src id -> n: dst id
+#                    5 dest status    -> not use
+#                    6 source status  -> not use
+#                    7 miss           -> not use
+#                    8 fin1           -> Q>/n: src/dst id -> Q>: biggest src/dst pack id -> Q>: continue dst/src pack id
+#                    9 confirm fin1   -> not use
+#                   10 fin2           -> Q>/n: src/dst id
+#                   11 confirm fin2   -> not use
 #                   12 tund fin
 #                   13 tun fin
 #                   14 tun ip changed
-#                   15 multi miss     -> Q>/n: src id / dst port -> Q>: pack id begin -> Q>: pack id end -> Q>*
+#                   15 multi miss     -> not use
+#                   16 continue recv  -> Q>/n: src/dst id -> Q>: until pack id -> C: has piece
+#                   17 multi piece    -> Q>/n: src/dst id -> Q>: begin pack id -> Q>: end pack id -> Q>*
 #
-# Q>: 1+ pack_id -> Q>/n: src id / dst port -> traffic
+# Q>: 1+ pack_id -> Q>/n: src/dst id -> traffic
 #
 # close logic
 # ===========
@@ -61,11 +63,11 @@ module Girl
   class Proxy
 
     def initialize( config_path = nil )
-      unless config_path
+      unless config_path then
         config_path = File.expand_path( '../girl.conf.json', __FILE__ )
       end
 
-      unless File.exist?( config_path )
+      unless File.exist?( config_path ) then
         raise "missing config file #{ config_path }"
       end
 
@@ -87,22 +89,22 @@ module Girl
       im = conf[ :im ]
       worker_count = conf[ :worker_count ]
 
-      unless proxy_port
+      unless proxy_port then
         proxy_port = 6666
       end
 
-      unless proxyd_host
+      unless proxyd_host then
         raise "missing proxyd host"
       end
 
-      unless proxyd_port
+      unless proxyd_port then
         proxyd_port = 6060
       end
 
       directs = []
 
-      if direct_path
-        unless File.exist?( direct_path )
+      if direct_path then
+        unless File.exist?( direct_path ) then
           raise "not found direct file #{ direct_path }"
         end
 
@@ -111,21 +113,21 @@ module Girl
 
       remotes = []
 
-      if remote_path
-        unless File.exist?( remote_path )
+      if remote_path then
+        unless File.exist?( remote_path ) then
           raise "not found remote file #{ remote_path }"
         end
 
         remotes = IO.binread( remote_path ).split( "\n" ).map { | line | line.strip }
       end
 
-      unless im
+      unless im then
         im = 'girl'
       end
 
       nprocessors = Etc.nprocessors
 
-      if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors
+      if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
         worker_count = nprocessors
       end
 
@@ -144,13 +146,11 @@ module Girl
         READ_SIZE
         WMEMS_LIMIT
         RESUME_BELOW
-        EXPIRE_NEW
+        SEND_HELLO_COUNT
         EXPIRE_AFTER
         CHECK_EXPIRE_INTERVAL
         CHECK_STATUS_INTERVAL
-        SEND_STATUS_UNTIL
-        MULTI_MISS_SIZE
-        MISS_RANGE_LIMIT
+        MULTI_PIECE_SIZE
         CONFUSE_UNTIL
         RESOLV_CACHE_EXPIRE
       ]
@@ -161,7 +161,7 @@ module Girl
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
 
-      if RUBY_PLATFORM.include?( 'linux' )
+      if RUBY_PLATFORM.include?( 'linux' ) then
         $0 = title
         workers = []
 

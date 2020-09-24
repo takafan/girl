@@ -9,10 +9,8 @@ module Girl
       @mutex = Mutex.new
       @reads = []
       @writes = []
-      @pause_dsts = []
       @roles = {}           # sock => :dotr / :proxyd / :dst / :tund
       @dst_infos = {}       # dst => {}
-      @tunds = {}           # port => tund
       @tund_infos = {}      # tund => {}
       @tunneling_tunds = {} # tunneling_addr => tund
       @resolv_caches = {}   # domain => [ ip, created_at ]
@@ -38,22 +36,22 @@ module Girl
           # 先写，再读
           ws.each do | sock |
             case @roles[ sock ]
-            when :dst
+            when :dst then
               write_dst( sock )
-            when :tund
+            when :tund then
               write_tund( sock )
             end
           end
 
           rs.each do | sock |
             case @roles[ sock ]
-            when :dotr
+            when :dotr then
               read_dotr( sock )
-            when :proxyd
+            when :proxyd then
               read_proxyd( sock )
-            when :dst
+            when :dst then
               read_dst( sock )
-            when :tund
+            when :tund then
               read_tund( sock )
             end
           end
@@ -71,7 +69,7 @@ module Girl
       data = [ 0, TUND_FIN ].pack( 'Q>C' )
 
       @tund_infos.each do | tund, tund_info |
-        if !tund.closed? && tund_info[ :tun_addr ]
+        if !tund.closed? && tund_info[ :tun_addr ] then
           # puts "debug1 send tund fin"
           tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
         end
@@ -96,49 +94,35 @@ module Girl
             now = Time.new
 
             @tund_infos.each do | tund, tund_info |
-              unless tund.closed?
-                is_expired = tund_info[ :last_recv_at ] ? ( now - tund_info[ :last_recv_at ] > EXPIRE_AFTER ) : ( now - tund_info[ :created_at ] > EXPIRE_NEW )
+              if !tund.closed? then
+                last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
+                last_sent_at = tund_info[ :last_sent_at ] || tund_info[ :created_at ]
 
-                if is_expired
+                if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
                   puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
                   set_is_closing( tund )
                   trigger = true
-                else
-                  data = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
-                  # puts "debug1 #{ Time.new } #{ tund_info[ :port ] } heartbeat"
-                  send_data( tund, data, tund_info[ :tun_addr ] )
-                  del_dst_ids = []
-
-                  tund_info[ :dsts ].each do | dst_id, dst |
-                    if dst.closed?
-                      dst_info = @dst_infos[ dst ]
-
-                      if dst_info && ( now - dst_info[ :last_continue_at ] > EXPIRE_AFTER )
-                        puts "p#{ Process.pid } #{ Time.new } expire dst ext #{ dst_info[ :domain_port ] }"
-                        tund_info[ :wmems ].delete_if { | dst_id_pack_id, _ | dst_id_pack_id.first == dst_id }
-                        tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
-                        @dst_infos.delete( dst )
-                        del_dst_ids << dst_id
-                      end
-                    end
-                  end
-
-                  if del_dst_ids.any?
-                    tund_info[ :dsts ].delete_if { | dst_id, _ | del_dst_ids.include?( dst_id ) }
-                  end
                 end
               end
             end
 
             @dst_infos.each do | dst, dst_info |
-              if now - dst_info[ :last_continue_at ] > EXPIRE_AFTER
-                puts "p#{ Process.pid } #{ Time.new } expire dst #{ dst_info[ :domain_port ] }"
-                set_is_closing( dst )
-                trigger = true
+              last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
+              last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
+
+              if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
+                if dst.closed? then
+                  puts "p#{ Process.pid } #{ Time.new } expire dst ext #{ dst_info[ :domain_port ] }"
+                  del_dst_ext( dst )
+                else
+                  puts "p#{ Process.pid } #{ Time.new } expire dst #{ dst_info[ :domain_port ] }"
+                  set_is_closing( dst )
+                  trigger = true
+                end
               end
             end
 
-            if trigger
+            if trigger then
               next_tick
             end
           end
@@ -155,62 +139,95 @@ module Girl
           sleep CHECK_STATUS_INTERVAL
 
           @mutex.synchronize do
-            if @tunds.any?
-              @tunds.each do | tund_port, tund |
-                tund_info = @tund_infos[ tund ]
+            trigger = false
+            now = Time.new
 
-                if tund_info[ :dsts ].any?
-                  now = Time.new
+            @tund_infos.each do | tund, tund_info |
+              if tund_info[ :dsts ].any? then
+                tund_info[ :dsts ].each do | _, dst |
+                  dst_info = @dst_infos[ dst ]
 
-                  tund_info[ :dsts ].each do | dst_id, dst |
-                    dst_info = @dst_infos[ dst ]
+                  if dst_info then
+                    # 距上一次收到中转半秒以内，发continue recv（收到的连续的最后一个包号，以及后面有没有跳号包）；发multi piece（跳号包号）。
+                    if dst_info[ :last_recv_at ] && ( now - dst_info[ :last_recv_at ] < CHECK_STATUS_INTERVAL ) then
+                      has_piece = dst_info[ :pieces ].any?
+                      data = [ 0, CONTINUE_RECV, dst_info[ :src_id ], dst_info[ :continue_recv_pack_id ], ( has_piece ? 1 : 0 ) ].pack( 'Q>CQ>Q>C' )
+                      break unless send_data( tund, data, tund_info[ :tun_addr ] )
 
-                    if dst_info && ( now - dst_info[ :last_continue_at ] < SEND_STATUS_UNTIL )
-                      data = [ 0, DEST_STATUS, dst_id, dst_info[ :biggest_pack_id ], dst_info[ :continue_src_pack_id ] ].pack( 'Q>CnQ>Q>' )
-                      send_data( tund, data, tund_info[ :tun_addr ] )
+                      if has_piece then
+                        ranges = []
+                        piece_ids = dst_info[ :pieces ].keys.sort
+                        begin_pack_id = end_pack_id = piece_ids[ 0 ]
+
+                        piece_ids[ 1..-1 ].each do | pack_id |
+                          if end_pack_id + 1 == pack_id then
+                            end_pack_id = pack_id
+                          else
+                            ranges << [ begin_pack_id, end_pack_id ]
+                            begin_pack_id = end_pack_id = pack_id
+                          end
+                        end
+
+                        ranges << [ begin_pack_id, end_pack_id ]
+
+                        # puts "debug1 send multi piece #{ ranges.size }"
+                        idx = 0
+
+                        while idx < ranges.size
+                          chunk = ranges[ idx, MULTI_PIECE_SIZE ].map{ | b, e | [ b, e ].pack( 'Q>Q>' ) }.join
+                          data = [ [ 0, MULTI_PIECE, dst_info[ :src_id ] ].pack( 'Q>CQ>' ), chunk ].join
+                          break unless send_data( tund, data, tund_info[ :tun_addr ] )
+                          idx += MULTI_PIECE_SIZE
+                        end
+                      end
+                    end
+
+                    # 距上一次发出中转超过半秒，处理multi piece（删对应写后，重传剩余写后，删multi piece）。
+                    if dst_info[ :last_sent_at ] && ( now - dst_info[ :last_sent_at ] >= CHECK_STATUS_INTERVAL ) && dst_info[ :arrived_ranges ].any? then
+                      ranges = dst_info[ :arrived_ranges ]
+                      idx = 0
+
+                      while idx < ranges.size
+                        pack_id_begin, pack_id_end = ranges[ idx ], ranges[ idx + 1 ]
+
+                        ( pack_id_begin..pack_id_end ).each do | pack_id |
+                          tund_info[ :wmems ].delete( [ dst_info[ :id ], pack_id ] )
+                        end
+
+                        idx += 2
+                      end
+
+                      wmems = tund_info[ :wmems ].select{ | k, _ | k[ 0 ] == dst_info[ :id ] }
+
+                      if wmems.any? then
+                        # puts "debug1 #{ Time.new } resend #{ wmems.size }"
+
+                        wmems.each do | _, v |
+                          break unless send_data( tund, v[ 0 ], tund_info[ :tun_addr ] )
+                        end
+                      end
+
+                      dst_info[ :arrived_ranges ].clear
                     end
                   end
                 end
               end
-            end
 
-            if @pause_dsts.any?
-              resume_dsts = []
-              ignore_dsts = []
+              # 恢复读
+              if tund_info[ :pause_dsts ].any? && ( tund_info[ :wmems ].size < RESUME_BELOW ) then
+                puts "p#{ Process.pid } #{ Time.new } resume dsts #{ tund_info[ :pause_dsts ].size }"
 
-              @pause_dsts.each do | dst |
-                dst_info = @dst_infos[ dst ]
-
-                if dst_info
-                  tund = dst_info[ :tund ]
-
-                  if tund.closed?
-                    ignore_dsts << dst
-                  else
-                    tund_info = @tund_infos[ tund ]
-
-                    if tund_info[ :wmems ].size < RESUME_BELOW
-                      puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
-                      resume_dsts << dst
-                    end
-                  end
-                else
-                  ignore_dsts << dst
-                end
-              end
-
-              if resume_dsts.any?
-                resume_dsts.each do | dst |
+                tund_info[ :pause_dsts ].each do | dst |
                   add_read( dst )
                 end
 
-                next_tick
-                @pause_dsts -= resume_dsts
+                tund_info[ :pause_dsts ].clear
+                trigger = true
               end
+            end
 
-              if ignore_dsts.any?
-                @pause_dsts -= ignore_dsts
-              end
+            if trigger then
+              next_tick
             end
           end
         end
@@ -223,10 +240,10 @@ module Girl
     def resolve_domain( tund, src_id, domain_port )
       resolv_cache = @resolv_caches[ domain_port ]
 
-      if resolv_cache
+      if resolv_cache then
         destination_addr, created_at = resolv_cache
 
-        if Time.new - created_at < RESOLV_CACHE_EXPIRE
+        if Time.new - created_at < RESOLV_CACHE_EXPIRE then
           # puts "debug1 #{ domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
           deal_with_destination_addr( tund, src_id, destination_addr, domain_port )
           return
@@ -239,7 +256,7 @@ module Girl
       Thread.new do
         colon_idx = domain_port.rindex( ':' )
 
-        if colon_idx
+        if colon_idx then
           destination_domain = domain_port[ 0...colon_idx ]
           destination_port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
 
@@ -251,12 +268,12 @@ module Girl
         end
 
         @mutex.synchronize do
-          if destination_addr
+          if destination_addr then
             # puts "debug1 resolved #{ domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
             @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
 
-            unless tund.closed?
-              if deal_with_destination_addr( tund, src_id, destination_addr, domain_port )
+            unless tund.closed? then
+              if deal_with_destination_addr( tund, src_id, destination_addr, domain_port ) then
                 next_tick
               end
             end
@@ -283,20 +300,20 @@ module Girl
       dst_id = dst.local_address.ip_port
 
       @dst_infos[ dst ] = {
-        id: dst_id,                 # id
-        tund: tund,                 # 对应tund
-        domain_port: domain_port,   # 域名和端口
-        biggest_pack_id: 0,         # 最大包号码
-        wbuff: '',                  # 写前
-        src_id: src_id,             # 近端src id
-        send_ats: {},               # 上一次发出时间 pack_id => send_at
-        continue_src_pack_id: 0,    # 收到几
-        pieces: {},                 # 跳号包 src_pack_id => data
-        is_src_closed: false,       # src是否已关闭
-        biggest_src_pack_id: 0,     # src最大包号码
-        completed_pack_id: 0,       # 完成到几（对面收到几）
-        last_continue_at: Time.new, # 上一次发生流量的时间
-        is_closing: false           # 是否准备关闭
+        id: dst_id,               # id
+        tund: tund,               # 对应tund
+        domain_port: domain_port, # 域名和端口
+        biggest_pack_id: 0,       # 最大包号码
+        wbuff: '',                # 写前
+        src_id: src_id,           # 近端src id
+        continue_recv_pack_id: 0, # 收到的连续的最后一个包号
+        pieces: {},               # 跳号包 src_pack_id => data
+        fin1_src_pack_id: nil,    # 关闭的src的最终包号码
+        created_at: Time.new,     # 创建时间
+        last_recv_at: nil,        # 上一次收到中转（由tund收到）的时间
+        last_sent_at: nil,        # 上一次发出中转（由tund发出）的时间
+        arrived_ranges: [],       # 送达的包号区间
+        is_closing: false         # 是否准备关闭
       }
 
       add_read( dst, :dst )
@@ -329,10 +346,10 @@ module Girl
     # add read
     #
     def add_read( sock, role = nil )
-      if sock && !sock.closed? && !@reads.include?( sock )
+      if sock && !sock.closed? && !@reads.include?( sock ) then
         @reads << sock
 
-        if role
+        if role then
           @roles[ sock ] = role
         end
       end
@@ -342,19 +359,8 @@ module Girl
     # add write
     #
     def add_write( sock )
-      if sock && !sock.closed? && !@writes.include?( sock )
+      if sock && !sock.closed? && !@writes.include?( sock ) then
         @writes << sock
-      end
-    end
-
-    ##
-    # add pause dst
-    #
-    def add_pause_dst( dst )
-      @reads.delete( dst )
-
-      unless @pause_dsts.include?( dst )
-        @pause_dsts << dst
       end
     end
 
@@ -362,15 +368,15 @@ module Girl
     # set is closing
     #
     def set_is_closing( sock )
-      if sock && !sock.closed?
+      if sock && !sock.closed? then
         role = @roles[ sock ]
         # puts "debug1 set #{ role.to_s } is closing"
 
         case role
-        when :dst
+        when :dst then
           dst_info = @dst_infos[ sock ]
           dst_info[ :is_closing ] = true
-        when :tund
+        when :tund then
           tund_info = @tund_infos[ sock ]
           tund_info[ :is_closing ] = true
         end
@@ -387,7 +393,7 @@ module Girl
       dst_info = @dst_infos[ dst ]
       tund = dst_info[ :tund ]
 
-      if tund.closed?
+      if tund.closed? then
         puts "p#{ Process.pid } #{ Time.new } tund closed, close dst #{ dst_info[ :domain_port ] } #{ dst_info[ :biggest_pack_id ] }"
         set_is_closing( dst )
         return
@@ -404,26 +410,28 @@ module Girl
         chunk = data[ idx, PACK_SIZE ]
         pack_id += 1
 
-        if pack_id <= CONFUSE_UNTIL
+        if pack_id <= CONFUSE_UNTIL then
+          # puts "debug2 encode chunk #{ pack_id }\n#{ chunk.inspect }\n"
           chunk = @custom.encode( chunk )
-          # puts "debug1 encoded chunk #{ pack_id }"
         end
 
         data2 = [ [ pack_id, dst_id ].pack( 'Q>n' ), chunk ].join
-        sent = send_data( tund, data2, tund_info[ :tun_addr ] )
-        # puts "debug2 written pack #{ pack_id } #{ sent }"
-        tund_info[ :wmems ][ [ dst_id, pack_id ] ] = data2
-        dst_info[ :send_ats ][ pack_id ] = now
+        break unless send_data( tund, data2, tund_info[ :tun_addr ] )
+        tund_info[ :wmems ][ [ dst_id, pack_id ] ] = [ data2, now ]
         idx += PACK_SIZE
       end
 
       dst_info[ :biggest_pack_id ] = pack_id
-      dst_info[ :last_continue_at ] = now
+      dst_info[ :last_sent_at ] = now
 
       # 写后超过上限，暂停读dst
-      if tund_info[ :wmems ].size >= WMEMS_LIMIT
+      if tund_info[ :wmems ].size >= WMEMS_LIMIT then
         puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_id } #{ dst_info[ :domain_port ] } #{ dst_info[ :biggest_pack_id ] }"
-        add_pause_dst( dst )
+        @reads.delete( dst )
+
+        unless tund_info[ :pause_dsts ].include?( dst ) then
+          tund_info[ :pause_dsts ] << dst
+        end
       end
     end
 
@@ -431,23 +439,50 @@ module Girl
     # send data
     #
     def send_data( sock, data, to_addr )
-      unless to_addr
-        return false
-      end
+      return false unless to_addr
+
+      role = @roles[ sock ]
 
       begin
         sock.sendmsg( data, 0, to_addr )
       rescue IO::WaitWritable, Errno::EINTR
         return false
       rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-        if @roles[ sock ] == :tund
+        if role == :tund then
           puts "#{ Time.new } #{ e.class }, close tund"
           close_tund( sock )
           return false
         end
       end
 
+      if role == :tund then
+        tund_info = @tund_infos[ sock ]
+        tund_info[ :last_sent_at ] = Time.new
+      end
+
       true
+    end
+
+    ##
+    # del dst ext
+    #
+    def del_dst_ext( dst )
+      dst_info = @dst_infos.delete( dst )
+
+      if dst_info then
+        tund = dst_info[ :tund ]
+
+        unless tund.closed? then
+          tund_info = @tund_infos[ tund ]
+
+          if dst_info[ :src_id ] then
+            tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
+          end
+
+          tund_info[ :wmems ].delete_if { | k, _ | k.first == dst_info[ :id ] }
+          tund_info[ :dsts ].delete( dst_info[ :id ] )
+        end
+      end
     end
 
     ##
@@ -456,27 +491,24 @@ module Girl
     def close_dst( dst )
       # puts "debug1 close dst"
       close_sock( dst )
-      @pause_dsts.delete( dst )
       dst_info = @dst_infos[ dst ]
       tund = dst_info[ :tund ]
 
-      if tund.closed?
+      if tund.closed? then
         @dst_infos.delete( dst )
         return
       end
 
-      tund_info = @tund_infos[ tund ]
-      dst_id = dst_info[ :id ]
-
-      if dst_info[ :is_src_closed ]
+      if dst_info[ :fin1_src_pack_id ] then
         # puts "debug1 4-3. after close dst -> src closed ? yes -> del dst ext -> send fin2"
-        del_dst_ext( tund_info, dst_id )
-        data = [ 0, FIN2, dst_id ].pack( 'Q>Cn' )
+        del_dst_ext( dst )
+        data = [ 0, FIN2, dst_info[ :id ] ].pack( 'Q>Cn' )
       else
         # puts "debug1 3-1. after close dst -> src closed ? no -> send fin1"
-        data = [ 0, FIN1, dst_id, dst_info[ :biggest_pack_id ], dst_info[ :continue_src_pack_id ] ].pack( 'Q>CnQ>Q>' )
+        data = [ 0, FIN1, dst_info[ :id ], dst_info[ :biggest_pack_id ], dst_info[ :continue_recv_pack_id ] ].pack( 'Q>CnQ>Q>' )
       end
 
+      tund_info = @tund_infos[ tund ]
       send_data( tund, data, tund_info[ :tun_addr ] )
     end
 
@@ -489,7 +521,6 @@ module Girl
       tund_info = @tund_infos.delete( tund )
       tund_info[ :dsts ].each{ | _, dst | set_is_closing( dst ) }
       @tunneling_tunds.delete( tund_info[ :tun_addr ] )
-      @tunds.delete( tund_info[ :port ] )
     end
 
     ##
@@ -500,41 +531,6 @@ module Girl
       @reads.delete( sock )
       @writes.delete( sock )
       @roles.delete( sock )
-    end
-
-    ##
-    # del dst ext
-    #
-    def del_dst_ext( tund_info, dst_id )
-      dst = tund_info[ :dsts ][ dst_id ]
-
-      if dst && dst.closed?
-        tund_info[ :wmems ].delete_if { | dst_id_pack_id, _ | dst_id_pack_id.first == dst_id }
-        tund_info[ :dsts ].delete( dst_id )
-        dst_info = @dst_infos.delete( dst )
-
-        if dst_info
-          tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
-        end
-      end
-    end
-
-    ##
-    # release wmems
-    #
-    def release_wmems( tund_info, dst_info, completed_pack_id )
-      if completed_pack_id > dst_info[ :completed_pack_id ]
-        # puts "debug2 update completed pack #{ completed_pack_id }"
-
-        pack_ids = dst_info[ :send_ats ].keys.select { | pack_id | pack_id <= completed_pack_id }
-
-        pack_ids.each do | pack_id |
-          tund_info[ :wmems ].delete( [ dst_info[ :id ], pack_id ] )
-          dst_info[ :send_ats ].delete( pack_id )
-        end
-
-        dst_info[ :completed_pack_id ] = completed_pack_id
-      end
     end
 
     ##
@@ -550,14 +546,14 @@ module Girl
     def write_dst( dst )
       dst_info = @dst_infos[ dst ]
 
-      if dst_info[ :is_closing ]
+      if dst_info[ :is_closing ] then
         close_dst( dst )
         return
       end
 
       data = dst_info[ :wbuff ]
 
-      if data.empty?
+      if data.empty? then
         @writes.delete( dst )
         return
       end
@@ -572,10 +568,8 @@ module Girl
         return
       end
 
-      # puts "debug2 write dst #{ written }"
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
-      dst_info[ :last_continue_at ] = Time.new
     end
 
     ##
@@ -584,8 +578,8 @@ module Girl
     def write_tund( tund )
       tund_info = @tund_infos[ tund ]
 
-      if tund_info[ :is_closing ]
-        if tund_info[ :changed_tun_addr ]
+      if tund_info[ :is_closing ] then
+        if tund_info[ :changed_tun_addr ] then
           data = [ 0, IP_CHANGED ].pack( 'Q>C' )
           send_data( tund, data, tund_info[ :changed_tun_addr ] )
         end
@@ -611,7 +605,7 @@ module Girl
       data, addrinfo, rflags, *controls = proxyd.recvmsg
       from_addr = addrinfo.to_sockaddr
 
-      if @tunneling_tunds.include?( from_addr )
+      if @tunneling_tunds.include?( from_addr ) then
         tund = @tunneling_tunds[ from_addr ]
         tund_info = @tund_infos[ tund ]
         port = tund_info[ :port ]
@@ -623,7 +617,7 @@ module Girl
 
       result = @custom.check( data, addrinfo )
 
-      if result != :success
+      if result != :success then
         puts "p#{ Process.pid } #{ Time.new } #{ result }"
         return
       end
@@ -633,16 +627,17 @@ module Girl
       port = tund.local_address.ip_port
 
       @tunneling_tunds[ from_addr ] = tund
-      @tunds[ port ] = tund
       @tund_infos[ tund ] = {
         port: port,           # 端口
         wbuffs: [],           # 写前 [ dst_id, pack_id, data ]
-        wmems: {},            # 写后 [ dst_id, pack_id ] => data
+        wmems: {},            # 写后 [ dst_id, pack_id ] => [ data, add_at ]
         tun_addr: from_addr,  # tun地址
         dsts: {},             # dst_id => dst
         dst_ids: {},          # src_id => dst_id
+        pause_dsts: [],       # 暂停的dst
         created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量的时间，过期关闭
+        last_recv_at: nil,    # 上一次收到流量的时间
+        last_sent_at: nil,    # 上一次发出流量的时间
         is_closing: false,    # 是否准备关闭
         changed_tun_addr: nil # 记录到和tun addr不符的来源地址
       }
@@ -650,7 +645,7 @@ module Girl
       add_read( tund, :tund )
 
       data = [ 0, TUND_PORT, port ].pack( 'Q>Cn' )
-      puts "p#{ Process.pid } #{ Time.new } a new tunnel #{ addrinfo.ip_unpack.inspect } - #{ port }, #{ @tunds.size } tunds"
+      puts "p#{ Process.pid } #{ Time.new } a new tunnel #{ addrinfo.ip_unpack.inspect } - #{ port }, #{ @tund_infos.size } tunds"
       send_data( proxyd, data, from_addr )
     end
 
@@ -680,7 +675,7 @@ module Girl
       now = Time.new
       tund_info = @tund_infos[ tund ]
 
-      if from_addr != tund_info[ :tun_addr ]
+      if from_addr != tund_info[ :tun_addr ] then
         # 通常是光猫刷新ip（端口也会变），但万一不是，为了避免脏数据注入，关闭tund
         puts "p#{ Process.pid } #{ Time.new } from #{ addrinfo.inspect } not match tun addr #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
         tund_info[ :changed_tun_addr ] = from_addr
@@ -691,19 +686,19 @@ module Girl
       tund_info[ :last_recv_at ] = now
       pack_id = data[ 0, 8 ].unpack( 'Q>' ).first
 
-      if pack_id == 0
+      if pack_id == 0 then
         ctl_num = data[ 8 ].unpack( 'C' ).first
 
         case ctl_num
-        when A_NEW_SOURCE
+        when A_NEW_SOURCE then
           src_id = data[ 9, 8 ].unpack( 'Q>' ).first
           dst_id = tund_info[ :dst_ids ][ src_id ]
 
-          if dst_id
+          if dst_id then
             dst = tund_info[ :dsts ][ dst_id ]
             return unless dst
 
-            if dst.closed?
+            if dst.closed? then
               dst_id = 0
             end
 
@@ -717,11 +712,10 @@ module Girl
           domain_port = @custom.decode( data )
           # puts "debug1 a new source #{ src_id } #{ domain_port }"
           resolve_domain( tund, src_id, domain_port )
-        when SOURCE_STATUS
-          src_id, relay_src_pack_id, continue_dst_pack_id  = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
-
-          dst_id = tund_info[ :dst_ids ][ src_id ]
-          return unless dst_id
+        when CONTINUE_RECV then
+          # 收到continue recv，删multi piece；消写后到until pack id为止；
+          # 若后面没跳号包，从写后里找出比until pack id大的，且发送已超过半秒的包，重传。（应对“恰好是最后n个包掉了”的情况）
+          dst_id, until_pack_id, has_piece = data[ 9, 11 ].unpack( 'nQ>C' )
 
           dst = tund_info[ :dsts ][ dst_id ]
           return unless dst
@@ -729,47 +723,22 @@ module Girl
           dst_info = @dst_infos[ dst ]
           return unless dst_info
 
-          # puts "debug2 got source status #{ Time.new }"
+          dst_info[ :arrived_ranges ].clear
+          tund_info[ :wmems ].delete_if { | k, _ | ( k[ 0 ] == dst_id ) && ( k[ 1 ] <= until_pack_id ) }
 
-          # 消写后
-          release_wmems( tund_info, dst_info, continue_dst_pack_id )
+          if has_piece == 0 then
+            wmems = tund_info[ :wmems ].select{ | k, v | ( k[ 0 ] == dst_id ) && ( k[ 1 ] > until_pack_id ) && ( now - v[ 1 ] >= CHECK_STATUS_INTERVAL ) }
 
-          # 发miss
-          if !dst.closed? && ( dst_info[ :continue_src_pack_id ] < relay_src_pack_id )
-            ranges = []
-            ignored = false
-            curr_pack_id = dst_info[ :continue_src_pack_id ] + 1
+            if wmems.any? then
+              # puts "debug1 resend tails #{ dst_info[ :domain_port ] } #{ wmems.size }"
 
-            dst_info[ :pieces ].keys.sort.each do | pack_id |
-              if pack_id > curr_pack_id
-                ranges << [ curr_pack_id, pack_id - 1 ]
-
-                if ranges.size >= MISS_RANGE_LIMIT
-                  puts "p#{ Process.pid } #{ Time.new } break add miss range at #{ pack_id }"
-                  ignored = true
-                  break
-                end
+              wmems.each do | _, v |
+                break unless send_data( tund, v[ 0 ], tund_info[ :tun_addr ] )
               end
-
-              curr_pack_id = pack_id + 1
-            end
-
-            if !ignored && ( curr_pack_id <= relay_src_pack_id )
-              ranges << [ curr_pack_id, relay_src_pack_id ]
-            end
-
-            # puts "debug1 continue/relay #{ dst_info[ :continue_src_pack_id ] }/#{ relay_src_pack_id } send MISS #{ ranges.size }"
-            idx = 0
-            ranges = ranges.map{ | pack_id_begin, pack_id_end | [ pack_id_begin, pack_id_end ].pack( 'Q>Q>' ) }
-
-            while idx < ranges.size
-              chunk = ranges[ idx, MULTI_MISS_SIZE ].join
-              data2 = [ [ 0, MULTI_MISS, src_id ].pack( 'Q>CQ>' ), chunk ].join
-              send_data( tund, data2, tund_info[ :tun_addr ] )
-              idx += MULTI_MISS_SIZE
             end
           end
-        when MULTI_MISS
+        when MULTI_PIECE then
+          # 收到multi piece，放着。
           dst_id, *ranges = data[ 9..-1 ].unpack( 'nQ>*' )
 
           dst = tund_info[ :dsts ][ dst_id ]
@@ -780,55 +749,10 @@ module Girl
 
           return if ranges.empty? || ( ranges.size % 2 != 0 )
 
-          # puts "debug1 got multi miss #{ dst_id } #{ ranges.size }"
-
-          idx = 0
-
-          while idx < ranges.size
-            pack_id_begin, pack_id_end = ranges[ idx ], ranges[ idx + 1 ]
-
-            ( pack_id_begin..pack_id_end ).each do | pack_id |
-              send_at = dst_info[ :send_ats ][ pack_id ]
-
-              if send_at
-                break if now - send_at < CHECK_STATUS_INTERVAL
-                data2 = tund_info[ :wmems ][ [ dst_id, pack_id ] ]
-
-                if data2
-                  if send_data( tund, data2, tund_info[ :tun_addr ] )
-                    dst_info[ :last_continue_at ] = now
-                  end
-                end
-              end
-            end
-
-            idx += 2
-          end
-        when MISS
-          dst_id, pack_id_begin, pack_id_end = data[ 9, 18 ].unpack( 'nQ>Q>' )
-
-          dst = tund_info[ :dsts ][ dst_id ]
-          return unless dst
-
-          dst_info = @dst_infos[ dst ]
-          return unless dst_info
-
-          ( pack_id_begin..pack_id_end ).each do | pack_id |
-            send_at = dst_info[ :send_ats ][ pack_id ]
-
-            if send_at
-              break if now - send_at < CHECK_STATUS_INTERVAL
-              data2 = tund_info[ :wmems ][ [ dst_id, pack_id ] ]
-
-              if data2
-                if send_data( tund, data2, tund_info[ :tun_addr ] )
-                  dst_info[ :last_continue_at ] = now
-                end
-              end
-            end
-          end
-        when FIN1
-          src_id, biggest_src_pack_id, continue_dst_pack_id = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
+          dst_info[ :arrived_ranges ] += ranges
+          # puts "debug1 arrived ranges size #{ dst_info[ :arrived_ranges ].size }"
+        when FIN1 then
+          src_id, fin1_src_pack_id, continue_dst_pack_id = data[ 9, 24 ].unpack( 'Q>Q>Q>' )
 
           dst_id = tund_info[ :dst_ids ][ src_id ]
           return unless dst_id
@@ -839,24 +763,26 @@ module Girl
           dst_info = @dst_infos[ dst ]
           return unless dst_info
 
-          # puts "debug1 got fin1 #{ src_id } biggest src pack #{ biggest_src_pack_id } completed dst pack #{ continue_dst_pack_id }"
-          dst_info[ :is_src_closed ] = true
-          dst_info[ :biggest_src_pack_id ] = biggest_src_pack_id
-          release_wmems( tund_info, dst_info, continue_dst_pack_id )
+          # puts "debug1 got fin1 #{ src_id } fin1 #{ fin1_src_pack_id } #{ continue_dst_pack_id }"
+          dst_info[ :fin1_src_pack_id ] = fin1_src_pack_id
 
-          if biggest_src_pack_id == dst_info[ :continue_src_pack_id ]
+          if dst_info[ :continue_recv_pack_id ] == fin1_src_pack_id then
             # puts "debug1 4-1. tund recv fin1 -> all traffic received ? -> close dst after write"
             set_is_closing( dst )
           end
-        when FIN2
+        when FIN2 then
           src_id = data[ 9, 8 ].unpack( 'Q>' ).first
 
           dst_id = tund_info[ :dst_ids ][ src_id ]
           return unless dst_id
 
           # puts "debug1 3-2. tund recv fin2 -> del dst ext"
-          del_dst_ext( tund_info, dst_id )
-        when TUN_FIN
+          dst = tund_info[ :dsts ][ dst_id ]
+
+          if dst && dst.closed? then
+            del_dst_ext( dst )
+          end
+        when TUN_FIN then
           puts "p#{ Process.pid } #{ Time.new } recv tun fin"
           set_is_closing( tund )
         end
@@ -875,39 +801,36 @@ module Girl
       dst_info = @dst_infos[ dst ]
       return unless dst_info
 
-      return if ( pack_id <= dst_info[ :continue_src_pack_id ] ) || dst_info[ :pieces ].include?( pack_id )
+      return if ( pack_id <= dst_info[ :continue_recv_pack_id ] ) || dst_info[ :pieces ].include?( pack_id )
 
       data = data[ 16..-1 ]
-      # puts "debug2 got pack #{ pack_id }"
 
-      if pack_id <= CONFUSE_UNTIL
-        # puts "debug2 #{ data.inspect }"
+      if pack_id <= CONFUSE_UNTIL then
         data = @custom.decode( data )
-        # puts "debug1 decoded pack #{ pack_id }"
+        # puts "debug2 decoded pack #{ pack_id }\n#{ data.inspect }\n"
       end
 
-      # 放进写前，跳号放碎片缓存
-      if pack_id - dst_info[ :continue_src_pack_id ] == 1
+      # 放进写前，跳号放碎片缓存，发确认
+      if pack_id - dst_info[ :continue_recv_pack_id ] == 1 then
         while dst_info[ :pieces ].include?( pack_id + 1 )
           data << dst_info[ :pieces ].delete( pack_id + 1 )
           pack_id += 1
         end
 
-        dst_info[ :continue_src_pack_id ] = pack_id
-        dst_info[ :last_continue_at ] = now
+        dst_info[ :continue_recv_pack_id ] = pack_id
         dst_info[ :wbuff ] << data
         add_write( dst )
-        # puts "debug2 update continue src pack #{ pack_id }"
 
         # 若对面已关闭，且流量正好收全，关闭dst
-        if dst_info[ :is_src_closed ] && ( pack_id == dst_info[ :biggest_src_pack_id ] )
+        if dst_info[ :fin1_src_pack_id ] == pack_id then
           # puts "debug1 4-2. tund recv traffic -> src closed and all traffic received ? -> close dst after write"
           set_is_closing( dst )
         end
       else
         dst_info[ :pieces ][ pack_id ] = data
-        dst_info[ :last_continue_at ] = now
       end
+
+      dst_info[ :last_recv_at ] = now
     end
 
   end

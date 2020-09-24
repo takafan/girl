@@ -39,20 +39,20 @@ module Girl
         @mutex.synchronize do
           ws.each do | sock |
             case @roles[ sock ]
-            when :udpd
+            when :udpd then
               write_udpd( sock )
-            when :tund
+            when :tund then
               write_tund( sock )
             end
           end
 
           rs.each do | sock |
             case @roles[ sock ]
-            when :dotr
+            when :dotr then
               read_dotr( sock )
-            when :udpd
+            when :udpd then
               read_udpd( sock )
-            when :tund
+            when :tund then
               read_tund( sock )
             end
           end
@@ -72,18 +72,18 @@ module Girl
           sleep 30
 
           @mutex.synchronize do
-            need_trigger = false
+            trigger = false
             now = Time.new
 
             @tund_infos.each do | tund, tund_info |
               # net.netfilter.nf_conntrack_udp_timeout_stream
-              if now - tund_info[ :last_traff_at ] > 180
+              if now - tund_info[ :last_traff_at ] > 180 then
                 set_is_closing( tund )
-                need_trigger = true
+                trigger = true
               end
             end
 
-            if need_trigger
+            if trigger then
               next_tick
             end
           end
@@ -105,7 +105,7 @@ module Girl
       td_addr = [ tun_addr, dst_addr ].join
       tund = @tunds[ from_addr ]
 
-      if tund
+      if tund then
         tund_info = @tund_infos[ tund ]
         tund_info[ :dst_addrs ][ tun_addr ] = dst_addr
         tund_info[ :tun_addrs ][ dst_addr ] = tun_addr
@@ -145,7 +145,7 @@ module Girl
     end
 
     def add_read( sock, role )
-      unless @reads.include?( sock )
+      unless @reads.include?( sock ) then
         @reads << sock
       end
 
@@ -153,13 +153,13 @@ module Girl
     end
 
     def add_write( sock )
-      unless @writes.include?( sock )
+      unless @writes.include?( sock ) then
         @writes << sock
       end
     end
 
     def set_is_closing( tund )
-      if tund && !tund.closed?
+      if tund && !tund.closed? then
         # puts "debug1 set tund is closing"
 
         tund_info = @tund_infos[ tund ]
@@ -176,7 +176,7 @@ module Girl
       rescue IO::WaitWritable, Errno::EINTR
         return false
       rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-        if @roles[ sock ] == :tund
+        if @roles[ sock ] == :tund then
           puts "#{ Time.new } #{ e.class }, close tund"
           close_tund( sock )
           return false
@@ -203,9 +203,7 @@ module Girl
       while @udpd_wbuffs.any?
         to_addr, data = @udpd_wbuffs.first
 
-        unless send_data( udpd, data, to_addr )
-          return
-        end
+        return unless send_data( udpd, data, to_addr )
 
         @udpd_wbuffs.shift
       end
@@ -216,7 +214,7 @@ module Girl
     def write_tund( tund )
       tund_info = @tund_infos[ tund ]
 
-      if tund_info[ :is_closing ]
+      if tund_info[ :is_closing ] then
         close_tund( tund )
         return
       end
@@ -224,9 +222,7 @@ module Girl
       while tund_info[ :wbuffs ].any?
         to_addr, data = tund_info[ :wbuffs ].first
 
-        unless send_data( tund, data, to_addr )
-          return
-        end
+        return unless send_data( tund, data, to_addr )
 
         tund_info[ :wbuffs ].shift
       end
@@ -269,15 +265,15 @@ module Girl
       tund_info[ :last_traff_at ] = Time.new
       to_addr = tund_info[ :dst_addrs ][ from_addr ]
 
-      if to_addr
+      if to_addr then
         # 来自tun，发给dst。
         td_addr = [ from_addr, to_addr ].join
         is_tunneled = tund_info[ :is_tunneleds ][ td_addr ]
 
-        unless is_tunneled
+        unless is_tunneled then
           # puts "debug first traffic from tun #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
           # 发暂存
-          if tund_info[ :unpaired_dst_rbuffs ].include?( to_addr )
+          if tund_info[ :unpaired_dst_rbuffs ].include?( to_addr ) then
             rbuffs = tund_info[ :unpaired_dst_rbuffs ].delete( to_addr )
             # puts "debug move tund.dst.rbuffs to tund.wbuffs #{ rbuffs.inspect }"
             tund_info[ :wbuffs ] += rbuffs.map{ | rbuff | [ from_addr, rbuff ] }
@@ -295,14 +291,14 @@ module Girl
 
       to_addr = tund_info[ :tun_addrs ][ from_addr ]
 
-      if to_addr
+      if to_addr then
         # 来自dst，发给tun。
         # puts "debug #{ data.inspect } from #{ addrinfo.inspect } to #{ Addrinfo.new( to_addr ).inspect }"
 
         td_addr = [ to_addr, from_addr ].join
         is_tunneled = tund_info[ :is_tunneleds ][ td_addr ]
 
-        if is_tunneled
+        if is_tunneled then
           add_tund_wbuff( tund, to_addr, data )
           return
         end
@@ -311,12 +307,12 @@ module Girl
       end
 
       # 来自未知的地方，或者对应的tun还没来流量，记暂存
-      unless tund_info[ :unpaired_dst_rbuffs ][ from_addr ]
+      unless tund_info[ :unpaired_dst_rbuffs ][ from_addr ] then
         tund_info[ :unpaired_dst_rbuffs ][ from_addr ] = []
       end
 
       # 暂存5条（连发打洞数据，不需要存多）。
-      if tund_info[ :unpaired_dst_rbuffs ][ from_addr ].size < 5
+      if tund_info[ :unpaired_dst_rbuffs ][ from_addr ].size < 5 then
         # puts "debug save other dst rbuff #{ addrinfo.inspect } #{ data.inspect }"
         tund_info[ :unpaired_dst_rbuffs ][ from_addr ] << data
       end

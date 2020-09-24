@@ -13,8 +13,8 @@ module Girl
   class Proxyd
 
     def initialize( config_path = nil )
-      if config_path
-        unless File.exist?( config_path )
+      if config_path then
+        unless File.exist?( config_path ) then
           raise "not found config file #{ config_path }"
         end
 
@@ -23,13 +23,13 @@ module Girl
         worker_count = conf[ :worker_count ]
       end
 
-      unless proxyd_port
+      unless proxyd_port then
         proxyd_port = 6060
       end
 
       nprocessors = Etc.nprocessors
 
-      if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors
+      if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
         worker_count = nprocessors
       end
 
@@ -43,13 +43,11 @@ module Girl
         READ_SIZE
         WMEMS_LIMIT
         RESUME_BELOW
-        EXPIRE_NEW
+        SEND_HELLO_COUNT
         EXPIRE_AFTER
         CHECK_EXPIRE_INTERVAL
         CHECK_STATUS_INTERVAL
-        SEND_STATUS_UNTIL
-        MULTI_MISS_SIZE
-        MISS_RANGE_LIMIT
+        MULTI_PIECE_SIZE
         CONFUSE_UNTIL
         RESOLV_CACHE_EXPIRE
       ]
