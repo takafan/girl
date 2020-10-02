@@ -7,58 +7,92 @@ require 'ipaddr'
 require 'json'
 require 'socket'
 
-##
+=begin
 # Girl::Proxy - 代理服务，近端。
-#
-# 包结构
-# ======
-#
-# tun-proxyd:
-#
-# hello
-#
-# proxyd-tun:
-#
-# Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port
-#
-# tun-tund:
-#
-# Q>: 0 ctlmsg -> C: 2 heartbeat      -> C: random char
-#                    3 a new source   -> Q>: src id -> encoded destination address
-#                    4 paired         -> Q>: src id -> n: dst id
-#                    5 dest status    -> not use
-#                    6 source status  -> not use
-#                    7 miss           -> not use
-#                    8 fin1           -> Q>/n: src/dst id -> Q>: biggest src/dst pack id -> Q>: continue dst/src pack id
-#                    9 confirm fin1   -> not use
-#                   10 fin2           -> Q>/n: src/dst id
-#                   11 confirm fin2   -> not use
-#                   12 tund fin
-#                   13 tun fin
-#                   14 tun ip changed
-#                   15 multi miss     -> not use
-#                   16 continue recv  -> Q>/n: src/dst id -> Q>: until pack id -> C: has piece
-#                   17 multi piece    -> Q>/n: src/dst id -> Q>: begin pack id -> Q>: end pack id -> Q>*
-#
-# Q>: 1+ pack_id -> Q>/n: src/dst id -> traffic
-#
-# close logic
-# ===========
-#
-# 1-1. after close src -> dst closed ? no -> send fin1
-# 1-2. tun recv fin2 -> del src ext
-#
-# 2-1. tun recv fin1 -> all traffic received ? -> close src after write
-# 2-2. tun recv traffic -> dst closed and all traffic received ? -> close src after write
-# 2-3. after close src -> dst closed ? yes -> del src ext -> send fin2
-#
-# 3-1. after close dst -> src closed ? no -> send fin1
-# 3-2. tund recv fin2 -> del dst ext
-#
-# 4-1. tund recv fin1 -> all traffic received ? -> close dst after write
-# 4-2. tund recv traffic -> src closed and all traffic received ? -> close dst after write
-# 4-3. after close dst -> src closed ? yes -> del dst ext -> send fin2
-#
+
+## 重传逻辑
+
+1. 每隔一秒检查：距上一次发resend ready超过一秒，三个重传队列为空，存在有写后的src/dst，发resend ready
+2. 收到resend ready，遍历src/dst，发2miss or continue（存在跳号包发multi single miss和multi range miss，不存在发continue）
+3. 收到multi single miss，添加至singles队列
+4. 收到multi range miss，添加至ranges队列
+5. 收到continue，删写后，把剩余创建时间超过一秒的写后添加至newers队列
+6. 依次重传newers队列，singles队列，ranges队列，传光后，发resend ready
+
+## 包结构
+
+tun-proxyd:
+
+hello
+
+proxyd-tun:
+
+Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port
+
+tun-tund:
+
+Q>: 0 ctlmsg -> C: 2 heartbeat         -> C: random char
+                   3 a new source      -> Q>: src id -> encoded destination address
+                   4 paired            -> Q>: src id -> n: dst id
+                   5 dest status       -> not use
+                   6 source status     -> not use
+                   7 miss              -> Q>/n: src/dst id -> Q>: pack id begin -> Q>: pack id end
+                   8 fin1              -> Q>/n: src/dst id -> Q>: biggest src/dst pack id
+                   9 confirm fin1      -> not use
+                  10 fin2              -> Q>/n: src/dst id
+                  11 confirm fin2      -> not use
+                  12 tund fin
+                  13 tun fin
+                  14 tun ip changed
+                  15 multi single miss -> Q>/n: src/dst id -> Q>: miss pack id -> Q>*: 至多160个 miss pack id
+                  16 multi range miss  -> Q>/n: src/dst id -> Q>: begin miss pack id -> Q>: end miss pack id -> Q>*: 至多80个miss段
+                  17 continue          -> Q>/n: src/dst id -> Q>: continue recv pack id
+                  18 resend ready
+
+Q>: 1+ pack_id -> Q>/n: src/dst id -> traffic
+
+## 近端关闭逻辑
+
+1. 读src -> 读到error -> 关src读 -> rbuff空？ -> src.dst？ -> 关dst写 -> src已双向关？ -> 删src.info
+                                                                    -> dst已双向关且src.wbuff空？ -> 删dst.info
+                                             -> src.dst_id？ -> 发fin1
+
+2. 写src -> 写光src.wbuff -> src.dst？ -> dst已关读？ -> 关src写 -> src已双向关且src.rbuff空？ -> 删src.info
+                          -> src.dst_id？ -> 已连续写入至dst最终包id？ -> 关src写 -> 发fin2 -> src.dst_fin2？ -> 删src.ext
+
+3. 读dst -> 读到error -> 关dst读 -> dst.src.wbuff空？ -> 关src写 -> dst已双向关？ -> 删dst.info
+                                                                -> src已双向关？ -> 删src.info
+
+4. 写dst -> 转光dst.src.rbuff -> src已关读？ -> 关dst写 -> dst已双向关且src.wbuff空？ -> 删dst.info
+
+5. 读tun -> 读到fin1，得到对面dst最终包id -> 已连续写入至dst最终包id？ -> 关src写 -> 发fin2 -> src.dst_fin2？ -> 删src.ext
+         -> 读到fin2，对面已结束写 -> src.dst_fin2置true -> src已双向关？ -> 删src.ext
+
+6. 写tun -> 转光src.rbuff -> src已关读？ -> 发fin1
+
+7. 主动关src -> src.dst？ -> dst没关？ -> 主动关dst
+             -> src.dst_id？ -> 发fin1和fin2
+
+8. 主动关dst -> dst.src没关？ -> 主动关src
+
+9. 主动关tun -> tun.srcs.each没关？-> 主动关src
+
+## 远端关闭逻辑
+
+1. 读dst -> 读到error -> 关dst读 -> rbuff空？-> 发fin1
+
+2. 写dst -> 写光dst.wbuff -> 已连续写入至src最终包id？ -> 关dst写 -> 发fin2 -> dst.src_fin2？ -> 删dst.ext
+
+3. 读tund -> 读到fin1，得到对面src最终包id -> 已连续写入至src最终包id？ -> 关dst写 -> 发fin2 -> dst.src_fin2？ -> 删dst.ext
+         -> 读到fin2，对面已结束写 -> dst.src_fin2置true -> dst已双向关？ -> 删dst.ext
+
+4. 写tund -> 转光dst.rbuff -> dst已关读？ -> 发fin1
+
+5. 主动关dst -> 发fin1和fin2
+
+6. 主动关tund -> tund.dsts.each没关？-> 主动关dst
+=end
+
 module Girl
   class Proxy
 
@@ -144,13 +178,15 @@ module Girl
       names = %w[
         PACK_SIZE
         READ_SIZE
-        WMEMS_LIMIT
+        WAFTERS_LIMIT
         RESUME_BELOW
         SEND_HELLO_COUNT
         EXPIRE_AFTER
         CHECK_EXPIRE_INTERVAL
         CHECK_STATUS_INTERVAL
-        MULTI_PIECE_SIZE
+        SEND_MISS_AFTER
+        MISS_SINGLE_LIMIT
+        MISS_RANGE_LIMIT
         CONFUSE_UNTIL
         RESOLV_CACHE_EXPIRE
       ]

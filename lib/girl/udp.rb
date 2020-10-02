@@ -208,7 +208,7 @@ module Girl
     end
 
     def write_redir( redir )
-      while @redir_wbuffs.any?
+      while @redir_wbuffs.any? do
         to_addr, data = @redir_wbuffs.first
 
         return unless send_data( redir, data, to_addr )
@@ -227,7 +227,7 @@ module Girl
         return
       end
 
-      while tun_info[ :wbuffs ].any?
+      while tun_info[ :wbuffs ].any? do
         to_addr, data = tun_info[ :wbuffs ].first
 
         unless send_data( tun, data, to_addr ) then

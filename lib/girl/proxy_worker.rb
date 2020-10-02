@@ -36,18 +36,7 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
-          # 先写，再读
-          ws.each do | sock |
-            case @roles[ sock ]
-            when :src then
-              write_src( sock )
-            when :dst then
-              write_dst( sock )
-            when :tun then
-              write_tun( sock )
-            end
-          end
-
+          # 先读，再写，避免打上关闭标记后读到
           rs.each do | sock |
             case @roles[ sock ]
             when :dotr then
@@ -60,6 +49,17 @@ module Girl
               read_dst( sock )
             when :tun then
               read_tun( sock )
+            end
+          end
+
+          ws.each do | sock |
+            case @roles[ sock ]
+            when :src then
+              write_src( sock )
+            when :dst then
+              write_dst( sock )
+            when :tun then
+              write_tun( sock )
             end
           end
         end
@@ -103,7 +103,7 @@ module Girl
 
               if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
                 puts "p#{ Process.pid } #{ Time.new } expire tun"
-                set_is_closing( @tun )
+                set_tun_is_closing
                 trigger = true
               end
             end
@@ -118,7 +118,7 @@ module Girl
                   del_src_ext( src )
                 else
                   puts "p#{ Process.pid } #{ Time.new } expire src #{ src_info[ :destination_domain ] }"
-                  set_is_closing( src )
+                  set_src_is_closing( src )
                   trigger = true
                 end
               end
@@ -143,116 +143,36 @@ module Girl
           @mutex.synchronize do
             if @tun && !@tun.closed? && @tun_info[ :tund_addr ] then
               now = Time.new
+              trigger = false
 
               if @tun_info[ :srcs ].any? then
                 @tun_info[ :srcs ].each do | _, src |
                   src_info = @src_infos[ src ]
 
-                  if src_info && src_info[ :dst_id ] then
-                    # 距上一次收到中转半秒以内，发continue recv（收到的连续的最后一个包号，以及后面有没有跳号包）；发multi piece（跳号包号）。
-                    if src_info[ :last_recv_at ] && ( now - src_info[ :last_recv_at ] < CHECK_STATUS_INTERVAL ) then
-                      has_piece = src_info[ :pieces ].any?
-                      data = [ 0, CONTINUE_RECV, src_info[ :dst_id ], src_info[ :continue_recv_pack_id ], ( has_piece ? 1 : 0 ) ].pack( 'Q>CnQ>C' )
-                      break unless send_data( @tun, data, @tun_info[ :tund_addr ] )
-
-                      if has_piece then
-                        ranges = []
-                        piece_ids = src_info[ :pieces ].keys.sort
-                        begin_pack_id = end_pack_id = piece_ids[ 0 ]
-
-                        piece_ids[ 1..-1 ].each do | pack_id |
-                          if end_pack_id + 1 == pack_id then
-                            end_pack_id = pack_id
-                          else
-                            ranges << [ begin_pack_id, end_pack_id ]
-                            begin_pack_id = end_pack_id = pack_id
-                          end
-                        end
-
-                        ranges << [ begin_pack_id, end_pack_id ]
-
-                        # puts "debug1 send multi piece #{ ranges.size }"
-                        idx = 0
-
-                        while idx < ranges.size
-                          chunk = ranges[ idx, MULTI_PIECE_SIZE ].map{ | b, e | [ b, e ].pack( 'Q>Q>' ) }.join
-                          data = [ [ 0, MULTI_PIECE, src_info[ :dst_id ] ].pack( 'Q>Cn' ), chunk ].join
-                          break unless send_data( @tun, data, @tun_info[ :tund_addr ] )
-                          idx += MULTI_PIECE_SIZE
-                        end
-                      end
+                  if src_info then
+                    # 超过一秒没来流量，发2miss（multi single miss, multi range miss）
+                    if src_info[ :last_recv_at ] && ( now - src_info[ :last_recv_at ] >= SEND_MISS_AFTER ) then
+                      # puts "debug1 #{ now } no traffic in over #{ SEND_MISS_AFTER }s"
+                      add_ctlmsg_miss_or_continue( src_info )
+                      trigger = true
                     end
 
-                    # 距上一次发出中转超过半秒，处理multi piece（删对应写后，重传剩余写后，删multi piece）。
-                    if src_info[ :last_sent_at ] && ( now - src_info[ :last_sent_at ] >= CHECK_STATUS_INTERVAL ) && src_info[ :arrived_ranges ].any? then
-                      ranges = src_info[ :arrived_ranges ]
-                      idx = 0
-
-                      while idx < ranges.size
-                        pack_id_begin, pack_id_end = ranges[ idx ], ranges[ idx + 1 ]
-
-                        ( pack_id_begin..pack_id_end ).each do | pack_id |
-                          @tun_info[ :wmems ].delete( [ src_info[ :id ], pack_id ] )
-                        end
-
-                        idx += 2
-                      end
-
-                      wmems = @tun_info[ :wmems ].select{ | k, _ | k[ 0 ] == src_info[ :id ] }
-
-                      if wmems.any? then
-                        # puts "debug1 #{ Time.new } resend #{ datas.size }"
-
-                        wmems.each do | _, v |
-                          break unless send_data( @tun, v[ 0 ], @tun_info[ :tund_addr ] )
-                        end
-                      end
-
-                      src_info[ :arrived_ranges ].clear
+                    # 恢复读
+                    if !src_info[ :closed_read ] && src_info[ :paused ] && ( src_info[ :wafters ].size < RESUME_BELOW ) then
+                      puts "p#{ Process.pid } #{ Time.new } resume src #{ src_info[ :destination_domain ] }"
+                      add_read( src )
+                      src_info[ :paused ] = false
+                      trigger = true
                     end
                   end
                 end
               end
 
-              # 恢复读
-              if @tun_info[ :pause_srcs ].any? && ( @tun_info[ :wmems ].size < RESUME_BELOW ) then
-                puts "p#{ Process.pid } #{ Time.new } resume srcs #{ @tun_info[ :pause_srcs ].size }"
-
-                @tun_info[ :pause_srcs ].each do | src |
-                  add_read( src )
-                end
-
-                @tun_info[ :pause_srcs ].clear
+              if trigger
                 next_tick
               end
             end
           end
-        end
-      end
-    end
-
-    ##
-    # loop send hello
-    #
-    def loop_send_hello
-      data = @custom.hello
-
-      Thread.new do
-        SEND_HELLO_COUNT.times do | i |
-          if @tun.closed? || @tun_info[ :tund_addr ] then
-            # puts "debug1 break loop send hello"
-            break
-          end
-
-          @mutex.synchronize do
-            msg = i >= 1 ? "resend hello #{ i }" : "hello i'm tun"
-            puts "p#{ Process.pid } #{ Time.new } #{ msg }"
-            # puts "debug1 #{ data.inspect }"
-
-            send_data( @tun, data, @proxyd_addr )
-          end
-
-          sleep CHECK_STATUS_INTERVAL
         end
       end
     end
@@ -281,7 +201,8 @@ module Girl
                 puts "p#{ Process.pid } #{ Time.new } resend a new source #{ domain_port } #{ i }"
               end
 
-              send_data( @tun, data, @tun_info[ :tund_addr ] )
+              add_ctlmsg( data )
+              next_tick
             end
 
             sleep CHECK_STATUS_INTERVAL
@@ -334,7 +255,7 @@ module Girl
               deal_with_destination_ip( src, ip_info )
             end
           else
-            set_is_closing( src )
+            set_src_is_closing( src ) unless src.closed?
           end
 
           next_tick
@@ -387,12 +308,14 @@ module Girl
       tun_info = {
         port: port,           # 端口
         pending_sources: [],  # 还没配上tund，暂存的src
-        wbuffs: [],           # 写前 [ src_id, pack_id, data ]
-        wmems: {},            # 写后 [ src_id, pack_id ] => [ data, add_at ]
+        ctlmsgs: [],          # [ ctlmsg, to_addr ]
+        completes: {},        # 收全流量的src们 src => complete_pack_id
+        resend_singles: {},   # 单个重传队列 src => miss_pack_ids
+        resend_ranges: {},    # 区间重传队列 src => miss_pack_ranges
+        event_srcs: [],       # rbuff不为空，或者准备关闭的src
         tund_addr: nil,       # tund地址
         srcs: {},             # src_id => src
         src_ids: {},          # dst_id => src_id
-        pause_srcs: [],       # 暂停的src
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间
         last_sent_at: nil,    # 上一次发出流量的时间
@@ -403,7 +326,27 @@ module Girl
       @tun_info = tun_info
 
       add_read( tun, :tun )
-      loop_send_hello
+      data = @custom.hello
+
+      Thread.new do
+        SEND_HELLO_COUNT.times do | i |
+          if @tun.closed? || @tun_info[ :tund_addr ] then
+            # puts "debug1 break loop send hello"
+            break
+          end
+
+          @mutex.synchronize do
+            msg = i >= 1 ? "resend hello #{ i }" : "hello i'm tun"
+            puts "p#{ Process.pid } #{ Time.new } #{ msg }"
+            # puts "debug1 #{ data.inspect }"
+
+            add_ctlmsg( data, @proxyd_addr )
+            next_tick
+          end
+
+          sleep CHECK_STATUS_INTERVAL
+        end
+      end
     end
 
     ##
@@ -424,19 +367,20 @@ module Girl
       rescue IO::WaitWritable
         # connect nonblock 必抛 wait writable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect destination #{ e.class }, close src"
-        set_is_closing( src )
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ e.class }, close src"
+        set_src_is_closing( src )
         return
       end
 
       # puts "debug1 a new dst #{ dst.local_address.inspect }"
       local_port = dst.local_address.ip_port
       @dst_infos[ dst ] = {
-        local_port: local_port,     # 本地端口
-        src: src,                   # 对应src
-        domain: domain,             # 域名
-        wbuff: '',                  # 写前
-        is_closing: false           # 是否准备关闭
+        local_port: local_port, # 本地端口
+        src: src,               # 对应src
+        domain: domain,         # 域名
+        closed_read: false,     # 是否已关读
+        closed_write: false,    # 是否已关写
+        is_closing: false       # 是否准备关闭
       }
 
       add_read( dst, :dst )
@@ -447,9 +391,9 @@ module Girl
         if src_info[ :is_connect ] then
           # puts "debug1 add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
-        else
-          # puts "debug1 add src rbuff to dst wbuff"
-          add_dst_wbuff( dst, src_info[ :rbuff ] )
+        elsif src_info[ :rbuff ]
+          # puts "debug1 relay rbuff after dst ready"
+          add_write( dst )
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
         add_src_wbuff_socks5_conn_reply( src )
@@ -521,19 +465,101 @@ module Girl
     end
 
     ##
-    # add dst wbuff
+    # add ctlmsg miss or continue
     #
-    def add_dst_wbuff( dst, data )
-      dst_info = @dst_infos[ dst ]
-      dst_info[ :wbuff ] << data
-      add_write( dst )
+    def add_ctlmsg_miss_or_continue( src_info )
+      continue_recv_pack_id = src_info[ :continue_recv_pack_id ]
+
+      if src_info[ :pieces ].any? then
+        singles = []
+        ranges = []
+        begin_miss_pack_id = continue_recv_pack_id + 1
+
+        src_info[ :pieces ].keys.sort.each do | pack_id |
+          if begin_miss_pack_id < pack_id then
+            end_miss_pack_id = pack_id - 1
+
+            if begin_miss_pack_id == end_miss_pack_id then
+              singles << begin_miss_pack_id
+
+              if singles.size >= MISS_SINGLE_LIMIT then
+                puts "p#{ Process.pid } #{ Time.new } break add miss single at #{ pack_id }"
+                break
+              end
+            else
+              ranges << [ begin_miss_pack_id, end_miss_pack_id ]
+
+              if ranges.size >= MISS_RANGE_LIMIT then
+                puts "p#{ Process.pid } #{ Time.new } break add miss range at #{ pack_id }"
+                break
+              end
+            end
+          end
+
+          begin_miss_pack_id = pack_id + 1
+        end
+
+        # puts "debug1 add ctlmsg multi single miss #{ singles.size }"
+        data = [ 0, MULTI_SINGLE_MISS, src_info[ :dst_id ], *singles ].pack( 'Q>CnQ>*' )
+        add_ctlmsg( data )
+
+        if ranges.any? then
+          # puts "debug1 add ctlmsg multi range miss #{ ranges.size }"
+          data = [ 0, MULTI_RANGE_MISS, src_info[ :dst_id ], *( ranges.flatten ) ].pack( 'Q>CnQ>*' )
+          add_ctlmsg( data )
+        end
+      else
+        # puts "debug1 add ctlmsg continue recv #{ continue_recv_pack_id }"
+        data = [ 0, CONTINUE_RECV, src_info[ :dst_id ], continue_recv_pack_id ].pack( 'Q>CnQ>' )
+        add_ctlmsg( data )
+      end
+    end
+
+    ##
+    # add ctlmsg fin1
+    #
+    def add_ctlmsg_fin1( src_info )
+      data = [ 0, FIN1, src_info[ :id ], src_info[ :biggest_pack_id ] ].pack( 'Q>CQ>Q>' )
+      add_ctlmsg( data )
+    end
+
+    ##
+    # add ctlmsg fin2
+    #
+    def add_ctlmsg_fin2( src_info )
+      data = [ 0, FIN2, src_info[ :id ] ].pack( 'Q>CQ>' )
+      add_ctlmsg( data )
+    end
+
+    ##
+    # add ctlmsg
+    #
+    def add_ctlmsg( data, to_addr = nil )
+      unless to_addr then
+        to_addr = @tun_info[ :tund_addr ]
+      end
+
+      if to_addr
+        @tun_info[ :ctlmsgs ] << [ data, to_addr ]
+        add_write( @tun )
+      end
+    end
+
+    ##
+    # add event src
+    #
+    def add_event_src( src )
+      unless @tun_info[ :event_srcs ].include?( src ) then
+        @tun_info[ :event_srcs ] << src
+        add_write( @tun )
+      end
     end
 
     ##
     # add read
     #
     def add_read( sock, role = nil )
-      if sock && !sock.closed? && !@reads.include?( sock ) then
+      unless @reads.include?( sock ) then
         @reads << sock
 
         if role
@@ -546,93 +572,49 @@ module Girl
     # add write
     #
     def add_write( sock )
-      if sock && !sock.closed? && !@writes.include?( sock ) then
+      unless @writes.include?( sock ) then
         @writes << sock
       end
     end
 
     ##
-    # set is closing
+    # set src is closing
     #
-    def set_is_closing( sock )
-      if sock && !sock.closed? then
-        role = @roles[ sock ]
-        # puts "debug1 set #{ role.to_s } is closing"
-
-        case role
-        when :src then
-          src_info = @src_infos[ sock ]
-          src_info[ :is_closing ] = true
-        when :dst then
-          dst_info = @dst_infos[ sock ]
-          dst_info[ :is_closing ] = true
-        when :tun then
-          @tun_info[ :is_closing ] = true
-        end
-
-        @reads.delete( sock )
-        add_write( sock )
-      end
+    def set_src_is_closing( src )
+      @reads.delete( src )
+      src_info = @src_infos[ src ]
+      src_info[ :is_closing ] = true
+      add_write( src )
     end
 
     ##
-    # tunnel data
+    # set tun is closing
     #
-    def tunnel_data( src, data )
-      now = Time.new
-      src_info = @src_infos[ src ]
-      src_id = src_info[ :id ]
-      pack_id = src_info[ :biggest_pack_id ]
-      idx = 0
-      len = data.bytesize
-
-      while idx < len
-        chunk = data[ idx, PACK_SIZE ]
-        pack_id += 1
-
-        if pack_id <= CONFUSE_UNTIL then
-          # puts "debug2 encode chunk #{ pack_id }\n#{ chunk.inspect }\n"
-          chunk = @custom.encode( chunk )
-        end
-
-        data2 = [ [ pack_id, src_id ].pack( 'Q>Q>' ), chunk ].join
-        break unless send_data( @tun, data2, @tun_info[ :tund_addr ] )
-        @tun_info[ :wmems ][ [ src_id, pack_id ] ] = [ data2, now ]
-        idx += PACK_SIZE
-      end
-
-      src_info[ :biggest_pack_id ] = pack_id
-      src_info[ :last_sent_at ] = now
-
-      # 写后超过上限，暂停读src
-      if @tun_info[ :wmems ].size >= WMEMS_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause src #{ src_id } #{ src_info[ :destination_domain ] } #{ src_info[ :biggest_pack_id ] }"
-        @reads.delete( src )
-
-        unless @tun_info[ :pause_srcs ].include?( src ) then
-          @tun_info[ :pause_srcs ] << src
-        end
-      end
+    def set_tun_is_closing
+      @tun_info[ :is_closing ] = true
+      @reads.delete( @tun )
+      add_write( @tun )
     end
 
     ##
     # send data
     #
-    def send_data( tun, data, to_addr )
-      return false unless to_addr
-
-      begin
-        tun.sendmsg( data, 0, to_addr )
-      rescue IO::WaitWritable, Errno::EINTR
-        return false
-      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-        puts "#{ Time.new } #{ e.class }, close tun"
-        close_tun( tun )
-        return false
+    def send_data( data, to_addr = nil )
+      unless to_addr then
+        to_addr = @tun_info[ :tund_addr ]
       end
 
-      @tun_info[ :last_sent_at ] = Time.new
-      true
+      begin
+        written = @tun.sendmsg_nonblock( data, 0, to_addr )
+      rescue IO::WaitWritable, Errno::EINTR
+        print '.'
+        return :wait
+      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+        puts "#{ Time.new } sendmsg #{ e.class }, close tun"
+        return :fatal
+      end
+
+      written
     end
 
     ##
@@ -641,12 +623,11 @@ module Girl
     def del_src_ext( src )
       src_info = @src_infos.delete( src )
 
-      if src_info then
+      if src_info && !@tun.closed? then
         if src_info[ :dst_id ] then
           @tun_info[ :src_ids ].delete( src_info[ :dst_id ] )
         end
 
-        @tun_info[ :wmems ].delete_if { | k, _ | k[ 0 ] == src_info[ :id ] }
         @tun_info[ :srcs ].delete( src_info[ :id ] )
       end
     end
@@ -657,28 +638,20 @@ module Girl
     def close_src( src )
       # puts "debug1 close src"
       close_sock( src )
-      src_info = @src_infos[ src ]
+      src_info = @src_infos.delete( src )
 
-      if src_info[ :proxy_type ] == :direct then
-        @src_infos.delete( src )
+      dst = src_info[ :dst ]
 
-        if src_info[ :dst ] then
-          set_is_closing( src_info[ :dst ] )
+      if dst then
+        # puts "debug1 主动关src -> src.dst？ -> 主动关dst"
+        close_dst( dst ) unless dst.closed?
+      elsif src_info[ :dst_id ] then
+        unless @tun.closed?
+          # puts "debug1 主动关src -> src.dst_id？ -> 发fin1和fin2"
+          add_ctlmsg_fin1( src_info )
+          add_ctlmsg_fin2( src_info )
         end
-
-        return
       end
-
-      if src_info[ :fin1_dst_pack_id ] then
-        # puts "debug1 2-3. after close src -> dst closed ? yes -> del src ext -> send fin2"
-        del_src_ext( src )
-        data = [ 0, FIN2, src_info[ :id ] ].pack( 'Q>CQ>' )
-      else
-        # puts "debug1 1-1. after close src -> dst closed ? no -> send fin1"
-        data = [ 0, FIN1, src_info[ :id ], src_info[ :biggest_pack_id ], src_info[ :continue_recv_pack_id ] ].pack( 'Q>CQ>Q>Q>' )
-      end
-
-      send_data( @tun, data, @tun_info[ :tund_addr ] )
     end
 
     ##
@@ -688,7 +661,8 @@ module Girl
       # puts "debug1 close dst"
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
-      set_is_closing( dst_info[ :src ] )
+      src = dst_info[ :src ]
+      close_src( src ) unless src.closed?
     end
 
     ##
@@ -697,7 +671,7 @@ module Girl
     def close_tun( tun )
       # puts "debug1 close tun"
       close_sock( tun )
-      @tun_info[ :srcs ].each{ | _, src | set_is_closing( src ) }
+      @tun_info[ :srcs ].each{ | _, src | close_src( src ) unless src.closed? }
     end
 
     ##
@@ -715,87 +689,6 @@ module Girl
     #
     def next_tick
       @dotw.write( '.' )
-    end
-
-    ##
-    # write src
-    #
-    def write_src( src )
-      src_info = @src_infos[ src ]
-
-      if src_info[ :is_closing ] then
-        close_src( src )
-        return
-      end
-
-      data = src_info[ :wbuff ]
-
-      if data.empty? then
-        @writes.delete( src )
-        return
-      end
-
-      begin
-        written = src.write_nonblock( data )
-      rescue IO::WaitWritable, Errno::EINTR
-        return
-      rescue Exception => e
-        # puts "debug1 write src #{ e.class }"
-        close_src( src )
-        return
-      end
-
-      data = data[ written..-1 ]
-      src_info[ :wbuff ] = data
-    end
-
-    ##
-    # write dst
-    #
-    def write_dst( dst )
-      dst_info = @dst_infos[ dst ]
-
-      if dst_info[ :is_closing ] then
-        close_dst( dst )
-        return
-      end
-
-      data = dst_info[ :wbuff ]
-
-      if data.empty? then
-        @writes.delete( dst )
-        return
-      end
-
-      begin
-        written = dst.write_nonblock( data )
-      rescue IO::WaitWritable, Errno::EINTR
-        return
-      rescue Exception => e
-        # puts "debug1 write dst #{ e.class }"
-        close_dst( dst )
-        return
-      end
-
-      data = data[ written..-1 ]
-      dst_info[ :wbuff ] = data
-
-      unless dst_info[ :src ].closed? then
-        src_info = @src_infos[ dst_info[ :src ] ]
-        src_info[ :last_sent_at ] = Time.new
-      end
-    end
-
-    ##
-    # write tun
-    #
-    def write_tun( tun )
-      if @tun_info[ :is_closing ] then
-        close_tun( tun )
-        return
-      end
-
-      @writes.delete( tun )
     end
 
     ##
@@ -822,22 +715,26 @@ module Girl
         id: src_id,               # id
         proxy_proto: :uncheck,    # :uncheck / :http / :socks5
         proxy_type: :uncheck,     # :uncheck / :checking / :direct / :tunnel / :negotiation
-        dst: nil,                 # :direct的场合，对应的dst
         destination_domain: nil,  # 目的地域名
         destination_port: nil,    # 目的地端口
-        biggest_pack_id: 0,       # 最大包号码
         is_connect: true,         # 代理协议是http的场合，是否是CONNECT
-        rbuff: '',                # 非CONNECT，dst或者远端dst未准备好，暂存流量
-        wbuff: '',                # 写前
+        rbuff: '',                # 读到的流量
+        biggest_pack_id: 0,       # 最大包号码
+        wbuff: '',                # 从dst/tun读到的流量
+        dst: nil,                 # :direct的场合，对应的dst
         dst_id: nil,              # 远端dst id
         continue_recv_pack_id: 0, # 收到的连续的最后一个包号
         pieces: {},               # 跳号包 dst_pack_id => data
-        fin1_dst_pack_id: nil,    # 关闭的dst的最终包号码
+        fin1_dst_pack_id: nil,    # 已关闭读的远端dst的最终包号码
+        dst_fin2: false,          # 远端dst是否已关闭写
+        wafters: {},              # 写后 pack_id => [ data, add_at ]
         created_at: Time.new,     # 创建时间
         last_recv_at: nil,        # 上一次收到中转（由dst收到，或者由tun收到）的时间
         last_sent_at: nil,        # 上一次发出中转（由dst发出，或者由tun发出）的时间
-        arrived_ranges: [],       # 送达的包号区间
-        is_closing: false         # 是否准备关闭
+        paused: false,            # 是否已暂停
+        closed_read: false,       # 是否已关读
+        closed_write: false,      # 是否已关写
+        is_closing: false         # 是否准备关闭，为了避免closed stream，一律到下一轮择，只择@writes，择到关闭
       }
 
       add_read( src, :src )
@@ -853,7 +750,37 @@ module Girl
         return
       rescue Exception => e
         # puts "debug1 read src #{ e.class }"
-        set_is_closing( src )
+        src.close_read
+        src_info = @src_infos[ src ]
+        src_info[ :closed_read ] = true
+        @reads.delete( src )
+
+        if src_info[ :rbuff ].empty? then
+          dst = src_info[ :dst ]
+
+          if dst then
+            dst.close_write
+            dst_info = @dst_infos[ dst ]
+            dst_info[ :closed_write ] = true
+            @writes.delete( dst )
+
+            if src.closed? then
+              # puts "debug1 读src -> 读到error -> 关src读 -> rbuff空？ -> src.dst？ -> 关dst写 -> src已双向关？ -> 删src.info"
+              @roles.delete( src )
+              @src_infos.delete( src )
+            end
+
+            if dst.closed? then
+              # puts "debug1 读src -> 读到error -> 关src读 -> rbuff空？ -> src.dst？ -> 关dst写 -> dst已双向关且src.wbuff空？ -> 删dst.info"
+              @roles.delete( dst )
+              @dst_infos.delete( dst )
+            end
+          elsif src_info[ :dst_id ] then
+            # puts "debug1 读src -> 读到error -> 关src读 -> rbuff空？ -> src.dst_id？ -> 发fin1"
+            add_ctlmsg_fin1( src_info )
+          end
+        end
+
         return
       end
 
@@ -868,7 +795,7 @@ module Girl
 
           unless domain_port then
             puts "p#{ Process.pid } #{ Time.new } CONNECT miss domain"
-            set_is_closing( src )
+            set_src_is_closing( src )
             return
           end
         elsif data[ 0 ].unpack( 'C' ).first == 5 then
@@ -886,7 +813,7 @@ module Girl
 
           unless methods.include?( 0 ) then
             puts "p#{ Process.pid } #{ Time.new } miss method 00"
-            set_is_closing( src )
+            set_src_is_closing( src )
             return
           end
 
@@ -908,7 +835,7 @@ module Girl
 
           unless host_line then
             # puts "debug1 not found host line"
-            set_is_closing( src )
+            set_src_is_closing( src )
             return
           end
 
@@ -920,7 +847,7 @@ module Girl
 
             unless domain_port then
               puts "p#{ Process.pid } #{ Time.new } Host line miss domain"
-              set_is_closing( src )
+              set_src_is_closing( src )
               return
             end
           end
@@ -938,7 +865,7 @@ module Girl
 
         resolve_domain( src, domain )
       when :checking then
-        # puts "debug1 add src rbuff while checking #{ data.inspect }"
+        # puts "debug1 add src rbuff before resolved #{ data.inspect }"
         src_info[ :rbuff ] << data
       when :negotiation then
         # +----+-----+-------+------+----------+----------+
@@ -978,17 +905,12 @@ module Girl
         end
       when :tunnel then
         if src_info[ :dst_id ] then
-          if @tun.closed?
-            # puts "debug1 tun closed, close src"
-            set_is_closing( src )
-            return
-          end
-
           unless src_info[ :is_connect ] then
             data, _ = sub_http_request( data )
           end
 
-          tunnel_data( src, data )
+          src_info[ :rbuff ] << data
+          add_event_src( src )
         else
           # puts "debug1 remote dst not ready, save data to src rbuff"
           src_info[ :rbuff ] << data
@@ -997,17 +919,12 @@ module Girl
         dst = src_info[ :dst ]
 
         if dst then
-          if dst.closed? then
-            # puts "debug1 dst closed, close src"
-            set_is_closing( src )
-            return
-          end
-
           unless src_info[ :is_connect ] then
             data, _ = sub_http_request( data )
           end
 
-          add_dst_wbuff( dst, data )
+          src_info[ :rbuff ] << data
+          add_write( dst )
         else
           # puts "debug1 dst not ready, save data to src rbuff"
           src_info[ :rbuff ] << data
@@ -1025,27 +942,49 @@ module Girl
         return
       rescue Exception => e
         # puts "debug1 read dst #{ e.class }"
-        set_is_closing( dst )
+        dst.close_read
+        dst_info = @dst_infos[ dst ]
+        dst_info[ :closed_read ] = true
+        @reads.delete( dst )
+        src = dst_info[ :src ]
+        src_info = @src_infos[ src ]
+
+        if src_info[ :wbuff ].empty? then
+          src.close_write
+          src_info[ :closed_write ] = true
+          @writes.delete( src )
+
+          if dst.closed? then
+            # puts "debug1 读dst -> 读到error -> 关dst读 -> dst.src.wbuff空？ -> 关src写 -> dst已双向关？ -> 删dst.info"
+            @roles.delete( dst )
+            @dst_infos.delete( dst )
+          end
+
+          if src.closed? then
+            # puts "debug1 读dst -> 读到error -> 关dst读 -> dst.src.wbuff空？ -> 关src写 -> src已双向关？ -> 删src.info"
+            @roles.delete( src )
+            @src_infos.delete( src )
+          end
+        end
+
         return
       end
 
       dst_info = @dst_infos[ dst ]
-      src = dst_info[ :src ]
-
-      if src.closed? then
-        puts "p#{ Process.pid } #{ Time.new } src closed, close dst #{ dst_info[ :domain ] }"
-        set_is_closing( dst )
-        return
-      end
-
-      add_src_wbuff( src, data )
+      add_src_wbuff( dst_info[ :src ], data )
     end
 
     ##
     # read tun
     #
     def read_tun( tun )
-      data, addrinfo, rflags, *controls = tun.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = tun.recvmsg_nonblock
+      rescue IO::WaitReadable, Errno::EINTR
+        print 'r'
+        return
+      end
+
       from_addr = addrinfo.to_sockaddr
       now = Time.new
       @tun_info[ :last_recv_at ] = now
@@ -1082,12 +1021,12 @@ module Girl
           return if src.nil? || src.closed?
 
           src_info = @src_infos[ src ]
-          return if src_info.nil? || src_info[ :dst_id ]
+          return if src_info[ :dst_id ]
 
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
 
           if dst_id == 0 then
-            set_is_closing( src )
+            set_src_is_closing( src )
             return
           end
 
@@ -1099,55 +1038,57 @@ module Girl
               # puts "debug1 add src wbuff http ok"
               add_src_wbuff( src, HTTP_OK )
             else
-              # puts "debug1 send src rbuff to tund"
-              tunnel_data( src, src_info[ :rbuff ] )
+              # puts "debug1 add event src"
+              add_event_src( src )
             end
           elsif src_info[ :proxy_proto ] == :socks5 then
             add_src_wbuff_socks5_conn_reply( src )
           end
+        when RESEND_READY then
+          return if ( from_addr != @tun_info[ :tund_addr ] ) || @tun_info[ :srcs ].empty?
+
+          # puts "debug1 #{ Time.new } got resend ready"
+
+          @tun_info[ :srcs ].each do | _, src |
+            src_info = @src_infos[ src ]
+
+            if src_info then
+              add_ctlmsg_miss_or_continue( src_info )
+            end
+          end
         when CONTINUE_RECV then
-          # 收到continue recv，删multi piece；消写后到until pack id为止；
-          # 若后面没跳号包，从写后里找出比until pack id大的，且发送已超过半秒的包，重传。（应对“恰好是最后n个包掉了”的情况）
-          src_id, until_pack_id, has_piece = data[ 9, 17 ].unpack( 'Q>Q>C' )
+          src_id, complete_pack_id = data[ 9, 16 ].unpack( 'Q>Q>' )
 
           src = @tun_info[ :srcs ][ src_id ]
           return unless src
 
-          src_info = @src_infos[ src ]
-          return unless src_info
+          # puts "debug1 got continue recv #{ complete_pack_id }"
+          @tun_info[ :completes ][ src ] = complete_pack_id
+          add_write( tun )
+        when MULTI_SINGLE_MISS then
+          src_id, *miss_pack_ids = data[ 9..-1 ].unpack( 'Q>Q>*' )
 
-          src_info[ :arrived_ranges ].clear
-          @tun_info[ :wmems ].delete_if { | k, _ | ( k[ 0 ] == src_id ) && ( k[ 1 ] <= until_pack_id ) }
+          src = @tun_info[ :srcs ][ src_id ]
+          return unless src
 
-          if has_piece == 0 then
-            wmems = @tun_info[ :wmems ].select{ | k, v | ( k[ 0 ] == src_id ) && ( k[ 1 ] > until_pack_id ) && ( now - v[ 1 ] >= CHECK_STATUS_INTERVAL ) }
-
-            if wmems.any? then
-              # puts "debug1 resend tails #{ src_info[ :destination_domain ] } #{ wmems.size }"
-
-              wmems.each do | _, v |
-                break unless send_data( tun, v[ 0 ], @tun_info[ :tund_addr ] )
-              end
-            end
-          end
-        when MULTI_PIECE then
-          # 收到multi piece，放着。
+          # puts "debug1 got multi single miss #{ miss_pack_ids.size }"
+          @tun_info[ :resend_singles ][ src ] = miss_pack_ids
+          add_write( tun )
+        when MULTI_RANGE_MISS then
           src_id, *ranges = data[ 9..-1 ].unpack( 'Q>Q>*' )
 
           src = @tun_info[ :srcs ][ src_id ]
           return unless src
 
-          src_info = @src_infos[ src ]
-          return unless src_info
+          return if ranges.empty? || ranges.size % 2 != 0
 
-          return if ranges.empty? || ( ranges.size % 2 != 0 )
-
-          src_info[ :arrived_ranges ] += ranges
-          # puts "debug1 arrived ranges size #{ src_info[ :arrived_ranges ].size }"
+          # puts "debug1 got multi range miss #{ ranges.size }"
+          @tun_info[ :resend_ranges ][ src ] = ranges
+          add_write( tun )
         when FIN1 then
           return if from_addr != @tun_info[ :tund_addr ]
 
-          dst_id, fin1_dst_pack_id, continue_src_pack_id = data[ 9, 18 ].unpack( 'nQ>Q>' )
+          dst_id, fin1_dst_pack_id = data[ 9, 10 ].unpack( 'nQ>' )
 
           src_id = @tun_info[ :src_ids ][ dst_id ]
           return unless src_id
@@ -1156,14 +1097,26 @@ module Girl
           return unless src
 
           src_info = @src_infos[ src ]
-          return unless src_info
+          # 对面可能同时读到和写到reset，导致发出两条fin1
+          return if src_info.nil? || src_info[ :fin1_dst_pack_id ]
 
-          # puts "debug1 got fin1 #{ dst_id } fin1 dst pack #{ fin1_dst_pack_id } completed src pack #{ continue_src_pack_id }"
+          # puts "debug1 got fin1 #{ dst_id } fin1 dst pack #{ fin1_dst_pack_id }"
+
           src_info[ :fin1_dst_pack_id ] = fin1_dst_pack_id
 
-          if src_info[ :continue_recv_pack_id ] == fin1_dst_pack_id then
-            # puts "debug1 2-1. tun recv fin1 -> all traffic received ? -> close src after write"
-            set_is_closing( src )
+          if ( src_info[ :continue_recv_pack_id ] == fin1_dst_pack_id ) && src_info[ :wbuff ].empty? then
+            src.close_write
+            src_info[ :closed_write ] = true
+            @writes.delete( src )
+
+            # puts "debug1 add ctlmsg fin2"
+            add_ctlmsg_fin2( src_info )
+
+            if src_info[ :dst_fin2 ] then
+              # puts "debug1 读tun -> 读到fin1，得到对面dst最终包id -> 已连续写入至dst最终包id？ -> 关src写 -> 发fin2 -> src.dst_fin2？ -> 删src.ext"
+              @roles.delete( src )
+              del_src_ext( src )
+            end
           end
         when FIN2 then
           return if from_addr != @tun_info[ :tund_addr ]
@@ -1173,22 +1126,31 @@ module Girl
           src_id = @tun_info[ :src_ids ][ dst_id ]
           return unless src_id
 
-          # puts "debug1 1-2. tun recv fin2 -> del src ext"
           src = @tun_info[ :srcs ][ src_id ]
+          return unless src
 
-          if src && src.closed? then
+          src_info = @src_infos[ src ]
+          return if src_info.nil? || src_info[ :dst_fin2 ]
+
+          # puts "debug1 got fin2 #{ dst_id }"
+
+          src_info[ :dst_fin2 ] = true
+
+          if src.closed? then
+            # puts "debug1 读tun -> 读到fin2，对面已结束写 -> src.dst_fin2置true -> src已双向关？ -> 删src.ext"
+            @roles.delete( src )
             del_src_ext( src )
           end
         when TUND_FIN then
           return if from_addr != @tun_info[ :tund_addr ]
 
           puts "p#{ Process.pid } #{ Time.new } recv tund fin"
-          set_is_closing( tun )
+          set_tun_is_closing
         when IP_CHANGED then
           return if from_addr != @tun_info[ :tund_addr ]
 
           puts "p#{ Process.pid } #{ Time.new } recv ip changed"
-          set_is_closing( tun )
+          set_tun_is_closing
         end
 
         return
@@ -1205,35 +1167,351 @@ module Girl
       return if src.nil? || src.closed?
 
       src_info = @src_infos[ src ]
-      return unless src_info
-
       return if ( pack_id <= src_info[ :continue_recv_pack_id ] ) || src_info[ :pieces ].include?( pack_id )
 
       data = data[ 10..-1 ]
 
       if pack_id <= CONFUSE_UNTIL then
         data = @custom.decode( data )
-        # puts "debug2 decoded pack #{ pack_id }\n#{ data.inspect }\n"
+        # puts "debug3 decoded pack #{ pack_id } #{ data.bytesize }\n#{ data.inspect }\n\n"
       end
 
-      # 放进写前，跳号放碎片缓存，发确认
+      # 放进src wbuff，跳号放碎片缓存，发确认
       if pack_id - src_info[ :continue_recv_pack_id ] == 1 then
-        while src_info[ :pieces ].include?( pack_id + 1 )
+        while src_info[ :pieces ].include?( pack_id + 1 ) do
           data << src_info[ :pieces ].delete( pack_id + 1 )
           pack_id += 1
         end
 
         src_info[ :continue_recv_pack_id ] = pack_id
         add_src_wbuff( src, data )
-
-        # 若对面已关闭，且流量正好收全，关闭src
-        if src_info[ :fin1_dst_pack_id ] == pack_id then
-          # puts "debug1 2-2. tun recv traffic -> dst closed and all traffic received ? -> close src after write"
-          set_is_closing( src )
-        end
       else
         src_info[ :pieces ][ pack_id ] = data
         src_info[ :last_recv_at ] = now
+      end
+    end
+
+    ##
+    # write src
+    #
+    def write_src( src )
+      src_info = @src_infos[ src ]
+      return if src_info[ :closed_write ]
+
+      # 处理关闭
+      if src_info[ :is_closing ] then
+        close_src( src )
+        return
+      end
+
+      # 处理wbuff
+      data = src_info[ :wbuff ]
+
+      unless data.empty? then
+        begin
+          written = src.write_nonblock( data )
+        rescue IO::WaitWritable, Errno::EINTR
+          return
+        rescue Exception => e
+          # puts "debug1 write src #{ e.class }"
+          close_src( src )
+          return
+        end
+
+        # puts "debug3 written src #{ written }"
+        data = data[ written..-1 ]
+        src_info[ :wbuff ] = data
+      end
+
+      unless data.empty? then
+        puts "p#{ Process.pid } #{ Time.new } write src cutted? written #{ written } left #{ data.bytesize }"
+        return
+      end
+
+      dst = src_info[ :dst ]
+
+      if dst then
+        dst_info = @dst_infos[ dst ]
+
+        if dst_info[ :closed_read ] then
+          src.close_write
+          src_info[ :closed_write ] = true
+
+          if src.closed? && src_info[ :rbuff ].empty? then
+            # puts "debug1 写src -> 写光src.wbuff -> src.dst？ -> dst已关读？ -> 关src写 -> src已双向关且src.rbuff空？ -> 删src.info"
+            @roles.delete( src )
+            @src_infos.delete( src )
+          end
+        end
+      elsif src_info[ :dst_id ] then
+        if src_info[ :fin1_dst_pack_id ] && ( src_info[ :continue_recv_pack_id ] == src_info[ :fin1_dst_pack_id ] ) then
+          src.close_write
+          src_info[ :closed_write ] = true
+
+          # puts "debug1 add ctlmsg fin2"
+          add_ctlmsg_fin2( src_info )
+
+          if src_info[ :dst_fin2 ] then
+            # puts "debug1 写src -> 写光src.wbuff -> src.dst_id？ -> 已连续写入至dst最终包id？ -> 关src写 -> 发fin2 -> src.dst_fin2？ -> 删src.ext"
+            @roles.delete( src )
+            del_src_ext( src )
+          end
+        end
+      end
+
+      @writes.delete( src )
+    end
+
+    ##
+    # write dst
+    #
+    def write_dst( dst )
+      dst_info = @dst_infos[ dst ]
+      return if dst_info[ :closed_write ]
+
+      # 处理关闭
+      if dst_info[ :is_closing ] then
+        close_dst( dst )
+        return
+      end
+
+      src = dst_info[ :src ]
+      src_info = @src_infos[ src ]
+
+      # 中转src的rbuff
+      data = src_info[ :rbuff ]
+
+      unless data.empty? then
+        begin
+          written = dst.write_nonblock( data )
+        rescue IO::WaitWritable, Errno::EINTR
+          return
+        rescue Exception => e
+          # puts "debug1 write dst #{ e.class }"
+          close_dst( dst )
+          return
+        end
+
+        data = data[ written..-1 ]
+        src_info[ :rbuff ] = data
+        # 更新最后中转时间
+        src_info[ :last_sent_at ] = Time.new
+      end
+
+      unless data.empty? then
+        puts "p#{ Process.pid } #{ Time.new } write dst cutted? written #{ written } left #{ data.bytesize }"
+        return
+      end
+
+      if src_info[ :closed_read ] then
+        dst.close_write
+        dst_info[ :closed_write ] = true
+
+        if dst.closed? && src_info[ :wbuff ].empty? then
+          # puts "debug1 写dst -> 转光dst.src.rbuff -> src已关读？ -> 关dst写 -> dst已双向关且src.wbuff空？ -> 删dst.info"
+          @roles.delete( dst )
+          @dst_infos.delete( dst )
+        end
+      end
+
+      @writes.delete( dst )
+    end
+
+    ##
+    # write tun
+    #
+    def write_tun( tun )
+      # 处理关闭
+      if @tun_info[ :is_closing ] then
+        close_tun( tun )
+        return
+      end
+
+      now = Time.new
+
+      # 发ctlmsg
+      while @tun_info[ :ctlmsgs ].any? do
+        data, to_addr = @tun_info[ :ctlmsgs ].first
+        sent = send_data( data, to_addr )
+
+        if sent == :fatal then
+          close_tun( tun )
+          return
+        elsif sent == :wait then
+          return
+        else
+          @tun_info[ :ctlmsgs ].shift
+        end
+      end
+
+      # 收全流量的src们
+      @tun_info[ :completes ].each do | src, complete_pack_id |
+        src_info = @src_infos[ src ]
+
+        if src_info then
+          src_info[ :wafters ].delete_if{ | pack_id, _ | pack_id <= complete_pack_id }
+          wafters = src_info[ :wafters ].select{ | _, v | now - v[ 1 ] >= CHECK_STATUS_INTERVAL }
+
+          if wafters.any? then
+            # puts "debug1 resend newer #{ wafters.size }"
+
+            wafters.each do | pack_id, v |
+              sent = send_data( v[ 0 ] )
+
+              if sent == :fatal then
+                close_tun( tun )
+                return
+              elsif sent == :wait then
+                # puts "debug1 wait resend newer at #{ pack_id }"
+                @tun_info[ :completes ].delete( src )
+                return
+              end
+            end
+          end
+
+          @tun_info[ :completes ].delete( src )
+        end
+      end
+
+      resend_singles = @tun_info[ :resend_singles ]
+      resend_ranges = @tun_info[ :resend_ranges ]
+      send_ready_after_resend = false
+
+      # 重传single
+      if resend_singles.any? then
+        send_ready_after_resend = true
+
+        resend_singles.each do | src, miss_pack_ids |
+          src_info = @src_infos[ src ]
+
+          if src_info then
+            src_info[ :wafters ].select{ | pack_id, _ | miss_pack_ids.include?( pack_id ) }.each do | pack_id, v |
+              sent = send_data( v[ 0 ] )
+
+              if sent == :fatal then
+                close_tun( tun )
+                return
+              elsif sent == :wait then
+                # puts "debug1 wait resend single at #{ pack_id }"
+                resend_singles.delete( src )
+                return
+              end
+            end
+          end
+
+          resend_singles.delete( src )
+        end
+      end
+
+      # 重传range
+      if resend_ranges.any? then
+        send_ready_after_resend = true
+
+        resend_ranges.each do | src, ranges |
+          src_info = @src_infos[ src ]
+
+          if src_info then
+            idx = 0
+
+            while idx < ranges.size do
+              src_info[ :wafters ].select{ | pack_id, _ | ( pack_id >= ranges[ idx ] ) && ( pack_id <= ranges[ idx + 1 ] ) }.each do | pack_id, v |
+                sent = send_data( v[ 0 ] )
+
+                if sent == :fatal then
+                  close_tun( tun )
+                  return
+                elsif sent == :wait then
+                  # puts "debug1 wait resend range at #{ pack_id }"
+                  resend_ranges.delete( src )
+                  return
+                end
+              end
+
+              idx += 2
+            end
+
+          end
+
+          resend_ranges.delete( src )
+        end
+      end
+
+      # 发resend ready
+      if send_ready_after_resend then
+        data = [ 0, RESEND_READY ].pack( 'Q>C' )
+        sent = send_data( data )
+
+        if sent == :fatal then
+          close_tun( tun )
+          return
+        end
+      end
+
+      # 处理event srcs
+      if @tun_info[ :event_srcs ].any? then
+        @tun_info[ :event_srcs ].each do | src |
+          src_info = @src_infos[ src ]
+          src_id = src_info[ :id ]
+          rbuff = src_info[ :rbuff ]
+
+          unless rbuff.empty? then
+            written = 0
+            idx = 0
+
+            while idx < rbuff.bytesize do
+              chunk = rbuff[ idx, PACK_SIZE ]
+              chunk_size = chunk.bytesize
+              pack_id = src_info[ :biggest_pack_id ] + 1
+
+              if pack_id <= CONFUSE_UNTIL then
+                # puts "debug3 encode chunk #{ pack_id } #{ chunk_size }\n#{ chunk.inspect }\n\n"
+                chunk = @custom.encode( chunk )
+              end
+
+              data = [ [ pack_id, src_id ].pack( 'Q>Q>' ), chunk ].join
+              sent = send_data( data )
+
+              if sent == :fatal then
+                close_tun( tun )
+                return
+              elsif sent == :wait then
+                # puts "debug1 event src wait at #{ pack_id }"
+                rbuff = rbuff[ written..-1 ]
+                src_info[ :rbuff ] = rbuff
+                return
+              end
+
+              src_info[ :wafters ][ pack_id ] = [ data, now ]
+              src_info[ :biggest_pack_id ] = pack_id
+              src_info[ :last_sent_at ] = now
+              written += chunk_size
+              idx += PACK_SIZE
+            end
+
+            rbuff = rbuff[ written..-1 ]
+            src_info[ :rbuff ] = rbuff
+
+            # 写后超过上限，暂停读src
+            if src_info[ :wafters ].size >= WAFTERS_LIMIT then
+              puts "p#{ Process.pid } #{ Time.new } pause src #{ src_id } #{ src_info[ :destination_domain ] } #{ src_info[ :biggest_pack_id ] }"
+              @reads.delete( src )
+              src_info[ :paused ] = true
+            end
+          end
+
+          if rbuff.empty? then
+            if src_info[ :closed_read ] then
+              # puts "debug1 写tun -> 转光src.rbuff -> src已关读？ -> 发fin1"
+              add_ctlmsg_fin1( src_info )
+            end
+
+            @tun_info[ :event_srcs ].delete( src )
+          end
+        end
+      end
+
+      if @tun_info[ :event_srcs ].empty? then
+        @writes.delete( tun )
       end
     end
 

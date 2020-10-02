@@ -200,7 +200,7 @@ module Girl
     end
 
     def write_udpd( udpd )
-      while @udpd_wbuffs.any?
+      while @udpd_wbuffs.any? do
         to_addr, data = @udpd_wbuffs.first
 
         return unless send_data( udpd, data, to_addr )
@@ -219,7 +219,7 @@ module Girl
         return
       end
 
-      while tund_info[ :wbuffs ].any?
+      while tund_info[ :wbuffs ].any? do
         to_addr, data = tund_info[ :wbuffs ].first
 
         return unless send_data( tund, data, to_addr )

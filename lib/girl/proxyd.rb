@@ -41,13 +41,15 @@ module Girl
       names = %w[
         PACK_SIZE
         READ_SIZE
-        WMEMS_LIMIT
+        WAFTERS_LIMIT
         RESUME_BELOW
         SEND_HELLO_COUNT
         EXPIRE_AFTER
         CHECK_EXPIRE_INTERVAL
         CHECK_STATUS_INTERVAL
-        MULTI_PIECE_SIZE
+        SEND_MISS_AFTER
+        MISS_SINGLE_LIMIT
+        MISS_RANGE_LIMIT
         CONFUSE_UNTIL
         RESOLV_CACHE_EXPIRE
       ]
