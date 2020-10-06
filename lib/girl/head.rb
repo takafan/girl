@@ -6,8 +6,7 @@ module Girl
   SEND_HELLO_COUNT      = 10              # hello最多发几次
   EXPIRE_AFTER          = 300             # 多久没有新流量，过期
   CHECK_EXPIRE_INTERVAL = 30              # 检查过期间隔
-  CHECK_STATUS_INTERVAL = 0.5             # 检查状态间隔
-  SEND_MISS_AFTER       = 1               # 多久没来流量，发miss
+  CHECK_STATUS_INTERVAL = 1               # 检查状态间隔
   MISS_SINGLE_LIMIT     = 160             # 最多几个miss打一个包
   MISS_RANGE_LIMIT      = 80              # 最多几段miss区间打一个包
   CONFUSE_UNTIL         = 5               # 混淆前几个包
@@ -28,8 +27,9 @@ module Girl
   IP_CHANGED            = 14
   MULTI_SINGLE_MISS     = 15
   MULTI_RANGE_MISS      = 16
-  CONTINUE_RECV         = 17
-  RESEND_READY          = 18
+  CONTINUE              = 17
+  IS_RESEND_READY       = 18
+  RESEND_READY          = 19
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
   RESERVED_ROUTE = <<EOF
@@ -41,4 +41,18 @@ module Girl
 192.168.0.0/16
 255.255.255.255/32
 EOF
+  CONSTS = %w[
+    PACK_SIZE
+    READ_SIZE
+    WAFTERS_LIMIT
+    RESUME_BELOW
+    SEND_HELLO_COUNT
+    EXPIRE_AFTER
+    CHECK_EXPIRE_INTERVAL
+    CHECK_STATUS_INTERVAL
+    MISS_SINGLE_LIMIT
+    MISS_RANGE_LIMIT
+    CONFUSE_UNTIL
+    RESOLV_CACHE_EXPIRE
+  ]
 end

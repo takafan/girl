@@ -12,12 +12,12 @@ require 'socket'
 
 ## 重传逻辑
 
-1. 每隔一秒检查：距上一次发resend ready超过一秒，三个重传队列为空，存在有写后的src/dst，发resend ready
+1. 每隔一秒检查：距上一次发往对面超过一秒，存在有写后的src，且三个重传队列为空，发resend ready
 2. 收到resend ready，遍历src/dst，发2miss or continue（存在跳号包发multi single miss和multi range miss，不存在发continue）
 3. 收到multi single miss，添加至singles队列
 4. 收到multi range miss，添加至ranges队列
-5. 收到continue，删写后，把剩余创建时间超过一秒的写后添加至newers队列
-6. 依次重传newers队列，singles队列，ranges队列，传光后，发resend ready
+5. 收到continue，删写后，如果距上一次写往对面超过一秒，把剩余的写后添加至newers队列
+6. 依次重传newers，singles，ranges，发resend ready
 
 ## 包结构
 
@@ -47,7 +47,8 @@ Q>: 0 ctlmsg -> C: 2 heartbeat         -> C: random char
                   15 multi single miss -> Q>/n: src/dst id -> Q>: miss pack id -> Q>*: 至多160个 miss pack id
                   16 multi range miss  -> Q>/n: src/dst id -> Q>: begin miss pack id -> Q>: end miss pack id -> Q>*: 至多80个miss段
                   17 continue          -> Q>/n: src/dst id -> Q>: continue recv pack id
-                  18 resend ready
+                  18 is resend ready
+                  19 resend ready
 
 Q>: 1+ pack_id -> Q>/n: src/dst id -> traffic
 
@@ -175,25 +176,9 @@ module Girl
       puts "im #{ im }"
       puts "worker count #{ worker_count }"
 
-      names = %w[
-        PACK_SIZE
-        READ_SIZE
-        WAFTERS_LIMIT
-        RESUME_BELOW
-        SEND_HELLO_COUNT
-        EXPIRE_AFTER
-        CHECK_EXPIRE_INTERVAL
-        CHECK_STATUS_INTERVAL
-        SEND_MISS_AFTER
-        MISS_SINGLE_LIMIT
-        MISS_RANGE_LIMIT
-        CONFUSE_UNTIL
-        RESOLV_CACHE_EXPIRE
-      ]
+      len = CONSTS.map{ | name | name.size }.max
 
-      len = names.map{ | name | name.size }.max
-
-      names.each do | name |
+      CONSTS.each do | name |
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
 

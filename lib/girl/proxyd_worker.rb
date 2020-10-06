@@ -84,6 +84,72 @@ module Girl
     private
 
     ##
+    # send miss or continue
+    #
+    def send_miss_or_continue( tund )
+      now = Time.new
+      tund_info = @tund_infos[ tund ]
+
+      tund_info[ :dsts ].each do | _, dst |
+        dst_info = @dst_infos[ dst ]
+
+        if dst_info then
+          continue_recv_pack_id = dst_info[ :continue_recv_pack_id ]
+
+          if dst_info[ :pieces ].any? then
+            # 有跳号包，发miss（multi single miss和multi range miss）。
+            singles = []
+            ranges = []
+            begin_miss_pack_id = continue_recv_pack_id + 1
+
+            dst_info[ :pieces ].keys.sort.each do | pack_id |
+              if begin_miss_pack_id < pack_id then
+                end_miss_pack_id = pack_id - 1
+
+                if begin_miss_pack_id == end_miss_pack_id then
+                  singles << begin_miss_pack_id
+                else
+                  ranges << [ begin_miss_pack_id, end_miss_pack_id ]
+                end
+              end
+
+              begin_miss_pack_id = pack_id + 1
+            end
+
+            if singles.any? then
+              puts "p#{ Process.pid } #{ now } single miss #{ singles.size }"
+              idx = 0
+
+              while idx < singles.size do
+                data = [ 0, MULTI_SINGLE_MISS, dst_info[ :src_id ], *( singles[ idx, MISS_SINGLE_LIMIT ] ) ].pack( 'Q>CnQ>*' )
+                add_ctlmsg( tund, data )
+                idx += MISS_SINGLE_LIMIT
+              end
+            end
+
+            if ranges.any? then
+              puts "p#{ Process.pid } #{ now } range miss #{ ranges.size }"
+              idx = 0
+
+              while idx < ranges.size do
+                data = [ 0, MULTI_RANGE_MISS, dst_info[ :src_id ], *( ranges[ idx, MISS_RANGE_LIMIT ].flatten ) ].pack( 'Q>CnQ>*' )
+                add_ctlmsg( tund, data )
+                idx += MISS_RANGE_LIMIT
+              end
+            end
+          else
+            # 没跳号包，距上一次收到新流量超过1秒且不超过5秒，发continue。
+            if dst_info[ :last_recv_at ] && ( now - dst_info[ :last_recv_at ] >= 1 ) && ( now - dst_info[ :last_recv_at ] < 5 ) then
+              # puts "debug1 add ctlmsg continue #{ continue_recv_pack_id }"
+              data = [ 0, CONTINUE, dst_info[ :src_id ], continue_recv_pack_id ].pack( 'Q>CQ>Q>' )
+              add_ctlmsg( tund, data )
+            end
+          end
+        end
+      end
+    end
+
+    ##
     # loop check expire
     #
     def loop_check_expire
@@ -141,37 +207,25 @@ module Girl
           sleep CHECK_STATUS_INTERVAL
 
           @mutex.synchronize do
-            now = Time.new
-            trigger = false
-
             @tund_infos.each do | tund, tund_info |
-              if tund_info[ :dsts ].any? then
-                tund_info[ :dsts ].each do | _, dst |
-                  dst_info = @dst_infos[ dst ]
+              data = [ 0, IS_RESEND_READY ].pack( 'Q>C' )
+              add_ctlmsg( tund, data )
 
-                  if dst_info then
-                    # 超过一秒没来流量，发2miss（multi single miss, multi range miss）
-                    if dst_info[ :last_recv_at ] && ( now - dst_info[ :last_recv_at ] >= SEND_MISS_AFTER ) then
-                      # puts "debug1 #{ now } no traffic in over #{ SEND_MISS_AFTER }s"
-                      add_ctlmsg_miss_or_continue( dst_info )
-                      trigger = true
-                    end
+              tund_info[ :dsts ].each do | _, dst |
+                dst_info = @dst_infos[ dst ]
 
-                    # 恢复读
-                    if !dst_info[ :closed_read ] && dst_info[ :paused ] && ( dst_info[ :wafters ].size < RESUME_BELOW ) then
-                      puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
-                      add_read( dst )
-                      dst_info[ :paused ] = false
-                      trigger = true
-                    end
+                if dst_info then
+                  # 恢复读
+                  if !dst_info[ :closed_read ] && dst_info[ :paused ] && ( dst_info[ :wafters ].size < RESUME_BELOW ) then
+                    puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
+                    add_read( dst )
+                    dst_info[ :paused ] = false
                   end
                 end
               end
             end
 
-            if trigger then
-              next_tick
-            end
+            next_tick
           end
         end
       end
@@ -254,10 +308,10 @@ module Girl
         pieces: {},               # 跳号包 src_pack_id => data
         fin1_src_pack_id: nil,    # 已关闭读的近端src的最终包号码
         src_fin2: false,          # 近端src是否已关闭写
-        wafters: {},              # 写后 pack_id => [ data, add_at ]
+        wafters: {},              # 写后 pack_id => data
         created_at: Time.new,     # 创建时间
-        last_recv_at: nil,        # 上一次收到中转（由tund收到）的时间
-        last_sent_at: nil,        # 上一次发出中转（由tund发出）的时间
+        last_recv_at: nil,        # 上一次收到新流量（由tund收到）的时间
+        last_sent_at: nil,        # 上一次发出流量（由tund发出）的时间
         paused: false,            # 是否已暂停
         closed_read: false,       # 是否已关读
         closed_write: false,      # 是否已关写
@@ -304,54 +358,12 @@ module Girl
     end
 
     ##
-    # add ctlmsg miss or continue
+    # add ctlmsg resend ready
     #
-    def add_ctlmsg_miss_or_continue( dst_info )
-      continue_recv_pack_id = dst_info[ :continue_recv_pack_id ]
-
-      if dst_info[ :pieces ].any? then
-        singles = []
-        ranges = []
-        begin_miss_pack_id = continue_recv_pack_id + 1
-
-        dst_info[ :pieces ].keys.sort.each do | pack_id |
-          if begin_miss_pack_id < pack_id then
-            end_miss_pack_id = pack_id - 1
-
-            if begin_miss_pack_id == end_miss_pack_id then
-              singles << begin_miss_pack_id
-
-              if singles.size >= MISS_SINGLE_LIMIT then
-                puts "p#{ Process.pid } #{ Time.new } break add miss single at #{ pack_id }"
-                break
-              end
-            else
-              ranges << [ begin_miss_pack_id, end_miss_pack_id ]
-
-              if ranges.size >= MISS_RANGE_LIMIT then
-                puts "p#{ Process.pid } #{ Time.new } break add miss range at #{ pack_id }"
-                break
-              end
-            end
-          end
-
-          begin_miss_pack_id = pack_id + 1
-        end
-
-        # puts "debug1 add ctlmsg multi single miss #{ singles.size }"
-        data = [ 0, MULTI_SINGLE_MISS, dst_info[ :src_id ], *singles ].pack( 'Q>CQ>Q>*' )
-        add_ctlmsg( dst_info[ :tund ], data )
-
-        if ranges.any? then
-          # puts "debug1 add ctlmsg multi range miss #{ ranges.size }"
-          data = [ 0, MULTI_RANGE_MISS, dst_info[ :src_id ], *( ranges.flatten ) ].pack( 'Q>CQ>Q>*' )
-          add_ctlmsg( dst_info[ :tund ], data )
-        end
-      else
-        # puts "debug1 add ctlmsg continue recv #{ continue_recv_pack_id }"
-        data = [ 0, CONTINUE_RECV, dst_info[ :src_id ], continue_recv_pack_id ].pack( 'Q>CQ>Q>' )
-        add_ctlmsg( dst_info[ :tund ], data )
-      end
+    def add_ctlmsg_resend_ready( tund )
+      tund_info = @tund_infos[ tund ]
+      data = [ 0, RESEND_READY ].pack( 'Q>C' )
+      add_ctlmsg( tund, data )
     end
 
     ##
@@ -460,8 +472,11 @@ module Girl
 
         unless tund.closed? then
           tund_info = @tund_infos[ tund ]
-          tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
-          tund_info[ :dsts ].delete( dst_info[ :id ] )
+
+          if tund_info then
+            tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
+            tund_info[ :dsts ].delete( dst_info[ :id ] )
+          end
         end
       end
     end
@@ -472,12 +487,13 @@ module Girl
     def close_dst( dst )
       # puts "debug1 close dst"
       close_sock( dst )
-      dst_info = @dst_infos.delete( dst )
+      dst_info = @dst_infos[ dst ]
 
-      unless dst_info[ :tund ].closed?
+      unless dst_info[ :tund ].closed? then
         # puts "debug1 主动关dst -> 发fin1和fin2"
         add_ctlmsg_fin1( dst_info )
         add_ctlmsg_fin2( dst_info )
+        del_dst_ext( dst )
       end
     end
 
@@ -546,9 +562,9 @@ module Girl
       @tund_infos[ tund ] = {
         port: port,           # 端口
         ctlmsgs: [],          # [ ctlmsg, to_addr ]
-        completes: {},        # 收全流量的dst们 dst => complete_pack_id
-        resend_singles: {},   # 单个重传队列 dst => miss_pack_ids
-        resend_ranges: {},    # 区间重传队列 dst => miss_pack_ranges
+        resend_newers: {},    # 尾巴流量重传队列 dst_id => newer_pack_ids
+        resend_singles: {},   # 单个重传队列 dst_id => single_miss_pack_ids
+        resend_ranges: {},    # 区间重传队列 dst_id => range_miss_pack_ids
         event_dsts: [],       # rbuff不为空，或者准备关闭的dst
         tun_addr: from_addr,  # tun地址
         dsts: {},             # dst_id => dst
@@ -646,49 +662,74 @@ module Girl
           domain_port = @custom.decode( data )
           # puts "debug1 a new source #{ src_id } #{ domain_port }"
           resolve_domain( tund, src_id, domain_port )
-        when RESEND_READY then
-          return if tund_info[ :dsts ].empty?
-
-          # puts "debug1 #{ Time.new } got resend ready"
-
-          tund_info[ :dsts ].each do | _, dst |
-            dst_info = @dst_infos[ dst ]
-
-            if dst_info then
-              add_ctlmsg_miss_or_continue( dst_info )
-            end
+        when IS_RESEND_READY then
+          if tund_info[ :resend_newers ].empty? && tund_info[ :resend_singles ].empty? && tund_info[ :resend_ranges ].empty? then
+            data2 = [ 0, RESEND_READY ].pack( 'Q>C' )
+            add_ctlmsg( tund, data2 )
           end
-        when CONTINUE_RECV then
-          dst_id, complete_pack_id = data[ 9, 10 ].unpack( 'nQ>' )
-
-          dst = tund_info[ :dsts ][ dst_id ]
-          return unless dst
-
-          # puts "debug1 got continue recv #{ complete_pack_id }"
-          tund_info[ :completes ][ dst ] = complete_pack_id
-          add_write( tund )
+        when RESEND_READY then
+          send_miss_or_continue( tund )
         when MULTI_SINGLE_MISS then
           dst_id, *miss_pack_ids = data[ 9..-1 ].unpack( 'nQ>*' )
 
-          dst = tund_info[ :dsts ][ dst_id ]
-          return unless dst
+          return if miss_pack_ids.empty?
 
           # puts "debug1 got multi single miss #{ miss_pack_ids.size }"
-          tund_info[ :resend_singles ][ dst ] = miss_pack_ids
+
+          if tund_info[ :resend_singles ].include?( dst_id ) then
+            tund_info[ :resend_singles ][ dst_id ] = ( tund_info[ :resend_singles ][ dst_id ] + miss_pack_ids ).uniq
+          else
+            tund_info[ :resend_singles ][ dst_id ] = miss_pack_ids
+          end
+
           add_write( tund )
         when MULTI_RANGE_MISS then
           dst_id, *ranges = data[ 9..-1 ].unpack( 'nQ>*' )
 
+          return if ranges.empty? || ranges.size % 2 != 0
+
           dst = tund_info[ :dsts ][ dst_id ]
           return unless dst
 
-          return if ranges.empty? || ranges.size % 2 != 0
+          # puts "debug1 got multi range miss #{ dst_id } #{ ranges.size }"
 
-          # puts "debug1 got multi range miss #{ ranges.size }"
-          tund_info[ :resend_ranges ][ dst ] = ranges
-          add_write( tund )
+          dst_info = @dst_infos[ dst ]
+          miss_pack_ids = []
+          idx = 0
+
+          while idx < ranges.size do
+            miss_pack_ids += dst_info[ :wafters ].select{ | pack_id, _ | ( pack_id >= ranges[ idx ] ) && ( pack_id <= ranges[ idx + 1 ] ) }.keys
+            idx += 2
+          end
+
+          if miss_pack_ids.any? then
+            if tund_info[ :resend_ranges ].include?( dst_id ) then
+              tund_info[ :resend_ranges ][ dst_id ] = ( tund_info[ :resend_ranges ][ dst_id ] + miss_pack_ids ).uniq
+            else
+              tund_info[ :resend_ranges ][ dst_id ] = miss_pack_ids
+            end
+
+            add_write( tund )
+          end
+        when CONTINUE then
+          dst_id, complete_pack_id = data[ 9, 10 ].unpack( 'nQ>' )
+
+          # puts "debug1 got continue #{ dst_id } #{ complete_pack_id }"
+
+          dst = tund_info[ :dsts ][ dst_id ]
+          return unless dst
+
+          dst_info = @dst_infos[ dst ]
+          dst_info[ :wafters ].delete_if{ | pack_id, _ | pack_id <= complete_pack_id }
+
+          if dst_info[ :wafters ].any? && !tund_info[ :resend_newers ].include?( dst_id ) then
+            tund_info[ :resend_newers ][ dst_id ] = dst_info[ :wafters ].keys
+            add_write( tund )
+          end
         when FIN1 then
           src_id, fin1_src_pack_id = data[ 9, 16 ].unpack( 'Q>Q>' )
+
+          # puts "debug1 got fin1 #{ src_id } #{ fin1_src_pack_id }"
 
           dst_id = tund_info[ :dst_ids ][ src_id ]
           return unless dst_id
@@ -700,9 +741,9 @@ module Girl
           # 对面可能同时读到和写到reset，导致发出两条fin1
           return if dst_info.nil? || dst_info[ :fin1_src_pack_id ]
 
-          # puts "debug1 got fin1 #{ src_id } fin1 src pack #{ fin1_src_pack_id } continue recv dst_info[ :continue_recv_pack_id ] "
-
           dst_info[ :fin1_src_pack_id ] = fin1_src_pack_id
+
+          # puts "debug1 continue recv #{ dst_info[ :continue_recv_pack_id ] } dst.wbuff.empty? #{ dst_info[ :wbuff ].empty? }"
 
           if ( dst_info[ :continue_recv_pack_id ] == fin1_src_pack_id ) && dst_info[ :wbuff ].empty? then
             dst.close_write
@@ -721,6 +762,8 @@ module Girl
         when FIN2 then
           src_id = data[ 9, 8 ].unpack( 'Q>' ).first
 
+          # puts "debug1 got fin2 #{ src_id }"
+
           dst_id = tund_info[ :dst_ids ][ src_id ]
           return unless dst_id
 
@@ -729,8 +772,6 @@ module Girl
 
           dst_info = @dst_infos[ dst ]
           return if dst_info.nil? || dst_info[ :src_fin2 ]
-
-          # puts "debug1 got fin2 #{ src_id }"
 
           dst_info[ :src_fin2 ] = true
 
@@ -842,7 +883,7 @@ module Girl
         dst.close_write
         dst_info[ :closed_write ] = true
 
-        # puts "debug1 add ctlmsg fin2"
+        # puts "debug1 after write dst, close dst write and add ctlmsg fin2"
         add_ctlmsg_fin2( dst_info )
 
         if dst_info[ :src_fin2 ] then
@@ -883,179 +924,176 @@ module Girl
           close_tund( tund )
           return
         elsif sent == :wait then
+          # puts "debug1 #{ Time.new } wait send ctlmsg left #{ tund_info[ :ctlmsgs ].size }"
           return
-        else
-          tund_info[ :ctlmsgs ].shift
         end
+
+        tund_info[ :ctlmsgs ].shift
       end
 
-      # 收全流量的dst们
-      tund_info[ :completes ].each do | dst, complete_pack_id |
-        dst_info = @dst_infos[ dst ]
-
-        if dst_info then
-          dst_info[ :wafters ].delete_if{ | pack_id, _ | pack_id <= complete_pack_id }
-          wafters = dst_info[ :wafters ].select{ | _, v | now - v[ 1 ] >= CHECK_STATUS_INTERVAL }
-
-          if wafters.any? then
-            # puts "debug1 resend newer #{ wafters.size }"
-
-            wafters.each do | pack_id, v |
-              sent = send_data( tund, v[ 0 ], tund_info[ :tun_addr ] )
-
-              if sent == :fatal then
-                close_tund( tund )
-                return
-              elsif sent == :wait then
-                # puts "debug1 wait resend newer at #{ pack_id }"
-                tund_info[ :completes ].delete( dst )
-                return
-              end
-            end
-          end
-
-          tund_info[ :completes ].delete( dst )
-        end
-      end
-
+      resend_newers = tund_info[ :resend_newers ]
       resend_singles = tund_info[ :resend_singles ]
       resend_ranges = tund_info[ :resend_ranges ]
-      send_ready_after_resend = false
 
-      # 重传single
-      if resend_singles.any? then
-        send_ready_after_resend = true
+      resend_newers.each do | dst_id, newer_pack_ids |
+        dst = tund_info[ :dsts ][ dst_id ]
 
-        resend_singles.each do | dst, miss_pack_ids |
+        if dst then
           dst_info = @dst_infos[ dst ]
 
-          if dst_info then
-            dst_info[ :wafters ].select{ | pack_id, _ | miss_pack_ids.include?( pack_id ) }.each do | pack_id, v |
-              sent = send_data( tund, v[ 0 ], tund_info[ :tun_addr ] )
+          while newer_pack_ids.any? do
+            pack_id = newer_pack_ids.first
+            data = dst_info[ :wafters ][ pack_id ]
 
-              if sent == :fatal then
-                close_tund( tund )
-                return
-              elsif sent == :wait then
-                # puts "debug1 wait resend single at #{ pack_id }"
-                resend_singles.delete( dst )
-                return
-              end
-            end
-          end
-
-          resend_singles.delete( dst )
-        end
-      end
-
-      # 重传range
-      if resend_ranges.any? then
-        send_ready_after_resend = true
-
-        resend_ranges.each do | dst, ranges |
-          dst_info = @dst_infos[ dst ]
-
-          if dst_info then
-            idx = 0
-
-            while idx < ranges.size do
-              dst_info[ :wafters ].select{ | pack_id, _ | ( pack_id >= ranges[ idx ] ) && ( pack_id <= ranges[ idx + 1 ] ) }.each do | pack_id, v |
-                sent = send_data( tund, v[ 0 ], tund_info[ :tun_addr ] )
-
-                if sent == :fatal then
-                  close_tund( tund )
-                  return
-                elsif sent == :wait then
-                  # puts "debug1 wait resend range at #{ pack_id }"
-                  resend_ranges.delete( dst )
-                  return
-                end
-              end
-
-              idx += 2
-            end
-
-          end
-
-          resend_ranges.delete( dst )
-        end
-      end
-
-      # 发resend ready
-      if send_ready_after_resend then
-        data = [ 0, RESEND_READY ].pack( 'Q>C' )
-        sent = send_data( tund, data, tund_info[ :tun_addr ] )
-
-        if sent == :fatal then
-          close_tund( tund )
-          return
-        end
-      end
-
-      # 处理event dsts
-      if tund_info[ :event_dsts ].any? then
-        tund_info[ :event_dsts ].each do | dst |
-          dst_info = @dst_infos[ dst ]
-          dst_id = dst_info[ :id ]
-          rbuff = dst_info[ :rbuff ]
-
-          unless rbuff.empty? then
-            written = 0
-            idx = 0
-
-            while idx < rbuff.bytesize do
-              chunk = rbuff[ idx, PACK_SIZE ]
-              chunk_size = chunk.bytesize
-              pack_id = dst_info[ :biggest_pack_id ] + 1
-
-              if pack_id <= CONFUSE_UNTIL then
-                # puts "debug3 encode chunk #{ pack_id } #{ chunk_size }\n#{ chunk.inspect }\n\n"
-                chunk = @custom.encode( chunk )
-              end
-
-              data = [ [ pack_id, dst_id ].pack( 'Q>n' ), chunk ].join
+            if data then
               sent = send_data( tund, data, tund_info[ :tun_addr ] )
 
               if sent == :fatal then
                 close_tund( tund )
                 return
               elsif sent == :wait then
-                # puts "debug1 event dst wait at #{ pack_id }"
-                rbuff = rbuff[ written..-1 ]
-                dst_info[ :rbuff ] = rbuff
+                # puts "debug1 #{ Time.new } wait resend newer at #{ pack_id } left #{ newer_pack_ids.size }"
+                dst_info[ :last_sent_at ] = now
                 return
               end
-
-              dst_info[ :wafters ][ pack_id ] = [ data, now ]
-              dst_info[ :biggest_pack_id ] = pack_id
-              dst_info[ :last_sent_at ] = now
-              written += chunk_size
-              idx += PACK_SIZE
             end
 
-            rbuff = rbuff[ written..-1 ]
-            dst_info[ :rbuff ] = rbuff
-
-            # 写后超过上限，暂停读src
-            if dst_info[ :wafters ].size >= WAFTERS_LIMIT then
-              puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_id } #{ dst_info[ :domain_port ] } #{ dst_info[ :biggest_pack_id ] }"
-              @reads.delete( dst )
-              dst_info[ :paused ] = true
-            end
-          end
-
-          if rbuff.empty? then
-            if dst_info[ :closed_read ] then
-              # puts "debug1 写tund -> 转光dst.rbuff -> dst已关读？ -> 发fin1"
-              add_ctlmsg_fin1( dst_info )
-            end
-
-            tund_info[ :event_dsts ].delete( dst )
+            newer_pack_ids.shift
           end
         end
+
+        resend_newers.delete( dst_id )
       end
 
-      if tund_info[ :event_dsts ].empty? then
+      resend_singles.each do | dst_id, miss_pack_ids |
+        dst = tund_info[ :dsts ][ dst_id ]
+
+        if dst then
+          dst_info = @dst_infos[ dst ]
+
+          while miss_pack_ids.any? do
+            pack_id = miss_pack_ids.first
+            data = dst_info[ :wafters ][ pack_id ]
+
+            if data then
+              sent = send_data( tund, data, tund_info[ :tun_addr ] )
+
+              if sent == :fatal then
+                close_tund( tund )
+                return
+              elsif sent == :wait then
+                # puts "debug1 #{ Time.new } wait resend single at #{ pack_id } left #{ miss_pack_ids.size }"
+                dst_info[ :last_sent_at ] = now
+                return
+              end
+            end
+
+            miss_pack_ids.shift
+          end
+        end
+
+        resend_singles.delete( dst_id )
+      end
+
+      resend_ranges.each do | dst_id, miss_pack_ids |
+        dst = tund_info[ :dsts ][ dst_id ]
+
+        if dst then
+          dst_info = @dst_infos[ dst ]
+
+          while miss_pack_ids.any? do
+            pack_id = miss_pack_ids.first
+            data = dst_info[ :wafters ][ pack_id ]
+
+            if data then
+              sent = send_data( tund, data, tund_info[ :tun_addr ] )
+
+              if sent == :fatal then
+                close_tund( tund )
+                return
+              elsif sent == :wait then
+                # puts "debug1 #{ Time.new } wait resend range at #{ pack_id } left #{ miss_pack_ids.size }"
+                dst_info[ :last_sent_at ] = now
+                return
+              end
+            end
+
+            miss_pack_ids.shift
+          end
+        end
+
+        resend_ranges.delete( dst_id )
+      end
+
+      # 处理event dsts
+      while tund_info[ :event_dsts ].any? do
+        dst = tund_info[ :event_dsts ].first
+        dst_info = @dst_infos[ dst ]
+        dst_id = dst_info[ :id ]
+        rbuff = dst_info[ :rbuff ]
+
+        unless rbuff.empty? then
+          len = rbuff.bytesize
+          written = 0
+          idx = 0
+
+          while idx < len do
+            chunk = rbuff[ idx, PACK_SIZE ]
+            chunk_size = chunk.bytesize
+            pack_id = dst_info[ :biggest_pack_id ] + 1
+
+            if pack_id <= CONFUSE_UNTIL then
+              # puts "debug3 encode chunk #{ pack_id } #{ chunk_size }\n#{ chunk.inspect }\n\n"
+              chunk = @custom.encode( chunk )
+            end
+
+            data = [ [ pack_id, dst_id ].pack( 'Q>n' ), chunk ].join
+            sent = send_data( tund, data, tund_info[ :tun_addr ] )
+
+            if sent == :fatal then
+              close_tund( tund )
+              return
+            elsif sent == :wait then
+              # puts "debug1 #{ Time.new } wait relay dst.rbuff at #{ pack_id }"
+              rbuff = rbuff[ written..-1 ]
+              dst_info[ :rbuff ] = rbuff
+              dst_info[ :last_sent_at ] = now
+              return
+            end
+
+            dst_info[ :wafters ][ pack_id ] = data
+            dst_info[ :biggest_pack_id ] = pack_id
+            written += chunk_size
+            idx += PACK_SIZE
+          end
+
+          if written != len then
+            puts "p#{ Process.pid } #{ Time.new } relay dst.rbuff cutted? #{ written }/#{ len }"
+            return
+          end
+
+          dst_info[ :rbuff ].clear
+          dst_info[ :last_sent_at ] = now
+
+          # 写后超过上限，暂停读src
+          if dst_info[ :wafters ].size >= WAFTERS_LIMIT then
+            puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_id } #{ dst_info[ :domain_port ] } #{ dst_info[ :biggest_pack_id ] }"
+            @reads.delete( dst )
+            dst_info[ :paused ] = true
+          end
+        end
+
+        if dst_info[ :closed_read ] then
+          # puts "debug1 写tund -> 转光dst.rbuff -> dst已关读？ -> 发fin1"
+          add_ctlmsg_fin1( dst_info )
+        end
+
+        tund_info[ :event_dsts ].shift
+      end
+
+      tund_info[ :last_sent_at ] = now
+
+      if tund_info[ :ctlmsgs ].empty? && tund_info[ :event_dsts ].empty? then
         @writes.delete( tund )
       end
     end
