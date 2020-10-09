@@ -88,16 +88,18 @@ module Girl
     ##
     # send miss or continue
     #
-    def send_miss_or_continue
+    def send_miss_or_continue( dst_id, biggest_dst_pack_id )
       now = Time.new
+      src_id = @tun_info[ :src_ids ][ dst_id ]
 
-      @tun_info[ :srcs ].each do | _, src |
-        src_info = @src_infos[ src ]
+      if src_id then
+        src = @tun_info[ :srcs ][ src_id ]
 
-        if src_info then
+        if src then
+          src_info = @src_infos[ src ]
           continue_recv_pack_id = src_info[ :continue_recv_pack_id ]
 
-          if src_info[ :pieces ].any? then
+          if src_info[ :continue_recv_pack_id ] < biggest_dst_pack_id then
             # 有跳号包，发miss（single miss和range miss）。
             singles = []
             ranges = []
@@ -110,44 +112,47 @@ module Girl
                 if begin_miss_pack_id == end_miss_pack_id then
                   singles << begin_miss_pack_id
                 else
-                  ranges << [ begin_miss_pack_id, end_miss_pack_id ]
+                  # ranges << [ begin_miss_pack_id, end_miss_pack_id ]
+                  singles += ( begin_miss_pack_id..end_miss_pack_id ).to_a
                 end
               end
 
               begin_miss_pack_id = pack_id + 1
             end
 
+            if begin_miss_pack_id <= biggest_dst_pack_id
+              # ranges << [ begin_miss_pack_id, biggest_dst_pack_id ]
+              singles += ( begin_miss_pack_id..biggest_dst_pack_id ).to_a
+            end
+
             if singles.any? then
               # puts "debug1 #{ now } single miss #{ singles.size } #{ singles[ 0, 10 ].inspect }"
-              idx = 0
+              # idx = 0
+              #
+              # while idx < singles.size do
+              #   data = [ 0, SINGLE_MISS, src_info[ :dst_id ], *( singles[ idx, SINGLE_MISS_LIMIT ] ) ].pack( 'Q>CnQ>*' )
+              #   add_ctlmsg( data )
+              #   idx += SINGLE_MISS_LIMIT
+              # end
 
-              while idx < singles.size do
-                data = [ 0, SINGLE_MISS, src_info[ :dst_id ], *( singles[ idx, SINGLE_MISS_LIMIT ] ) ].pack( 'Q>CnQ>*' )
-                add_ctlmsg( data )
-                idx += SINGLE_MISS_LIMIT
-              end
-            end
-
-            if ranges.any? then
-              # puts "debug1 #{ now } range miss #{ ranges.size } #{ ranges[ 0, 10 ].inspect }"
-              idx = 0
-
-              while idx < ranges.size do
-                data = [ 0, RANGE_MISS, src_info[ :dst_id ], *( ranges[ idx, RANGE_MISS_LIMIT ].flatten ) ].pack( 'Q>CnQ>*' )
-                add_ctlmsg( data )
-                idx += RANGE_MISS_LIMIT
-              end
-            end
-          else
-            # 没跳号包，距上一次收到新流量不超过5秒，发continue。
-            if src_info[ :last_recv_at ] && ( now - src_info[ :last_recv_at ] < 5 ) then
-              # puts "debug1 add ctlmsg continue #{ continue_recv_pack_id }"
-              data = [ 0, CONTINUE, src_info[ :dst_id ], continue_recv_pack_id ].pack( 'Q>CnQ>' )
+              data = [ 0, SINGLE_MISS, src_info[ :dst_id ], *( singles[ 0, SINGLE_MISS_LIMIT ] ) ].pack( 'Q>CnQ>*' )
               add_ctlmsg( data )
             end
+
+            # if ranges.any? then
+            #   # puts "debug1 #{ now } range miss #{ ranges.size } #{ ranges[ 0, 10 ].inspect }"
+            #   idx = 0
+            #
+            #   while idx < ranges.size do
+            #     data = [ 0, RANGE_MISS, src_info[ :dst_id ], *( ranges[ idx, RANGE_MISS_LIMIT ].flatten ) ].pack( 'Q>CnQ>*' )
+            #     add_ctlmsg( data )
+            #     idx += RANGE_MISS_LIMIT
+            #   end
+            # end
           end
         end
       end
+
     end
 
     ##
@@ -207,13 +212,17 @@ module Girl
 
           @mutex.synchronize do
             if @tun && !@tun.closed? && @tun_info[ :tund_addr ] then
-              data = [ 0, IS_RESEND_READY ].pack( 'Q>C' )
-              add_ctlmsg( data )
+              now = Time.new
 
               @tun_info[ :srcs ].each do | _, src |
                 src_info = @src_infos[ src ]
 
-                if src_info then
+                if src_info && src_info[ :dst_id ] then
+                  if src_info[ :last_recv_at ] && ( now - src_info[ :last_recv_at ] < 5 ) then
+                    data = [ 0, IS_RESEND_READY, src_info[ :dst_id ] ].pack( 'Q>Cn' )
+                    add_ctlmsg( data )
+                  end
+
                   # 恢复读
                   if !src_info[ :closed_read ] && src_info[ :paused ] && ( src_info[ :wafters ].size < RESUME_BELOW ) then
                     puts "p#{ Process.pid } #{ Time.new } resume src #{ src_info[ :destination_domain ] }"
@@ -258,7 +267,7 @@ module Girl
               next_tick
             end
 
-            sleep CHECK_STATUS_INTERVAL
+            sleep 1
           end
         end
       end
@@ -397,7 +406,7 @@ module Girl
             next_tick
           end
 
-          sleep CHECK_STATUS_INTERVAL
+          sleep 1
         end
       end
     end
@@ -1048,17 +1057,31 @@ module Girl
           end
         when IS_RESEND_READY then
           if @tun_info[ :resend_newers ].empty? && @tun_info[ :resend_singles ].empty? && @tun_info[ :resend_ranges ].empty? then
-            data2 = [ 0, RESEND_READY ].pack( 'Q>C' )
+            src_id = data[ 9, 8 ].unpack( 'Q>' ).first
+            return unless src_id
+
+            src = @tun_info[ :srcs ][ src_id ]
+            return unless src
+
+            src_info = @src_infos[ src ]
+            data2 = [ 0, RESEND_READY, src_id, src_info[ :biggest_pack_id ] ].pack( 'Q>CQ>Q>' )
             add_ctlmsg( data2 )
           end
         when RESEND_READY then
-          send_miss_or_continue
+          return if from_addr != @tun_info[ :tund_addr ]
+
+          dst_id, biggest_dst_pack_id = data[ 9, 10 ].unpack( 'nQ>' )
+          return if dst_id.nil? || biggest_dst_pack_id.nil?
+
+          send_miss_or_continue( dst_id, biggest_dst_pack_id )
         when SINGLE_MISS then
+          return if from_addr != @tun_info[ :tund_addr ]
+
           src_id, *miss_pack_ids = data[ 9..-1 ].unpack( 'Q>Q>*' )
 
           return if miss_pack_ids.empty?
 
-          # puts "debug1 got single miss #{ miss_pack_ids.size }" if miss_pack_ids.size > 1
+          # puts "debug2 got single miss #{ miss_pack_ids[ 0, 100 ].inspect }"
 
           if @tun_info[ :resend_singles ].include?( src_id ) then
             @tun_info[ :resend_singles ][ src_id ] = ( @tun_info[ :resend_singles ][ src_id ] + miss_pack_ids ).uniq
@@ -1068,9 +1091,11 @@ module Girl
 
           add_write( tun )
         when RANGE_MISS then
+          return if from_addr != @tun_info[ :tund_addr ]
+
           src_id, *ranges = data[ 9..-1 ].unpack( 'Q>Q>*' )
 
-          # puts "debug1 got range miss #{ src_id } #{ ranges.size }" if ranges.size > 2
+          # puts "debug2 got range miss #{ src_id } #{ ranges[ 0, 100 ].inspect }"
 
           return if ranges.empty? || ranges.size % 2 != 0
 
@@ -1398,6 +1423,8 @@ module Girl
                 # puts "debug1 #{ Time.new } wait resend newer at #{ pack_id } left #{ newer_pack_ids.size }"
                 src_info[ :last_sent_at ] = now
                 return
+              else
+                src_info[ :last_sent_at ] = now
               end
             end
 
@@ -1428,6 +1455,8 @@ module Girl
                 # puts "debug1 #{ Time.new } wait resend single at #{ pack_id } left #{ miss_pack_ids.size }"
                 src_info[ :last_sent_at ] = now
                 return
+              else
+                src_info[ :last_sent_at ] = now
               end
             end
 
@@ -1458,6 +1487,8 @@ module Girl
                 # puts "debug1 #{ Time.new } wait resend range at #{ pack_id } left #{ miss_pack_ids.size }"
                 src_info[ :last_sent_at ] = now
                 return
+              else
+                src_info[ :last_sent_at ] = now
               end
             end
 

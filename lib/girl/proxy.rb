@@ -48,8 +48,8 @@ Q>: 0 ctlmsg -> C: 2 heartbeat         -> not use
                   15 single miss       -> Q>/n: src/dst id -> Q>: miss pack id -> Q>*: 至多160个 miss pack id
                   16 range miss        -> Q>/n: src/dst id -> Q>: begin miss pack id -> Q>: end miss pack id -> Q>*: 至多80个miss段
                   17 continue          -> Q>/n: src/dst id -> Q>: continue recv pack id
-                  18 is resend ready
-                  19 resend ready
+                  18 is resend ready   -> Q>/n: src/dst id
+                  19 resend ready      -> Q>/n: src/dst id -> Q>: biggest src/dst pack id
 
 Q>: 1+ pack_id -> Q>/n: src/dst id -> traffic
 

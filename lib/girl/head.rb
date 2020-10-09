@@ -6,7 +6,7 @@ module Girl
   SEND_HELLO_COUNT      = 10                # hello最多发几次
   EXPIRE_AFTER          = 300               # 多久没有新流量，过期
   CHECK_EXPIRE_INTERVAL = 30                # 检查过期间隔
-  CHECK_STATUS_INTERVAL = 1                 # 检查状态间隔
+  CHECK_STATUS_INTERVAL = 0.5               # 检查状态间隔
   SINGLE_MISS_LIMIT     = 160               # 最多几个miss打一个包
   RANGE_MISS_LIMIT      = 80                # 最多几段miss区间打一个包
   CONFUSE_UNTIL         = 5                 # 混淆前几个包
