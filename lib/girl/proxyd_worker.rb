@@ -14,6 +14,9 @@ module Girl
       @tund_infos = {}      # tund => {}
       @tunneling_tunds = {} # tunneling_addr => tund
       @resolv_caches = {}   # domain => [ ip, created_at ]
+      @senders = []
+      @sender_ports = []
+      @curr_sender_idx = 0
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -357,13 +360,23 @@ module Girl
       }
 
       add_read( proxyd, :proxyd )
+
+      SENDERS_COUNT.times do
+        sender = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+        sender.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        sender.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+        @senders << sender
+        @sender_ports << sender.local_address.ip_port
+      end
+
+      puts "p#{ Process.pid } #{ Time.new } senders bind on #{ @sender_ports.inspect }"
     end
 
     ##
     # add proxyd ctlmsg
     #
     def add_proxyd_ctlmsg_tund_port( port, to_addr )
-      data = [ 0, TUND_PORT, port ].pack( 'Q>Cn' )
+      data = [ 0, TUND_PORT, port, *@sender_ports ].pack( 'Q>Cnn*' )
       @proxyd_info[ :ctlmsgs ] << [ data, to_addr ]
       add_write( @proxyd )
     end
@@ -459,7 +472,12 @@ module Girl
     ##
     # send data
     #
-    def send_data( sock, data, to_addr )
+    def send_data( data, to_addr, sock = nil )
+      unless sock then
+        use_sender = true
+        sock = @senders[ @curr_sender_idx ]
+      end
+
       begin
         written = sock.sendmsg_nonblock( data, 0, to_addr )
       rescue IO::WaitWritable, Errno::EINTR
@@ -467,6 +485,14 @@ module Girl
         return :wait
       rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
         return :fatal
+      end
+
+      if use_sender then
+        @curr_sender_idx += 1
+
+        if @curr_sender_idx >= SENDERS_COUNT then
+          @curr_sender_idx = 0
+        end
       end
 
       written
@@ -851,7 +877,7 @@ module Girl
       # 发ctlmsg
       while @proxyd_info[ :ctlmsgs ].any? do
         data, to_addr = @proxyd_info[ :ctlmsgs ].first
-        sent = send_data( proxyd, data, to_addr )
+        sent = send_data( data, to_addr, proxyd )
 
         if sent == :wait then
           return
@@ -927,7 +953,7 @@ module Girl
       if tund_info[ :is_closing ] then
         if tund_info[ :changed_tun_addr ] then
           data = [ 0, IP_CHANGED ].pack( 'Q>C' )
-          send_data( tund, data, tund_info[ :changed_tun_addr ] )
+          send_data( data, tund_info[ :changed_tun_addr ], tund )
         end
 
         close_tund( tund )
@@ -939,7 +965,7 @@ module Girl
       # 发ctlmsg
       while tund_info[ :ctlmsgs ].any? do
         data = tund_info[ :ctlmsgs ].first
-        sent = send_data( tund, data, tund_info[ :tun_addr ] )
+        sent = send_data( data, tund_info[ :tun_addr ], tund )
 
         if sent == :fatal then
           close_tund( tund )
@@ -967,7 +993,7 @@ module Girl
             data = dst_info[ :wafters ][ pack_id ]
 
             if data then
-              sent = send_data( tund, data, tund_info[ :tun_addr ] )
+              sent = send_data( data, tund_info[ :tun_addr ] )
 
               if sent == :fatal then
                 close_tund( tund )
@@ -999,7 +1025,7 @@ module Girl
             data = dst_info[ :wafters ][ pack_id ]
 
             if data then
-              sent = send_data( tund, data, tund_info[ :tun_addr ] )
+              sent = send_data( data, tund_info[ :tun_addr ] )
 
               if sent == :fatal then
                 close_tund( tund )
@@ -1031,7 +1057,7 @@ module Girl
             data = dst_info[ :wafters ][ pack_id ]
 
             if data then
-              sent = send_data( tund, data, tund_info[ :tun_addr ] )
+              sent = send_data( data, tund_info[ :tun_addr ] )
 
               if sent == :fatal then
                 close_tund( tund )
@@ -1075,7 +1101,7 @@ module Girl
             end
 
             data = [ [ pack_id, dst_id ].pack( 'Q>n' ), chunk ].join
-            sent = send_data( tund, data, tund_info[ :tun_addr ] )
+            sent = send_data( data, tund_info[ :tun_addr ] )
 
             if sent == :fatal then
               close_tund( tund )

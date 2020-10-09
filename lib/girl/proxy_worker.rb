@@ -7,6 +7,7 @@ module Girl
     def initialize( proxy_port, proxyd_host, proxyd_port, directs, remotes, im )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
+      @proxyd_ip = Addrinfo.new( @proxyd_addr ).ip_address
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
@@ -368,20 +369,22 @@ module Girl
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       port = tun.local_address.ip_port
       tun_info = {
-        port: port,             # 端口
-        pending_sources: [],    # 还没配上tund，暂存的src
-        ctlmsgs: [],            # [ ctlmsg, to_addr ]
-        resend_newers: {},      # 尾巴流量重传队列 src_id => newer_pack_ids
-        resend_singles: {},     # 单个重传队列 src_id => single_miss_pack_ids
-        resend_ranges: {},      # 区间重传队列 src_id => range_miss_pack_ids
-        event_srcs: [],         # rbuff不为空，或者准备关闭的src
-        tund_addr: nil,         # tund地址
-        srcs: {},               # src_id => src
-        src_ids: {},            # dst_id => src_id
-        created_at: Time.new,   # 创建时间
-        last_recv_at: nil,      # 上一次收到流量的时间
-        last_sent_at: nil,      # 上一次发出流量的时间
-        is_closing: false       # 是否准备关闭
+        port: port,                # 端口
+        pending_sources: [],       # 还没配上tund，暂存的src
+        ctlmsgs: [],               # [ ctlmsg, to_addr ]
+        resend_newers: {},         # 尾巴流量重传队列 src_id => newer_pack_ids
+        resend_singles: {},        # 单个重传队列 src_id => single_miss_pack_ids
+        resend_ranges: {},         # 区间重传队列 src_id => range_miss_pack_ids
+        event_srcs: [],            # rbuff不为空，或者准备关闭的src
+        tund_addr: nil,            # tund地址
+        srcs: {},                  # src_id => src
+        src_ids: {},               # dst_id => src_id
+        created_at: Time.new,      # 创建时间
+        last_recv_at: nil,         # 上一次收到流量的时间
+        last_sent_at: nil,         # 上一次发出流量的时间
+        sender_addrs: nil,         # 远端发送者地址
+        last_ping_senders_at: nil, # 上一次ping发送者的时间
+        is_closing: false          # 是否准备关闭
       }
 
       @tun = tun
@@ -1008,11 +1011,12 @@ module Girl
         when TUND_PORT then
           return if ( from_addr != @proxyd_addr ) || @tun_info[ :tund_addr ]
 
-          tund_port = data[ 9, 2 ].unpack( 'n' ).first
+          tund_port, *sender_ports = data[ 9..-1 ].unpack( 'nn*' )
 
-          puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
+          puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port } #{ sender_ports.inspect }"
           tund_addr = Socket.sockaddr_in( tund_port, @proxyd_host )
           @tun_info[ :tund_addr ] = tund_addr
+          @tun_info[ :sender_addrs ] = sender_ports.map{ | sender_port | Socket.sockaddr_in( sender_port, @proxyd_host ) }
 
           if @tun_info[ :pending_sources ].any? then
             puts "p#{ Process.pid } #{ Time.new } send pending sources"
@@ -1208,7 +1212,7 @@ module Girl
         return
       end
 
-      return if from_addr != @tun_info[ :tund_addr ]
+      return if addrinfo.ip_address != @proxyd_ip
 
       print "#{ pack_id } "
 
@@ -1566,6 +1570,18 @@ module Girl
       end
 
       @tun_info[ :last_sent_at ] = now
+
+      if @tun_info[ :sender_addrs ] then
+        if @tun_info[ :last_ping_senders_at ].nil? || ( now - @tun_info[ :last_ping_senders_at ] >= EXPIRE_AFTER ) then
+          # puts "debug1 ping senders"
+          @tun_info[ :sender_addrs ].each do | sender_addr |
+            data = [ 0, HEARTBEAT, rand( 128 ) ].pack( 'Q>CC' )
+            add_ctlmsg( data, sender_addr )
+          end
+
+          @tun_info[ :last_ping_senders_at ] = now
+        end
+      end
 
       if @tun_info[ :ctlmsgs ].empty? && @tun_info[ :event_srcs ].empty? then
         @writes.delete( tun )

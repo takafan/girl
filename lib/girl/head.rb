@@ -11,6 +11,7 @@ module Girl
   RANGE_MISS_LIMIT      = 80                # 最多几段miss区间打一个包
   CONFUSE_UNTIL         = 5                 # 混淆前几个包
   RESOLV_CACHE_EXPIRE   = 300               # dns查询结果缓存多久过期
+  SENDERS_COUNT         = 50
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3
