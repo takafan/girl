@@ -12,12 +12,13 @@ require 'socket'
 
 ## 重传逻辑
 
-1. 每隔一秒检查：距上一次发往对面超过一秒，存在有写后的src，且三个重传队列为空，发resend ready
-2. 收到resend ready，遍历src/dst，发2miss or continue（存在跳号包发multi single miss和multi range miss，不存在发continue）
-3. 收到multi single miss，添加至singles队列
-4. 收到multi range miss，添加至ranges队列
-5. 收到continue，删写后，如果距上一次写往对面超过一秒，把剩余的写后添加至newers队列
-6. 依次重传newers，singles，ranges，发resend ready
+1. 每隔一秒询问对面是否空闲
+2. 重传队列都为空，返回空闲
+3. 对面空闲，遍历dst/src，有跳号包，发miss。没跳号包，距上一次收到新流量不超过5秒，发continue。
+4. 收到single miss，添加至resend_singles
+5. 收到range miss，添加至resend_ranges
+6. 收到continue，删写后，把剩余的写后添加至resend_newers队列
+7. 依次重传resend_newers，resend_singles，resend_ranges
 
 ## 包结构
 
@@ -31,12 +32,12 @@ Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port
 
 tun-tund:
 
-Q>: 0 ctlmsg -> C: 2 heartbeat         -> C: random char
+Q>: 0 ctlmsg -> C: 2 heartbeat         -> not use
                    3 a new source      -> Q>: src id -> encoded destination address
                    4 paired            -> Q>: src id -> n: dst id
                    5 dest status       -> not use
                    6 source status     -> not use
-                   7 miss              -> Q>/n: src/dst id -> Q>: pack id begin -> Q>: pack id end
+                   7 miss              -> not use
                    8 fin1              -> Q>/n: src/dst id -> Q>: biggest src/dst pack id
                    9 confirm fin1      -> not use
                   10 fin2              -> Q>/n: src/dst id
@@ -44,8 +45,8 @@ Q>: 0 ctlmsg -> C: 2 heartbeat         -> C: random char
                   12 tund fin
                   13 tun fin
                   14 tun ip changed
-                  15 multi single miss -> Q>/n: src/dst id -> Q>: miss pack id -> Q>*: 至多160个 miss pack id
-                  16 multi range miss  -> Q>/n: src/dst id -> Q>: begin miss pack id -> Q>: end miss pack id -> Q>*: 至多80个miss段
+                  15 single miss       -> Q>/n: src/dst id -> Q>: miss pack id -> Q>*: 至多160个 miss pack id
+                  16 range miss        -> Q>/n: src/dst id -> Q>: begin miss pack id -> Q>: end miss pack id -> Q>*: 至多80个miss段
                   17 continue          -> Q>/n: src/dst id -> Q>: continue recv pack id
                   18 is resend ready
                   19 resend ready

@@ -98,7 +98,7 @@ module Girl
           continue_recv_pack_id = src_info[ :continue_recv_pack_id ]
 
           if src_info[ :pieces ].any? then
-            # 有跳号包，发miss（multi single miss和multi range miss）。
+            # 有跳号包，发miss（single miss和range miss）。
             singles = []
             ranges = []
             begin_miss_pack_id = continue_recv_pack_id + 1
@@ -118,34 +118,29 @@ module Girl
             end
 
             if singles.any? then
-              puts "p#{ Process.pid } #{ now } single miss #{ singles.size }"
-              data = [ 0, MULTI_SINGLE_MISS, src_info[ :dst_id ] ].pack( 'Q>Cn' )
-              add_ctlmsg( data )
+              # puts "debug1 #{ now } single miss #{ singles.size } #{ singles[ 0, 10 ].inspect }"
               idx = 0
 
               while idx < singles.size do
-                data = [ 0, MULTI_SINGLE_MISS, src_info[ :dst_id ], *( singles[ idx, MISS_SINGLE_LIMIT ] ) ].pack( 'Q>CnQ>*' )
+                data = [ 0, SINGLE_MISS, src_info[ :dst_id ], *( singles[ idx, SINGLE_MISS_LIMIT ] ) ].pack( 'Q>CnQ>*' )
                 add_ctlmsg( data )
-                idx += MISS_SINGLE_LIMIT
+                idx += SINGLE_MISS_LIMIT
               end
             end
 
             if ranges.any? then
-              puts "p#{ Process.pid } #{ now } range miss #{ ranges.size }"
-              # puts "debug2 #{ ranges[ 0, 10 ].inspect }"
-              data = [ 0, MULTI_RANGE_MISS, src_info[ :dst_id ] ].pack( 'Q>Cn' )
-              add_ctlmsg( data )
+              # puts "debug1 #{ now } range miss #{ ranges.size } #{ ranges[ 0, 10 ].inspect }"
               idx = 0
 
               while idx < ranges.size do
-                data = [ 0, MULTI_RANGE_MISS, src_info[ :dst_id ], *( ranges[ idx, MISS_RANGE_LIMIT ].flatten ) ].pack( 'Q>CnQ>*' )
+                data = [ 0, RANGE_MISS, src_info[ :dst_id ], *( ranges[ idx, RANGE_MISS_LIMIT ].flatten ) ].pack( 'Q>CnQ>*' )
                 add_ctlmsg( data )
-                idx += MISS_RANGE_LIMIT
+                idx += RANGE_MISS_LIMIT
               end
             end
           else
-            # 没跳号包，距上一次收到新流量超过1秒且不超过5秒，发continue。
-            if src_info[ :last_recv_at ] && ( now - src_info[ :last_recv_at ] >= 1 ) && ( now - src_info[ :last_recv_at ] < 5 ) then
+            # 没跳号包，距上一次收到新流量不超过5秒，发continue。
+            if src_info[ :last_recv_at ] && ( now - src_info[ :last_recv_at ] < 5 ) then
               # puts "debug1 add ctlmsg continue #{ continue_recv_pack_id }"
               data = [ 0, CONTINUE, src_info[ :dst_id ], continue_recv_pack_id ].pack( 'Q>CnQ>' )
               add_ctlmsg( data )
@@ -364,20 +359,20 @@ module Girl
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       port = tun.local_address.ip_port
       tun_info = {
-        port: port,           # 端口
-        pending_sources: [],  # 还没配上tund，暂存的src
-        ctlmsgs: [],          # [ ctlmsg, to_addr ]
-        resend_newers: {},    # 尾巴流量重传队列 src_id => newer_pack_ids
-        resend_singles: {},   # 单个重传队列 src_id => single_miss_pack_ids
-        resend_ranges: {},    # 区间重传队列 src_id => range_miss_pack_ids
-        event_srcs: [],       # rbuff不为空，或者准备关闭的src
-        tund_addr: nil,       # tund地址
-        srcs: {},             # src_id => src
-        src_ids: {},          # dst_id => src_id
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量的时间
-        last_sent_at: nil,    # 上一次发出流量的时间
-        is_closing: false     # 是否准备关闭
+        port: port,             # 端口
+        pending_sources: [],    # 还没配上tund，暂存的src
+        ctlmsgs: [],            # [ ctlmsg, to_addr ]
+        resend_newers: {},      # 尾巴流量重传队列 src_id => newer_pack_ids
+        resend_singles: {},     # 单个重传队列 src_id => single_miss_pack_ids
+        resend_ranges: {},      # 区间重传队列 src_id => range_miss_pack_ids
+        event_srcs: [],         # rbuff不为空，或者准备关闭的src
+        tund_addr: nil,         # tund地址
+        srcs: {},               # src_id => src
+        src_ids: {},            # dst_id => src_id
+        created_at: Time.new,   # 创建时间
+        last_recv_at: nil,      # 上一次收到流量的时间
+        last_sent_at: nil,      # 上一次发出流量的时间
+        is_closing: false       # 是否准备关闭
       }
 
       @tun = tun
@@ -1058,12 +1053,12 @@ module Girl
           end
         when RESEND_READY then
           send_miss_or_continue
-        when MULTI_SINGLE_MISS then
+        when SINGLE_MISS then
           src_id, *miss_pack_ids = data[ 9..-1 ].unpack( 'Q>Q>*' )
 
           return if miss_pack_ids.empty?
 
-          # puts "debug1 got multi single miss #{ miss_pack_ids.size }"
+          # puts "debug1 got single miss #{ miss_pack_ids.size }" if miss_pack_ids.size > 1
 
           if @tun_info[ :resend_singles ].include?( src_id ) then
             @tun_info[ :resend_singles ][ src_id ] = ( @tun_info[ :resend_singles ][ src_id ] + miss_pack_ids ).uniq
@@ -1072,10 +1067,10 @@ module Girl
           end
 
           add_write( tun )
-        when MULTI_RANGE_MISS then
+        when RANGE_MISS then
           src_id, *ranges = data[ 9..-1 ].unpack( 'Q>Q>*' )
 
-          # puts "debug1 got multi range miss #{ src_id } #{ ranges.size }"
+          # puts "debug1 got range miss #{ src_id } #{ ranges.size }" if ranges.size > 2
 
           return if ranges.empty? || ranges.size % 2 != 0
 
@@ -1103,7 +1098,7 @@ module Girl
         when CONTINUE then
           src_id, complete_pack_id = data[ 9, 16 ].unpack( 'Q>Q>' )
 
-          # puts "debug1 got continue #{ src_id } #{ complete_pack_id }"
+          # puts "debug2 got continue #{ src_id } #{ complete_pack_id }"
 
           src = @tun_info[ :srcs ][ src_id ]
           return unless src
@@ -1189,6 +1184,8 @@ module Girl
       end
 
       return if from_addr != @tun_info[ :tund_addr ]
+
+      print "#{ pack_id } "
 
       dst_id = data[ 8, 2 ].unpack( 'n' ).first
 

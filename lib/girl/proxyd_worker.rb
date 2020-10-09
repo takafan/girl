@@ -97,7 +97,7 @@ module Girl
           continue_recv_pack_id = dst_info[ :continue_recv_pack_id ]
 
           if dst_info[ :pieces ].any? then
-            # 有跳号包，发miss（multi single miss和multi range miss）。
+            # 有跳号包，发miss（single miss和range miss）。
             singles = []
             ranges = []
             begin_miss_pack_id = continue_recv_pack_id + 1
@@ -117,30 +117,30 @@ module Girl
             end
 
             if singles.any? then
-              puts "p#{ Process.pid } #{ now } single miss #{ singles.size }"
+              # puts "debug2 #{ now } single miss #{ singles.size }"
               idx = 0
 
               while idx < singles.size do
-                data = [ 0, MULTI_SINGLE_MISS, dst_info[ :src_id ], *( singles[ idx, MISS_SINGLE_LIMIT ] ) ].pack( 'Q>CnQ>*' )
+                data = [ 0, SINGLE_MISS, dst_info[ :src_id ], *( singles[ idx, SINGLE_MISS_LIMIT ] ) ].pack( 'Q>CnQ>*' )
                 add_ctlmsg( tund, data )
-                idx += MISS_SINGLE_LIMIT
+                idx += SINGLE_MISS_LIMIT
               end
             end
 
             if ranges.any? then
-              puts "p#{ Process.pid } #{ now } range miss #{ ranges.size }"
+              # puts "debug2 #{ now } range miss #{ ranges.size }"
               idx = 0
 
               while idx < ranges.size do
-                data = [ 0, MULTI_RANGE_MISS, dst_info[ :src_id ], *( ranges[ idx, MISS_RANGE_LIMIT ].flatten ) ].pack( 'Q>CnQ>*' )
+                data = [ 0, RANGE_MISS, dst_info[ :src_id ], *( ranges[ idx, RANGE_MISS_LIMIT ].flatten ) ].pack( 'Q>CnQ>*' )
                 add_ctlmsg( tund, data )
-                idx += MISS_RANGE_LIMIT
+                idx += RANGE_MISS_LIMIT
               end
             end
           else
-            # 没跳号包，距上一次收到新流量超过1秒且不超过5秒，发continue。
-            if dst_info[ :last_recv_at ] && ( now - dst_info[ :last_recv_at ] >= 1 ) && ( now - dst_info[ :last_recv_at ] < 5 ) then
-              # puts "debug1 add ctlmsg continue #{ continue_recv_pack_id }"
+            # 没跳号包，距上一次收到新流量超过2秒且不超过5秒，发continue。
+            if dst_info[ :last_recv_at ] && ( now - dst_info[ :last_recv_at ] < 5 ) then
+              # puts "debug2 add ctlmsg continue #{ continue_recv_pack_id }"
               data = [ 0, CONTINUE, dst_info[ :src_id ], continue_recv_pack_id ].pack( 'Q>CQ>Q>' )
               add_ctlmsg( tund, data )
             end
@@ -325,7 +325,7 @@ module Girl
       tund_info[ :dsts ][ dst_id ] = dst
 
       data = [ 0, PAIRED, src_id, dst_id ].pack( 'Q>CQ>n' )
-      # puts "debug1 add ctlmsg paired #{ data.inspect }"
+      # puts "debug1 add ctlmsg paired #{ src_id } #{ dst_id }"
       add_ctlmsg( tund, data )
 
       true
@@ -560,21 +560,21 @@ module Girl
 
       @tunneling_tunds[ from_addr ] = tund
       @tund_infos[ tund ] = {
-        port: port,           # 端口
-        ctlmsgs: [],          # [ ctlmsg, to_addr ]
-        resend_newers: {},    # 尾巴流量重传队列 dst_id => newer_pack_ids
-        resend_singles: {},   # 单个重传队列 dst_id => single_miss_pack_ids
-        resend_ranges: {},    # 区间重传队列 dst_id => range_miss_pack_ids
-        event_dsts: [],       # rbuff不为空，或者准备关闭的dst
-        tun_addr: from_addr,  # tun地址
-        dsts: {},             # dst_id => dst
-        dst_ids: {},          # src_id => dst_id
-        pause_dsts: [],       # 暂停的dst
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量的时间
-        last_sent_at: nil,    # 上一次发出流量的时间
-        is_closing: false,    # 是否准备关闭
-        changed_tun_addr: nil # 记录到和tun addr不符的来源地址
+        port: port,             # 端口
+        ctlmsgs: [],            # [ ctlmsg, to_addr ]
+        resend_newers: {},      # 尾巴流量重传队列 dst_id => newer_pack_ids
+        resend_singles: {},     # 单个重传队列 dst_id => single_miss_pack_ids
+        resend_ranges: {},      # 区间重传队列 dst_id => range_miss_pack_ids
+        event_dsts: [],         # rbuff不为空，或者准备关闭的dst
+        tun_addr: from_addr,    # tun地址
+        dsts: {},               # dst_id => dst
+        dst_ids: {},            # src_id => dst_id
+        pause_dsts: [],         # 暂停的dst
+        created_at: Time.new,   # 创建时间
+        last_recv_at: nil,      # 上一次收到流量的时间
+        last_sent_at: nil,      # 上一次发出流量的时间
+        is_closing: false,      # 是否准备关闭
+        changed_tun_addr: nil   # 记录到和tun addr不符的来源地址
       }
 
       add_read( tund, :tund )
@@ -669,12 +669,12 @@ module Girl
           end
         when RESEND_READY then
           send_miss_or_continue( tund )
-        when MULTI_SINGLE_MISS then
+        when SINGLE_MISS then
           dst_id, *miss_pack_ids = data[ 9..-1 ].unpack( 'nQ>*' )
 
           return if miss_pack_ids.empty?
 
-          # puts "debug1 got multi single miss #{ miss_pack_ids.size }"
+          # puts "debug1 #{ now } got single miss #{ miss_pack_ids.inspect }"
 
           if tund_info[ :resend_singles ].include?( dst_id ) then
             tund_info[ :resend_singles ][ dst_id ] = ( tund_info[ :resend_singles ][ dst_id ] + miss_pack_ids ).uniq
@@ -683,7 +683,7 @@ module Girl
           end
 
           add_write( tund )
-        when MULTI_RANGE_MISS then
+        when RANGE_MISS then
           dst_id, *ranges = data[ 9..-1 ].unpack( 'nQ>*' )
 
           return if ranges.empty? || ranges.size % 2 != 0
@@ -691,7 +691,7 @@ module Girl
           dst = tund_info[ :dsts ][ dst_id ]
           return unless dst
 
-          # puts "debug1 got multi range miss #{ dst_id } #{ ranges.size }"
+          # puts "debug1 #{ now } got range miss #{ dst_id } #{ ranges.inspect }"
 
           dst_info = @dst_infos[ dst ]
           miss_pack_ids = []
@@ -714,7 +714,7 @@ module Girl
         when CONTINUE then
           dst_id, complete_pack_id = data[ 9, 10 ].unpack( 'nQ>' )
 
-          # puts "debug1 got continue #{ dst_id } #{ complete_pack_id }"
+          # puts "debug1 #{ now } got continue #{ dst_id } #{ complete_pack_id }"
 
           dst = tund_info[ :dsts ][ dst_id ]
           return unless dst
@@ -743,7 +743,7 @@ module Girl
 
           dst_info[ :fin1_src_pack_id ] = fin1_src_pack_id
 
-          # puts "debug1 continue recv #{ dst_info[ :continue_recv_pack_id ] } dst.wbuff.empty? #{ dst_info[ :wbuff ].empty? }"
+          # puts "debug1 continue recv src to #{ dst_info[ :continue_recv_pack_id ] } dst.wbuff.empty? #{ dst_info[ :wbuff ].empty? }"
 
           if ( dst_info[ :continue_recv_pack_id ] == fin1_src_pack_id ) && dst_info[ :wbuff ].empty? then
             dst.close_write
@@ -815,12 +815,12 @@ module Girl
 
         dst_info[ :continue_recv_pack_id ] = pack_id
         dst_info[ :wbuff ] << data
+        dst_info[ :last_recv_at ] = now
         add_write( dst )
       else
         dst_info[ :pieces ][ pack_id ] = data
+        dst_info[ :last_recv_at ] = now
       end
-
-      dst_info[ :last_recv_at ] = now
     end
 
     ##

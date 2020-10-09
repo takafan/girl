@@ -1,16 +1,16 @@
 module Girl
-  PACK_SIZE             = 1328            # 流量包大小 1400(console MTU) - 8(PPPoE header) - 40(IPv6 header) - 8(UDP header) - 8(pack id) - 8(src id) = 1328
-  READ_SIZE             = PACK_SIZE * 100 # 一次读多少
-  WAFTERS_LIMIT         = 100_000         # 写后上限，超过上限暂停读src/dst
-  RESUME_BELOW          = 50_000          # 降到多少以下恢复读
-  SEND_HELLO_COUNT      = 10              # hello最多发几次
-  EXPIRE_AFTER          = 300             # 多久没有新流量，过期
-  CHECK_EXPIRE_INTERVAL = 30              # 检查过期间隔
-  CHECK_STATUS_INTERVAL = 1               # 检查状态间隔
-  MISS_SINGLE_LIMIT     = 160             # 最多几个miss打一个包
-  MISS_RANGE_LIMIT      = 80              # 最多几段miss区间打一个包
-  CONFUSE_UNTIL         = 5               # 混淆前几个包
-  RESOLV_CACHE_EXPIRE   = 300             # dns查询结果缓存多久过期
+  PACK_SIZE             = 61424             # 60 * 1024 - 8(pack id) - 8(src id) = 61424
+  READ_SIZE             = PACK_SIZE * 100   # 一次读多少
+  WAFTERS_LIMIT         = 2000              # 写后上限，超过上限暂停读src/dst
+  RESUME_BELOW          = 1000              # 降到多少以下恢复读
+  SEND_HELLO_COUNT      = 10                # hello最多发几次
+  EXPIRE_AFTER          = 300               # 多久没有新流量，过期
+  CHECK_EXPIRE_INTERVAL = 30                # 检查过期间隔
+  CHECK_STATUS_INTERVAL = 1                 # 检查状态间隔
+  SINGLE_MISS_LIMIT     = 160               # 最多几个miss打一个包
+  RANGE_MISS_LIMIT      = 80                # 最多几段miss区间打一个包
+  CONFUSE_UNTIL         = 5                 # 混淆前几个包
+  RESOLV_CACHE_EXPIRE   = 300               # dns查询结果缓存多久过期
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3
@@ -25,8 +25,8 @@ module Girl
   TUND_FIN              = 12
   TUN_FIN               = 13
   IP_CHANGED            = 14
-  MULTI_SINGLE_MISS     = 15
-  MULTI_RANGE_MISS      = 16
+  SINGLE_MISS           = 15
+  RANGE_MISS            = 16
   CONTINUE              = 17
   IS_RESEND_READY       = 18
   RESEND_READY          = 19
@@ -50,8 +50,8 @@ EOF
     EXPIRE_AFTER
     CHECK_EXPIRE_INTERVAL
     CHECK_STATUS_INTERVAL
-    MISS_SINGLE_LIMIT
-    MISS_RANGE_LIMIT
+    SINGLE_MISS_LIMIT
+    RANGE_MISS_LIMIT
     CONFUSE_UNTIL
     RESOLV_CACHE_EXPIRE
   ]
