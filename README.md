@@ -11,43 +11,28 @@
 中转一下，可以快很多：
 
 ```
-本机 <----- 1M/s ----- vps <- 目的地
+本机 <----- 10M/s ----- vps <- 目的地
 ```
 
-直接下下不动，那么先下载到vps，再从vps下载到本地。根据线路不同，以及拥控算法不同，速度可能有100K，1M，甚至10M。
+直接下下不动，那么先下载到vps，再从vps下载到本地。根据线路不同，以及拥控算法不同，速度能有1M甚至10M。
 
 进一步，改为自动中转：
 
 ```
-流量 -> 代理 ----- 1M/s -----> vps（代理服务端） -> 目的地
+流量 -> 代理 ----- 10M/s -----> vps（代理服务端） -> 目的地
 ```
 
-自动了。但还不够。妹子来了，和传统代理稍不同，妹子是一根通道：
+自动了。但残酷的现实是，出国网关被邪恶支配。
+
+妹子来了。和传统代理稍不同，妹子是一根通道：
 
 ```
 流量 -> 代理 -> 本机/路由器（妹子近端） ----- 10M/s -----> vps（妹子远端）-> 目的地
 ```
 
-同一条线路，妹子快出tcp一大截，原理是什么呢？
+通道的好处是，可以在流量出门前改动它，以回避邪恶。
 
-一是tcp被限速，并不是vps供应商限速，而是电信限速，例如两个机房都接的电信cn2 gia，用了一段时间一个被限，一个正常。
-
-实现类似于：
-
-```bash
-tc qdisc add dev eth0 root handle 1:0 htb
-tc class add dev eth0 parent 1:0 classid 1:10 htb rate 100kbps prio 0
-iptables -A OUTPUT -t mangle -p tcp -j MARK --set-mark 10
-tc filter add dev eth0 parent 1:0 prio 0 protocol ip handle 10 fw flowid 1:10
-```
-
-好在没碰到过udp被限，妹子是用udp传输的（可靠传输），不受影响。
-
-二是面对物理掉包重传策略不一样，tcp的重传策略是超时主动重传，一系列补丁（也叫拥控算法）中，SACK是真正起到作用的一个补丁，在SACK之前，tcp只会单发确认。SACK让tcp得以跳跃的确认收到的包。但40个字节放不下几个头尾，只要断的稍微碎一点，不那么连续，SACK就不够用了。妹子的重传策略我称之为被动重传，下限极高，一秒钟掉一千个包可以把tcp的速度打成一折，0.1折，但掉在妹子身上只是做减法。
-
-除了快，妹子允许在流量出门前改变它，以应对中间网关作恶。
-
-还可以控制是不是直连，借助一个域名列表，和一个ip段列表。完整的路线图：
+直连还是走通道是可以控制的，借助一个域名列表，和一个ip段列表。完整的路线图：
 
 ```
 流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit ----------> 远端 -> 解析域名 -> 目的地
@@ -59,19 +44,11 @@ tc filter add dev eth0 parent 1:0 prio 0 protocol ip handle 10 fw flowid 1:10
 
 起飞。
 
-## 快
-
-进一步聊聊快。可以不看。
-
-妹子给流量打上序号，打包成udp，做传输。一边收，一边半秒被告知一次对面的状态，例如，收到1-5，和跳号的8，这半秒被告知发到10，得出6-7，9-10两个号码段，要求对面重传。简称被动重传。
-
-妹子比tcp快多少？掉包很少的线路，电信gia美国服务器，curl下载服务器上的文件，大家都很快，hybla 13.6M/s，bbr 13.4M，cubic 12.7M，妹子10.1M。
-
-换一条掉包厉害的，电信单程cn2美国服务器，hybla降到80K，bbr降到10K，cubic降到4K，在tcp全体投降的状态下，妹子依然8M，比hybla快100倍，比bbr快800倍，比cubic快2000倍。
-
 ## udp怎么办
 
 udp是另一个世界。可以不看。
+
+中转让tcp变快。也能让udp变快吗？
 
 udp的快，是指：低延迟。从家到代理服务器的ping值，加上代理服务器到目的地的ping值，小于直连，代理才有意义。为了追求低延迟，udp很需要区分国内外。目的地在国外，可以给它找条更短的线路，目的地在国内，直连就是最快的。
 
@@ -155,7 +132,7 @@ ytimg.com
 
 很多网站流行把静态资源放到额外的一个域名下，需要自行f12探索一下。
 
-不写问题也不大。不写的话，本地解析google.com会得到假ip，但国内ip段并不在假ip的取值范围内，所以还是会走远端重新解析。
+不写的话，本地解析google.com会得到假ip，但只要假ip取值取在国内ip段之外，还是会走远端重新解析。
 
 启好了，测试一下：
 
@@ -243,6 +220,12 @@ sysctl --system
 
 办法是中转。
 
+用udp来中转，udp邪恶没管，无需改动流量。但udp存在被限速。一时间的流量，200K之后的会丢失。
+
+回避限速需要故意停顿，发200K，停顿50毫秒发第二个200K，这样仍可以达到几兆的速度，但比不了没被限速的tcp。
+
+tcp也有同样的被200K限速过，但仅是我遇到的个例：电信被限，移动正常，一台服务器被限，隔壁机房正常，几个月后恢复。
+
 用tcp来中转，流量会如实的到达远端，但若流量含有特定域名，且形似http头或者证书，近端会先吃到一个reset。来自邪恶。
 
 例如：
@@ -251,9 +234,7 @@ sysctl --system
 CONNECT google.com HTTP/1.1\r\n\r\n
 ```
 
-妹子不用tcp，而是把流量打包成udp，udp邪恶没管。
-
-但妹子还是提供加解密，开放式的。
+妹子提供加解密，开放式的。
 
 覆盖下面两个方法即可：
 
@@ -271,16 +252,18 @@ end
 例如：
 
 ```ruby
+ALT = { '.' => '^', '^' => '.' }
+
 def encode( data )
-  data.reverse
+  data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
 end
 
 def decode( data )
-  data.reverse
+  data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
 end
 ```
 
-是不是很简单？
+域名都含点，把点转了，可还行？
 
 完整例子：
 
@@ -290,12 +273,18 @@ require 'girl/proxyd'
 
 module Girl
   module Custom
+    ALT = { '.' => '^', '^' => '.' }
+
     def encode( data )
-      data.reverse
+      confuse( data )
     end
 
     def decode( data )
-      data.reverse
+      confuse( data )
+    end
+
+    def confuse( data )
+      data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
     end
   end
 end
@@ -309,17 +298,21 @@ require 'girl/proxy'
 
 module Girl
   module Custom
+    ALT = { '.' => '^', '^' => '.' }
+
     def encode( data )
-      data.reverse
+      confuse( data )
     end
 
     def decode( data )
-      data.reverse
+      confuse( data )
+    end
+
+    def confuse( data )
+      data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
     end
   end
 end
 
 Girl::Proxy.new '/boot/girl.conf.json'
 ```
-
-https的第一段流量含明文域名，之后本身就是乱码。ssh的第一段流量是明文版本号，之后本身就是乱码。因此妹子的加解密方法只作用第一段流量。

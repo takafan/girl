@@ -83,9 +83,7 @@ module Girl
               end
             end
 
-            if trigger then
-              next_tick
-            end
+            next_tick if trigger
           end
         end
       end
@@ -202,9 +200,7 @@ module Girl
     def write_udpd( udpd )
       while @udpd_wbuffs.any? do
         to_addr, data = @udpd_wbuffs.first
-
         return unless send_data( udpd, data, to_addr )
-
         @udpd_wbuffs.shift
       end
 
@@ -221,9 +217,7 @@ module Girl
 
       while tund_info[ :wbuffs ].any? do
         to_addr, data = tund_info[ :wbuffs ].first
-
         return unless send_data( tund, data, to_addr )
-
         tund_info[ :wbuffs ].shift
       end
 

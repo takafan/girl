@@ -47,15 +47,6 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
-          ws.each do | sock |
-            case @roles[ sock ]
-            when :redir then
-              write_redir( sock )
-            when :tun then
-              write_tun( sock )
-            end
-          end
-
           rs.each do | sock |
             case @roles[ sock ]
             when :dotr then
@@ -64,6 +55,15 @@ module Girl
               read_redir( sock )
             when :tun then
               read_tun( sock )
+            end
+          end
+
+          ws.each do | sock |
+            case @roles[ sock ]
+            when :redir then
+              write_redir( sock )
+            when :tun then
+              write_tun( sock )
             end
           end
         end
@@ -93,9 +93,7 @@ module Girl
               end
             end
 
-            if trigger then
-              next_tick
-            end
+            next_tick if trigger
           end
         end
       end
@@ -210,9 +208,7 @@ module Girl
     def write_redir( redir )
       while @redir_wbuffs.any? do
         to_addr, data = @redir_wbuffs.first
-
         return unless send_data( redir, data, to_addr )
-
         @redir_wbuffs.shift
       end
 
@@ -229,11 +225,7 @@ module Girl
 
       while tun_info[ :wbuffs ].any? do
         to_addr, data = tun_info[ :wbuffs ].first
-
-        unless send_data( tun, data, to_addr ) then
-          return
-        end
-
+        return unless send_data( tun, data, to_addr )
         tun_info[ :wbuffs ].shift
       end
 

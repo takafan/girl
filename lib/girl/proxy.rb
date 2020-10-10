@@ -10,16 +10,6 @@ require 'socket'
 =begin
 # Girl::Proxy - 代理服务，近端。
 
-## 重传逻辑
-
-1. 每隔一秒询问对面是否空闲
-2. 重传队列都为空，返回空闲
-3. 对面空闲，遍历dst/src，有跳号包，发miss。没跳号包，距上一次收到新流量不超过5秒，发continue。
-4. 收到single miss，添加至resend_singles
-5. 收到range miss，添加至resend_ranges
-6. 收到continue，删写后，把剩余的写后添加至resend_newers队列
-7. 依次重传resend_newers，resend_singles，resend_ranges
-
 ## 包结构
 
 tun-proxyd:
@@ -28,71 +18,28 @@ hello
 
 proxyd-tun:
 
-Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port
+Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port -> n: tcpd port
 
 tun-tund:
 
-Q>: 0 ctlmsg -> C: 2 heartbeat         -> not use
+Q>: 0 ctlmsg -> C: 2 heartbeat         not use
                    3 a new source      -> Q>: src id -> encoded destination address
                    4 paired            -> Q>: src id -> n: dst id
-                   5 dest status       -> not use
-                   6 source status     -> not use
-                   7 miss              -> not use
-                   8 fin1              -> Q>/n: src/dst id -> Q>: biggest src/dst pack id
-                   9 confirm fin1      -> not use
-                  10 fin2              -> Q>/n: src/dst id
-                  11 confirm fin2      -> not use
+                   5 dest status       not use
+                   6 source status     not use
+                   7 miss              not use
+                   8 fin1              not use
+                   9 confirm fin1      not use
+                  10 fin2              not use
+                  11 confirm fin2      not use
                   12 tund fin
                   13 tun fin
                   14 tun ip changed
-                  15 single miss       -> Q>/n: src/dst id -> Q>: miss pack id -> Q>*: 至多160个 miss pack id
-                  16 range miss        -> Q>/n: src/dst id -> Q>: begin miss pack id -> Q>: end miss pack id -> Q>*: 至多80个miss段
-                  17 continue          -> Q>/n: src/dst id -> Q>: continue recv pack id
-                  18 is resend ready   -> Q>/n: src/dst id
-                  19 resend ready      -> Q>/n: src/dst id -> Q>: biggest src/dst pack id
-
-Q>: 1+ pack_id -> Q>/n: src/dst id -> traffic
-
-## 近端关闭逻辑
-
-1. 读src -> 读到error -> 关src读 -> rbuff空？ -> src.dst？ -> 关dst写 -> src已双向关？ -> 删src.info
-                                                                    -> dst已双向关且src.wbuff空？ -> 删dst.info
-                                             -> src.dst_id？ -> 发fin1
-
-2. 写src -> 写光src.wbuff -> src.dst？ -> dst已关读？ -> 关src写 -> src已双向关且src.rbuff空？ -> 删src.info
-                          -> src.dst_id？ -> 已连续写入至dst最终包id？ -> 关src写 -> 发fin2 -> src.dst_fin2？ -> 删src.ext
-
-3. 读dst -> 读到error -> 关dst读 -> dst.src.wbuff空？ -> 关src写 -> dst已双向关？ -> 删dst.info
-                                                                -> src已双向关？ -> 删src.info
-
-4. 写dst -> 转光dst.src.rbuff -> src已关读？ -> 关dst写 -> dst已双向关且src.wbuff空？ -> 删dst.info
-
-5. 读tun -> 读到fin1，得到对面dst最终包id -> 已连续写入至dst最终包id？ -> 关src写 -> 发fin2 -> src.dst_fin2？ -> 删src.ext
-         -> 读到fin2，对面已结束写 -> src.dst_fin2置true -> src已双向关？ -> 删src.ext
-
-6. 写tun -> 转光src.rbuff -> src已关读？ -> 发fin1
-
-7. 主动关src -> src.dst？ -> dst没关？ -> 主动关dst
-             -> src.dst_id？ -> 发fin1和fin2
-
-8. 主动关dst -> dst.src没关？ -> 主动关src
-
-9. 主动关tun -> tun.srcs.each没关？-> 主动关src
-
-## 远端关闭逻辑
-
-1. 读dst -> 读到error -> 关dst读 -> rbuff空？-> 发fin1
-
-2. 写dst -> 写光dst.wbuff -> 已连续写入至src最终包id？ -> 关dst写 -> 发fin2 -> dst.src_fin2？ -> 删dst.ext
-
-3. 读tund -> 读到fin1，得到对面src最终包id -> 已连续写入至src最终包id？ -> 关dst写 -> 发fin2 -> dst.src_fin2？ -> 删dst.ext
-         -> 读到fin2，对面已结束写 -> dst.src_fin2置true -> dst已双向关？ -> 删dst.ext
-
-4. 写tund -> 转光dst.rbuff -> dst已关读？ -> 发fin1
-
-5. 主动关dst -> 发fin1和fin2
-
-6. 主动关tund -> tund.dsts.each没关？-> 主动关dst
+                  15 single miss       not use
+                  16 range miss        not use
+                  17 continue          not use
+                  18 is resend ready   not use
+                  19 resend ready      not use
 =end
 
 module Girl
@@ -103,9 +50,7 @@ module Girl
         config_path = File.expand_path( '../girl.conf.json', __FILE__ )
       end
 
-      unless File.exist?( config_path ) then
-        raise "missing config file #{ config_path }"
-      end
+      raise "missing config file #{ config_path }" unless File.exist?( config_path )
 
       # {
       #     "proxy_port": 6666,                   // 代理服务，近端（本地）端口
@@ -129,9 +74,7 @@ module Girl
         proxy_port = 6666
       end
 
-      unless proxyd_host then
-        raise "missing proxyd host"
-      end
+      raise "missing proxyd host" unless proxyd_host
 
       unless proxyd_port then
         proxyd_port = 6060
@@ -140,20 +83,14 @@ module Girl
       directs = []
 
       if direct_path then
-        unless File.exist?( direct_path ) then
-          raise "not found direct file #{ direct_path }"
-        end
-
+        raise "not found direct file #{ direct_path }" unless File.exist?( direct_path )
         directs = ( RESERVED_ROUTE.split( "\n" ) + IO.binread( direct_path ).split( "\n" ) ).map { | line | IPAddr.new( line.strip ) }
       end
 
       remotes = []
 
       if remote_path then
-        unless File.exist?( remote_path ) then
-          raise "not found remote file #{ remote_path }"
-        end
-
+        raise "not found remote file #{ remote_path }" unless File.exist?( remote_path )
         remotes = IO.binread( remote_path ).split( "\n" ).map { | line | line.strip }
       end
 

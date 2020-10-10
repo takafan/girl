@@ -14,10 +14,7 @@ module Girl
 
     def initialize( config_path = nil )
       if config_path then
-        unless File.exist?( config_path ) then
-          raise "not found config file #{ config_path }"
-        end
-
+        raise "not found config file #{ config_path }" unless File.exist?( config_path )
         conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
         proxyd_port = conf[ :proxyd_port ]
         worker_count = conf[ :worker_count ]

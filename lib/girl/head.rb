@@ -1,17 +1,12 @@
 module Girl
-  PACK_SIZE             = 61424             # 60 * 1024 - 8(pack id) - 8(src id) = 61424
-  READ_SIZE             = PACK_SIZE * 100   # 一次读多少
-  WAFTERS_LIMIT         = 2000              # 写后上限，超过上限暂停读src/dst
-  RESUME_BELOW          = 1000              # 降到多少以下恢复读
+  READ_SIZE             = 1024 * 1024       # 一次读多少
+  WBUFF_LIMIT           = 100 * 1024 * 1024 # 写前上限，超过上限暂停读src/dst
+  RESUME_BELOW          = WBUFF_LIMIT / 2   # 降到多少以下恢复读
   SEND_HELLO_COUNT      = 10                # hello最多发几次
   EXPIRE_AFTER          = 300               # 多久没有新流量，过期
   CHECK_EXPIRE_INTERVAL = 30                # 检查过期间隔
-  CHECK_STATUS_INTERVAL = 0.5               # 检查状态间隔
-  SINGLE_MISS_LIMIT     = 160               # 最多几个miss打一个包
-  RANGE_MISS_LIMIT      = 80                # 最多几段miss区间打一个包
-  CONFUSE_UNTIL         = 5                 # 混淆前几个包
+  CHECK_RESUME_INTERVAL = 1                 # 检查恢复读间隔
   RESOLV_CACHE_EXPIRE   = 300               # dns查询结果缓存多久过期
-  SENDERS_COUNT         = 50
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3
@@ -43,17 +38,13 @@ module Girl
 255.255.255.255/32
 EOF
   CONSTS = %w[
-    PACK_SIZE
     READ_SIZE
-    WAFTERS_LIMIT
+    WBUFF_LIMIT
     RESUME_BELOW
     SEND_HELLO_COUNT
     EXPIRE_AFTER
     CHECK_EXPIRE_INTERVAL
-    CHECK_STATUS_INTERVAL
-    SINGLE_MISS_LIMIT
-    RANGE_MISS_LIMIT
-    CONFUSE_UNTIL
+    CHECK_RESUME_INTERVAL
     RESOLV_CACHE_EXPIRE
   ]
 end
