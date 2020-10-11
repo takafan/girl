@@ -124,8 +124,28 @@ module Girl
       return if src.closed?
       src_info = @src_infos[ src ]
       src_info[ :wbuff ] << data
-      add_write( src )
       src_info[ :last_recv_at ] = Time.new
+      add_write( src )
+
+      if src_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        dst = src_info[ :dst ]
+
+        if dst then
+          dst_info = @dst_infos[ dst ]
+          puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_info[ :domain ] }"
+          dst_info[ :paused ] = true
+          @reads.delete( dst )
+        else
+          stream = src_info[ :stream ]
+
+          if stream then
+            stream_info = @stream_infos[ stream ]
+            puts "p#{ Process.pid } #{ Time.new } pause stream #{ stream_info[ :domain ] }"
+            stream_info[ :paused ] = true
+            @reads.delete( stream )
+          end
+        end
+      end
     end
 
     ##
@@ -414,6 +434,30 @@ module Girl
               end
             end
 
+            @dst_infos.select{ | _, dst_info | dst_info[ :paused ] }.each do | dst, dst_info |
+              src = dst_info[ :src ]
+              src_info = @src_infos[ src ]
+
+              if src_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } src.wbuff below #{ RESUME_BELOW }, resume dst #{ dst_info[ :domain ] }"
+                dst_info[ :paused ] = false
+                add_read( dst )
+                trigger = true
+              end
+            end
+
+            @stream_infos.select{ | _, stream_info | stream_info[ :paused ] }.each do | stream, stream_info |
+              src = stream_info[ :src ]
+              src_info = @src_infos[ src ]
+
+              if src_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } src.wbuff below #{ RESUME_BELOW }, resume stream #{ stream_info[ :domain ] }"
+                stream_info[ :paused ] = false
+                add_read( stream )
+                trigger = true
+              end
+            end
+
             next_tick if trigger
           end
         end
@@ -469,7 +513,7 @@ module Girl
       rescue IO::WaitWritable
         # connect nonblock 必抛 wait writable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ e.class }, close src"
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }, close src"
         set_src_closing( src )
         return
       end
@@ -479,8 +523,9 @@ module Girl
       dst_info = {
         local_port: local_port, # 本地端口
         src: src,               # 对应src
-        domain: domain,         # 域名
+        domain: domain,         # 目的地
         wbuff: '',              # 写前，从src读到的流量
+        paused: false,          # 是否已暂停读
         closing: false,         # 准备关闭
         closing_read: false,    # 准备关闭读
         closing_write: false    # 准备关闭写
@@ -540,9 +585,12 @@ module Girl
         data << @custom.encode( src_info[ :rbuff ] )
       end
 
+      domain = src_info[ :destination_domain ]
       @stream_infos[ stream ] = {
-        src: src,   # 对应src
-        wbuff: data # 写前，写往远端streamd
+        src: src,       # 对应src
+        domain: domain, # 目的地
+        wbuff: data,    # 写前，写往远端streamd
+        paused: false   # 是否已暂停读
       }
 
       src_info[ :dst_id ] = dst_id
@@ -842,7 +890,7 @@ module Girl
         created_at: Time.new,    # 创建时间
         last_recv_at: nil,       # 上一次收到新流量（由dst收到，或者由stream收到）的时间
         last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由stream发出）的时间
-        paused: false,           # 是否已暂停
+        paused: false,           # 是否已暂停读
         closing: false,          # 准备关闭
         closing_read: false,     # 准备关闭读
         closing_write: false     # 准备关闭写
@@ -863,10 +911,10 @@ module Girl
       end
 
       from_addr = addrinfo.to_sockaddr
-      @tun_info[ :last_recv_at ] = Time.new
       pack_id = data[ 0, 8 ].unpack( 'Q>' ).first
       return if pack_id != 0
 
+      @tun_info[ :last_recv_at ] = Time.new
       ctl_num = data[ 8 ].unpack( 'C' ).first
 
       case ctl_num
@@ -1065,7 +1113,7 @@ module Girl
             add_write( stream )
 
             if stream_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-              puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
+              puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ src_info[ :destination_domain ] }"
               src_info[ :paused ] = true
               @reads.delete( src )
             end
@@ -1094,7 +1142,7 @@ module Girl
             add_write( dst )
 
             if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-              puts "p#{ Process.pid } #{ Time.new } pause direct src #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
+              puts "p#{ Process.pid } #{ Time.new } pause direct src #{ src_info[ :destination_domain ] }"
               src_info[ :paused ] = true
               @reads.delete( src )
             end

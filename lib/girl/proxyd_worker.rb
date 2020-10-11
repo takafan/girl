@@ -265,7 +265,7 @@ module Girl
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect destination #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } connect destination #{ domain_port } #{ e.class }"
         return false
       end
 
@@ -274,7 +274,7 @@ module Girl
       @dst_infos[ dst ] = {
         id: dst_id,               # id
         tund: tund,               # 对应tund
-        domain_port: domain_port, # 域名和端口
+        domain_port: domain_port, # 目的地和端口
         rbuff: '',                # 对应的streamd没准备好，暂存读到的流量
         streamd: nil,             # 对应的streamd
         wbuff: '',                # 从streamd读到的流量
@@ -282,7 +282,7 @@ module Girl
         created_at: Time.new,     # 创建时间
         last_recv_at: nil,        # 上一次收到新流量（由streamd收到）的时间
         last_sent_at: nil,        # 上一次发出流量（由streamd发出）的时间
-        paused: false,            # 是否已暂停
+        paused: false,            # 是否已暂停读
         closing: false,           # 准备关闭
         closing_read: false,      # 准备关闭读
         closing_write: false      # 准备关闭写
@@ -375,6 +375,18 @@ module Girl
                 puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
                 dst_info[ :paused ] = false
                 add_read( dst )
+                trigger = true
+              end
+            end
+
+            @streamd_infos.select{ | _, streamd_info | streamd_info[ :paused ] }.each do | streamd, streamd_info |
+              dst = streamd_info[ :dst ]
+              dst_info = @dst_infos[ dst ]
+
+              if dst_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume streamd #{ streamd_info[ :domain_port ] }"
+                streamd_info[ :paused ] = false
+                add_read( streamd )
                 trigger = true
               end
             end
@@ -616,10 +628,10 @@ module Girl
         return
       end
 
-      tund_info[ :last_recv_at ] = Time.new
       pack_id = data[ 0, 8 ].unpack( 'Q>' ).first
       return if pack_id != 0
 
+      tund_info[ :last_recv_at ] = Time.new
       ctl_num = data[ 8 ].unpack( 'C' ).first
 
       case ctl_num
@@ -667,9 +679,11 @@ module Girl
       tund = tcpd_info[ :tund ]
 
       @streamd_infos[ streamd ] = {
-        tund: tund, # 对应tund
-        dst: nil,   # 对应dst
-        wbuff: ''   # 写前，写往近端stream
+        tund: tund,       # 对应tund
+        dst: nil,         # 对应dst
+        domain_port: nil, # dst的目的地和端口
+        wbuff: '',        # 写前，写往近端stream
+        paused: false     # 是否已暂停读
       }
 
       add_read( streamd, :streamd )
@@ -704,7 +718,7 @@ module Girl
           add_write( streamd )
 
           if streamd_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-            puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_info[ :id ] } #{ dst_info[ :domain_port ] }"
+            puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_info[ :domain_port ] }"
             dst_info[ :paused ] = true
             @reads.delete( dst )
           end
@@ -759,6 +773,7 @@ module Girl
         # puts "debug1 set streamd.dst #{ dst_id }"
         streamd_info[ :dst ] = dst
         dst_info = @dst_infos[ dst ]
+        streamd_info[ :domain_port ] = dst_info[ :domain_port ]
 
         unless dst_info[ :rbuff ].empty? then
           # puts "debug1 encode and move dst.rbuff to streamd.wbuff"
@@ -778,6 +793,12 @@ module Girl
         dst_info[ :wbuff ] << data
         dst_info[ :last_recv_at ] = Time.new
         add_write( dst )
+
+        if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+          puts "p#{ Process.pid } #{ Time.new } pause streamd #{ streamd_info[ :domain_port ] }"
+          streamd_info[ :paused ] = true
+          @reads.delete( streamd )
+        end
       end
     end
 
