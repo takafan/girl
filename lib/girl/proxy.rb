@@ -3,6 +3,7 @@ require 'girl/head'
 require 'girl/proxy_custom'
 require 'girl/proxy_worker'
 require 'girl/version'
+require 'ipaddr'
 require 'json'
 require 'socket'
 
@@ -78,14 +79,14 @@ module Girl
 
       if direct_path then
         raise "not found direct file #{ direct_path }" unless File.exist?( direct_path )
-        directs = ( RESERVED_ROUTE.split( "\n" ) + IO.binread( direct_path ).split( "\n" ) ).map { | line | IPAddr.new( line.strip ) }
+        directs = ( RESERVED_ROUTE.split( "\n" ) + IO.binread( direct_path ).split( "\n" ) ).map{ | line | IPAddr.new( line.strip ) }
       end
 
       remotes = []
 
       if remote_path then
         raise "not found remote file #{ remote_path }" unless File.exist?( remote_path )
-        remotes = IO.binread( remote_path ).split( "\n" ).map { | line | line.strip }
+        remotes = IO.binread( remote_path ).split( "\n" ).map{ | line | line.strip }
       end
 
       unless im then
