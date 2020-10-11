@@ -3,7 +3,6 @@ require 'girl/head'
 require 'girl/proxy_custom'
 require 'girl/proxy_worker'
 require 'girl/version'
-require 'ipaddr'
 require 'json'
 require 'socket'
 
@@ -22,24 +21,19 @@ Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port -> n: tcpd port
 
 tun-tund:
 
-Q>: 0 ctlmsg -> C: 2 heartbeat         not use
-                   3 a new source      -> Q>: src id -> encoded destination address
-                   4 paired            -> Q>: src id -> n: dst id
-                   5 dest status       not use
-                   6 source status     not use
-                   7 miss              not use
-                   8 fin1              not use
-                   9 confirm fin1      not use
-                  10 fin2              not use
-                  11 confirm fin2      not use
+Q>: 0 ctlmsg -> C: 2 heartbeat       [not use]
+                   3 a new source    -> Q>: src id -> encoded destination address
+                   4 paired          -> Q>: src id -> n: dst id
+                   5 dest status     [not use]
+                   6 source status   [not use]
+                   7 miss            [not use]
+                   8 fin1            [not use]
+                   9 confirm fin1    [not use]
+                  10 fin2            [not use]
+                  11 confirm fin2    [not use]
                   12 tund fin
                   13 tun fin
                   14 tun ip changed
-                  15 single miss       not use
-                  16 range miss        not use
-                  17 continue          not use
-                  18 is resend ready   not use
-                  19 resend ready      not use
 =end
 
 module Girl

@@ -101,15 +101,6 @@ module Girl
     end
 
     ##
-    # add ctlmsg resend ready
-    #
-    def add_ctlmsg_resend_ready( tund )
-      tund_info = @tund_infos[ tund ]
-      data = [ 0, RESEND_READY ].pack( 'Q>C' )
-      add_ctlmsg( tund, data )
-    end
-
-    ##
     # add ctlmsg
     #
     def add_ctlmsg( tund, data )
@@ -473,9 +464,9 @@ module Girl
       begin
         written = sock.sendmsg_nonblock( data, 0, to_addr )
       rescue IO::WaitWritable, Errno::EINTR
-        print '.'
         return :wait
       rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+        puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
         return :fatal
       end
 
@@ -577,20 +568,20 @@ module Girl
       add_read( tcpd, :tcpd )
 
       tund_info = {
-        port: tund_port,            # 端口
-        tcpd: tcpd,                 # 对应的tcpd
-        tcpd_port: tcpd_port,       # tcpd端口
-        ctlmsgs: [],                # [ ctlmsg, to_addr ]
-        tun_addr: from_addr,        # tun地址
-        dsts: {},                   # dst_id => dst
-        dst_ids: {},                # src_id => dst_id
-        created_at: Time.new,       # 创建时间
-        last_recv_at: nil,          # 上一次收到流量的时间
-        last_sent_at: nil,          # 上一次发出流量的时间
-        closing: false,             # 准备关闭
-        closing_read: false,        # 准备关闭读
-        closing_write: false,       # 准备关闭写
-        changed_tun_addr: nil       # 记录到和tun addr不符的来源地址
+        port: tund_port,      # 端口
+        tcpd: tcpd,           # 对应的tcpd
+        tcpd_port: tcpd_port, # tcpd端口
+        ctlmsgs: [],          # [ ctlmsg, to_addr ]
+        tun_addr: from_addr,  # tun地址
+        dsts: {},             # dst_id => dst
+        dst_ids: {},          # src_id => dst_id
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil,    # 上一次收到流量的时间
+        last_sent_at: nil,    # 上一次发出流量的时间
+        closing: false,       # 准备关闭
+        closing_read: false,  # 准备关闭读
+        closing_write: false, # 准备关闭写
+        changed_tun_addr: nil # 记录到和tun addr不符的来源地址
       }
 
       @tunneling_tunds[ from_addr ] = tund
@@ -722,7 +713,7 @@ module Girl
         dst_info[ :rbuff ] << data
 
         if dst_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-          # puts "debug1 dst.rbuff full #{ dst_info[ :rbuff ].bytesize }"
+          # puts "debug1 dst.rbuff full"
           set_dst_closing( dst )
         end
       end
@@ -800,6 +791,7 @@ module Girl
         sent = send_data( proxyd, data, to_addr )
 
         if sent == :wait then
+          puts "p#{ Process.pid } #{ Time.new } wait proxyd send ctlmsg, left #{ @proxyd_info[ :ctlmsgs ].size }"
           return
         else
           @proxyd_info[ :ctlmsgs ].shift
@@ -837,7 +829,7 @@ module Girl
           close_tund( tund )
           return
         elsif sent == :wait then
-          # puts "debug1 #{ Time.new } wait send ctlmsg left #{ tund_info[ :ctlmsgs ].size }"
+          puts "p#{ Process.pid } #{ Time.new } wait tund #{ tund_info[ :port ] } send ctlmsg, left #{ tund_info[ :ctlmsgs ].size }"
           tund_info[ :last_sent_at ] = now
           return
         end

@@ -7,7 +7,6 @@ module Girl
     def initialize( proxy_port, proxyd_host, proxyd_port, directs, remotes, im )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
-      @proxyd_ip = Addrinfo.new( @proxyd_addr ).ip_address
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
@@ -588,22 +587,16 @@ module Girl
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       port = tun.local_address.ip_port
       tun_info = {
-        port: port,                # 端口
-        pending_sources: [],       # 还没配上tund，暂存的src
-        ctlmsgs: [],               # [ ctlmsg, to_addr ]
-        resend_newers: {},         # 尾巴流量重传队列 src_id => newer_pack_ids
-        resend_singles: {},        # 单个重传队列 src_id => single_miss_pack_ids
-        resend_ranges: {},         # 区间重传队列 src_id => range_miss_pack_ids
-        event_srcs: [],            # rbuff不为空，或者准备关闭的src
-        tund_addr: nil,            # tund地址
-        tcpd_addr: nil,            # tcpd地址
-        srcs: {},                  # src_id => src
-        created_at: Time.new,      # 创建时间
-        last_recv_at: nil,         # 上一次收到流量的时间
-        last_sent_at: nil,         # 上一次发出流量的时间
-        sender_addrs: nil,         # 远端发送者地址
-        last_ping_senders_at: nil, # 上一次ping发送者的时间
-        closing: false             # 是否准备关闭
+        port: port,           # 端口
+        pending_sources: [],  # 还没配上tund，暂存的src
+        ctlmsgs: [],          # [ ctlmsg, to_addr ]
+        tund_addr: nil,       # tund地址
+        tcpd_addr: nil,       # tcpd地址
+        srcs: {},             # src_id => src
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil,    # 上一次收到流量的时间
+        last_sent_at: nil,    # 上一次发出流量的时间
+        closing: false        # 是否准备关闭
       }
 
       @tun = tun
@@ -699,27 +692,6 @@ module Girl
       src_info = @src_infos[ src ]
       src_info[ :paused ] = false
       add_read( src )
-    end
-
-    ##
-    # send data
-    #
-    def send_data( data, to_addr = nil )
-      unless to_addr then
-        to_addr = @tun_info[ :tund_addr ]
-      end
-
-      begin
-        written = @tun.sendmsg_nonblock( data, 0, to_addr )
-      rescue IO::WaitWritable, Errno::EINTR
-        print '.'
-        return :wait
-      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-        puts "#{ Time.new } sendmsg #{ e.class }, close tun"
-        return :fatal
-      end
-
-      written
     end
 
     ##
@@ -856,24 +828,24 @@ module Girl
       # puts "debug1 accept a src #{ addrinfo.inspect } #{ src_id }"
 
       @src_infos[ src ] = {
-        id: src_id,               # id
-        proxy_proto: :uncheck,    # :uncheck / :http / :socks5
-        proxy_type: :uncheck,     # :uncheck / :checking / :direct / :tunnel / :negotiation
-        destination_domain: nil,  # 目的地域名
-        destination_port: nil,    # 目的地端口
-        is_connect: true,         # 代理协议是http的场合，是否是CONNECT
-        rbuff: '',                # 读到的流量
-        stream: nil,              # :tunnel的场合，对应的stream
-        wbuff: '',                # 从dst/stream读到的流量
-        dst: nil,                 # :direct的场合，对应的dst
-        dst_id: nil,              # 远端dst id
-        created_at: Time.new,     # 创建时间
-        last_recv_at: nil,        # 上一次收到新流量（由dst收到，或者由stream收到）的时间
-        last_sent_at: nil,        # 上一次发出流量（由dst发出，或者由stream发出）的时间
-        paused: false,            # 是否已暂停
-        closing: false,           # 准备关闭
-        closing_read: false,      # 准备关闭读
-        closing_write: false      # 准备关闭写
+        id: src_id,              # id
+        proxy_proto: :uncheck,   # :uncheck / :http / :socks5
+        proxy_type: :uncheck,    # :uncheck / :checking / :direct / :tunnel / :negotiation
+        destination_domain: nil, # 目的地域名
+        destination_port: nil,   # 目的地端口
+        is_connect: true,        # 代理协议是http的场合，是否是CONNECT
+        rbuff: '',               # 读到的流量
+        dst: nil,                # :direct的场合，对应的dst
+        stream: nil,             # :tunnel的场合，对应的stream
+        dst_id: nil,             # 远端dst id
+        wbuff: '',               # 从dst/stream读到的流量
+        created_at: Time.new,    # 创建时间
+        last_recv_at: nil,       # 上一次收到新流量（由dst收到，或者由stream收到）的时间
+        last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由stream发出）的时间
+        paused: false,           # 是否已暂停
+        closing: false,          # 准备关闭
+        closing_read: false,     # 准备关闭读
+        closing_write: false     # 准备关闭写
       }
 
       add_read( src, :src )
@@ -1200,14 +1172,16 @@ module Girl
       # 发ctlmsg
       while @tun_info[ :ctlmsgs ].any? do
         data, to_addr = @tun_info[ :ctlmsgs ].first
-        sent = send_data( data, to_addr )
 
-        if sent == :fatal then
-          close_tun( tun )
-          return
-        elsif sent == :wait then
-          # puts "debug1 #{ Time.new } wait send ctlmsg left #{ @tun_info[ :ctlmsgs ].size }"
+        begin
+          @tun.sendmsg_nonblock( data, 0, to_addr )
+        rescue IO::WaitWritable, Errno::EINTR
+          puts "p#{ Process.pid } #{ Time.new } wait send ctlmsg, left #{ @tun_info[ :ctlmsgs ].size }"
           @tun_info[ :last_sent_at ] = now
+          return
+        rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+          puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }, close tun"
+          close_tun( tun )
           return
         end
 
@@ -1326,12 +1300,17 @@ module Girl
       rescue Exception => e
         # puts "debug1 write dst #{ e.class }"
         close_write_dst( dst )
-        close_read_src( src ) if src
+        close_read_src( src )
         return
       end
 
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
+
+      unless src.closed? then
+        src_info = @src_infos[ src ]
+        src_info[ :last_sent_at ] = Time.new
+      end
     end
 
     ##
