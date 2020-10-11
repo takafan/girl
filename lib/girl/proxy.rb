@@ -22,7 +22,7 @@ Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port -> n: tcpd port
 
 tun-tund:
 
-Q>: 0 ctlmsg -> C: 2 heartbeat       [not use]
+Q>: 0 ctlmsg -> C: 2 heartbeat
                    3 a new source    -> Q>: src id -> encoded destination address
                    4 paired          -> Q>: src id -> n: dst id
                    5 dest status     [not use]

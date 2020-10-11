@@ -369,17 +369,18 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
 
           @mutex.synchronize do
-            trigger = false
             now = Time.new
 
             if @tun && !@tun.closed? then
               last_recv_at = @tun_info[ :last_recv_at ] || @tun_info[ :created_at ]
-              last_sent_at = @tun_info[ :last_sent_at ] || @tun_info[ :created_at ]
 
-              if @tun_info[ :srcs ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
+              if @tun_info[ :srcs ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
                 puts "p#{ Process.pid } #{ Time.new } expire tun"
                 set_tun_closing
-                trigger = true
+              else
+                # puts "debug1 #{ Time.new } heartbeat"
+                data = [ 0, HEARTBEAT ].pack( 'Q>C' )
+                add_ctlmsg( data )
               end
             end
 
@@ -390,11 +391,10 @@ module Girl
               if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
                 puts "p#{ Process.pid } #{ Time.new } expire src #{ src_info[ :destination_domain ] }"
                 set_src_closing( src )
-                trigger = true
               end
             end
 
-            next_tick if trigger
+            next_tick
           end
         end
       end
@@ -527,7 +527,6 @@ module Girl
         wbuff: '',              # 写前，从src读到的流量
         paused: false,          # 是否已暂停读
         closing: false,         # 准备关闭
-        closing_read: false,    # 准备关闭读
         closing_write: false    # 准备关闭写
       }
 
@@ -643,7 +642,6 @@ module Girl
         srcs: {},             # src_id => src
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间
-        last_sent_at: nil,    # 上一次发出流量的时间
         closing: false        # 是否准备关闭
       }
 
@@ -892,7 +890,6 @@ module Girl
         last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由stream发出）的时间
         paused: false,           # 是否已暂停读
         closing: false,          # 准备关闭
-        closing_read: false,     # 准备关闭读
         closing_write: false     # 准备关闭写
       }
 
@@ -1225,7 +1222,6 @@ module Girl
           @tun.sendmsg_nonblock( data, 0, to_addr )
         rescue IO::WaitWritable, Errno::EINTR
           puts "p#{ Process.pid } #{ Time.new } wait send ctlmsg, left #{ @tun_info[ :ctlmsgs ].size }"
-          @tun_info[ :last_sent_at ] = now
           return
         rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
           puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }, close tun"
@@ -1236,7 +1232,6 @@ module Girl
         @tun_info[ :ctlmsgs ].shift
       end
 
-      @tun_info[ :last_sent_at ] = now
       @writes.delete( tun )
     end
 

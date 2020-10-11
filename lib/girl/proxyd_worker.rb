@@ -284,7 +284,6 @@ module Girl
         last_sent_at: nil,        # 上一次发出流量（由streamd发出）的时间
         paused: false,            # 是否已暂停读
         closing: false,           # 准备关闭
-        closing_read: false,      # 准备关闭读
         closing_write: false      # 准备关闭写
       }
 
@@ -330,9 +329,8 @@ module Girl
 
             @tund_infos.each do | tund, tund_info |
               last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
-              last_sent_at = tund_info[ :last_sent_at ] || tund_info[ :created_at ]
 
-              if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
+              if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
                 puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
                 set_tund_closing( tund )
                 trigger = true
@@ -589,10 +587,7 @@ module Girl
         dst_ids: {},          # src_id => dst_id
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间
-        last_sent_at: nil,    # 上一次发出流量的时间
         closing: false,       # 准备关闭
-        closing_read: false,  # 准备关闭读
-        closing_write: false, # 准备关闭写
         changed_tun_addr: nil # 记录到和tun addr不符的来源地址
       }
 
@@ -851,14 +846,12 @@ module Girl
           return
         elsif sent == :wait then
           puts "p#{ Process.pid } #{ Time.new } wait tund #{ tund_info[ :port ] } send ctlmsg, left #{ tund_info[ :ctlmsgs ].size }"
-          tund_info[ :last_sent_at ] = now
           return
         end
 
         tund_info[ :ctlmsgs ].shift
       end
 
-      tund_info[ :last_sent_at ] = now
       @writes.delete( tund )
     end
 
