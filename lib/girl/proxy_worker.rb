@@ -353,7 +353,7 @@ module Girl
     def del_src_info( src )
       src_info = @src_infos.delete( src )
 
-      if src_info[ :stream ] && @tun && !@tun.closed? then
+      if ( src_info[ :proxy_type ] == :tunnel ) && @tun && !@tun.closed? then
         @tun_info[ :srcs ].delete( src_info[ :id ] )
       end
 
@@ -369,6 +369,7 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
 
           @mutex.synchronize do
+            trigger = false
             now = Time.new
 
             if @tun && !@tun.closed? then
@@ -382,6 +383,8 @@ module Girl
                 data = [ 0, HEARTBEAT ].pack( 'Q>C' )
                 add_ctlmsg( data )
               end
+
+              trigger = true
             end
 
             @src_infos.each do | src, src_info |
@@ -391,10 +394,11 @@ module Girl
               if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
                 puts "p#{ Process.pid } #{ Time.new } expire src #{ src_info[ :destination_domain ] }"
                 set_src_closing( src )
+                trigger = true
               end
             end
 
-            next_tick
+            next_tick if trigger
           end
         end
       end
@@ -492,7 +496,7 @@ module Girl
               next_tick
             end
 
-            sleep 1
+            sleep SEND_HELLO_INTERVAL
           end
         end
       end
@@ -667,7 +671,7 @@ module Girl
             next_tick
           end
 
-          sleep 1
+          sleep SEND_HELLO_INTERVAL
         end
       end
     end
