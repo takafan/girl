@@ -188,7 +188,10 @@ module Girl
     def close_dst( dst )
       # puts "debug1 close dst"
       close_sock( dst )
-      @dst_infos.delete( dst )
+      dst_info = @dst_infos.delete( dst )
+      src = dst_info[ :src ]
+      close_read_src( src )
+      set_src_closing_write( src )
     end
 
     ##
@@ -272,6 +275,18 @@ module Girl
           set_stream_closing_write( stream )
         end
       end
+    end
+
+    ##
+    # close stream
+    #
+    def close_stream( stream )
+      # puts "debug1 close stream"
+      close_sock( stream )
+      stream_info = @stream_infos.delete( stream )
+      src = stream_info[ :src ]
+      close_read_src( src )
+      set_src_closing_write( src )
     end
 
     ##
@@ -1339,12 +1354,6 @@ module Girl
       # 处理关闭
       if dst_info[ :closing ] then
         close_dst( dst )
-
-        if src then
-          close_read_src( src )
-          set_src_closing_write( src )
-        end
-
         return
       end
 
@@ -1394,8 +1403,6 @@ module Girl
       # 处理关闭
       if stream_info[ :closing ] then
         close_stream( stream )
-        close_read_src( src )
-        set_src_closing_write( src )
         return
       end
 

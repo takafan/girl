@@ -209,7 +209,13 @@ module Girl
     def close_streamd( streamd )
       # puts "debug1 close streamd"
       close_sock( streamd )
-      @streamd_infos.delete( streamd )
+      streamd_info = @streamd_infos.delete( streamd )
+      dst = streamd_info[ :dst ]
+      
+      if dst then
+        close_read_dst( dst )
+        set_dst_closing_write( dst )
+      end
     end
 
     ##
@@ -1019,12 +1025,6 @@ module Girl
       # 处理关闭
       if streamd_info[ :closing ] then
         close_streamd( streamd )
-
-        if dst then
-          close_read_dst( dst )
-          set_dst_closing_write( dst )
-        end
-
         return
       end
 
