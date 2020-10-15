@@ -105,6 +105,7 @@ girl.conf.json的格式：
     "proxy_port": 6666,                   // 代理服务，近端（本地）端口
     "proxyd_host": "1.2.3.4",             // 代理服务，远端服务器
     "proxyd_port": 6060,                  // 代理服务，远端端口
+    "infod_port": 6070,                   // 查询服务，供远端本机调用
     "direct_path": "girl.direct.txt",     // 直连ip段
     "remote_path": "girl.remote.txt",     // 交给远端解析的域名列表
     "im": "girl",                         // 标识，用来识别近端

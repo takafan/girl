@@ -20,21 +20,34 @@ proxyd-tun:
 
 Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port -> n: tcpd port
 
+local-infod:
+
+C: 101 traff infos
+
+infod-local:
+
+C: 101 traff infos -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
+
 tun-tund:
 
 Q>: 0 ctlmsg -> C: 2 heartbeat
                    3 a new source    -> Q>: src id -> encoded destination address
                    4 paired          -> Q>: src id -> n: dst id
-                   5 dest status     [not use]
-                   6 source status   [not use]
-                   7 miss            [not use]
-                   8 fin1            [not use]
-                   9 confirm fin1    [not use]
-                  10 fin2            [not use]
-                  11 confirm fin2    [not use]
+                   5 dest status     NOT USE
+                   6 source status   NOT USE
+                   7 miss            NOT USE
+                   8 fin1            NOT USE
+                   9 confirm fin1    NOT USE
+                  10 fin2            NOT USE
+                  11 confirm fin2    NOT USE
                   12 tund fin
                   13 tun fin
                   14 tun ip changed
+                  15 single miss     NOT USE
+                  16 range miss      NOT USE
+                  17 continue        NOT USE
+                  18 is resend ready NOT USE
+                  19 resend ready    NOT USE
 =end
 
 module Girl
@@ -108,6 +121,10 @@ module Girl
       puts "#{ remote_path } #{ remotes.size } remotes"
       puts "im #{ im }"
       puts "worker count #{ worker_count }"
+
+      Girl::Custom.constants.each do | name |
+        puts "#{ name } #{ Girl::Custom.const_get( name ).inspect }"
+      end
 
       len = CONSTS.map{ | name | name.size }.max
 

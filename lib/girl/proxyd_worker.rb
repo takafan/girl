@@ -4,23 +4,26 @@ module Girl
     ##
     # initialize
     #
-    def initialize( proxyd_port )
+    def initialize( proxyd_port, infod_port )
       @custom = Girl::ProxydCustom.new
       @mutex = Mutex.new
       @reads = []
       @writes = []
-      @roles = {}           # sock => :dotr / :proxyd / :dst / :tund / :tcpd / :streamd
+      @roles = {}           # sock => :dotr / :proxyd / :infod / :dst / :tund / :tcpd / :streamd
       @tund_infos = {}      # tund => {}
       @tcpd_infos = {}      # tcpd => {}
       @dst_infos = {}       # dst => {}
       @streamd_infos = {}   # streamd => {}
       @tunneling_tunds = {} # tunneling_addr => tund
       @resolv_caches = {}   # domain => [ ip, created_at ]
+      @traff_ins = {}       # im => 0
+      @traff_outs = {}      # im => 0
 
       dotr, dotw = IO.pipe
       @dotw = dotw
       add_read( dotr, :dotr )
       new_a_proxyd( proxyd_port )
+      new_a_infod( infod_port )
     end
 
     ##
@@ -30,6 +33,7 @@ module Girl
       puts "p#{ Process.pid } #{ Time.new } looping"
       loop_check_expire
       loop_check_resume
+      loop_check_traff
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -42,6 +46,8 @@ module Girl
               read_dotr( sock )
             when :proxyd then
               read_proxyd( sock )
+            when :infod then
+              read_infod( sock )
             when :tund then
               read_tund( sock )
             when :tcpd then
@@ -137,7 +143,13 @@ module Girl
     def close_dst( dst )
       # puts "debug1 close dst"
       close_sock( dst )
-      del_dst_info( dst )
+      dst_info = del_dst_info( dst )
+      streamd = dst_info[ :streamd ]
+
+      if streamd then
+        close_read_streamd( streamd )
+        set_streamd_closing_write( streamd )
+      end
     end
 
     ##
@@ -231,6 +243,7 @@ module Girl
         dst_info = @dst_infos[ dst ]
       end
 
+      dst_info[ :closed_write ] = true
       dst_info
     end
 
@@ -251,6 +264,7 @@ module Girl
         streamd_info = @streamd_infos[ streamd ]
       end
 
+      streamd_info[ :closed_write ] = true
       streamd_info
     end
 
@@ -270,10 +284,12 @@ module Girl
       end
 
       dst_id = dst.local_address.ip_port
+      tund_info = @tund_infos[ tund ]
 
       @dst_infos[ dst ] = {
         id: dst_id,               # id
         tund: tund,               # 对应tund
+        im: tund_info[ :im ],     # 标识
         domain_port: domain_port, # 目的地和端口
         rbuff: '',                # 对应的streamd没准备好，暂存读到的流量
         streamd: nil,             # 对应的streamd
@@ -284,12 +300,12 @@ module Girl
         last_sent_at: nil,        # 上一次发出流量（由streamd发出）的时间
         paused: false,            # 是否已暂停读
         closing: false,           # 准备关闭
-        closing_write: false      # 准备关闭写
+        closing_write: false,     # 准备关闭写
+        closed_write: false       # 已关闭写
       }
 
       add_read( dst, :dst )
 
-      tund_info = @tund_infos[ tund ]
       tund_info[ :dst_ids ][ src_id ] = dst_id
       tund_info[ :dsts ][ dst_id ] = dst
 
@@ -396,6 +412,27 @@ module Girl
     end
 
     ##
+    # loop check traff
+    #
+    def loop_check_traff
+      if RESET_TRAFF_DAY > 0 then
+        Thread.new do
+          loop do
+            sleep CHECK_TRAFF_INTERVAL
+
+            @mutex.synchronize do
+              if Time.new.day == RESET_TRAFF_DAY then
+                puts "p#{ Process.pid } #{ Time.new } reset traffs"
+                @traff_ins.transform_values!{ | _ | 0 }
+                @traff_outs.transform_values!{ | _ | 0 }
+              end
+            end
+          end
+        end
+      end
+    end
+
+    ##
     # new a proxyd
     #
     def new_a_proxyd( proxyd_port )
@@ -410,6 +447,18 @@ module Girl
       }
 
       add_read( proxyd, :proxyd )
+    end
+
+    ##
+    # new a infod
+    #
+    def new_a_infod( infod_port )
+      infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      infod.bind( Socket.sockaddr_in( infod_port, '127.0.0.1' ) )
+
+      puts "p#{ Process.pid } #{ Time.new } infod bind on #{ infod_port }"
+      add_read( infod, :infod )
     end
 
     ##
@@ -488,10 +537,16 @@ module Girl
     #
     def set_dst_closing( dst )
       return if dst.closed?
+
       dst_info = @dst_infos[ dst ]
-      dst_info[ :closing ] = true
-      @reads.delete( dst )
-      add_write( dst )
+
+      if dst_info[ :closed_write ] then
+        close_read_dst( dst )
+      else
+        dst_info[ :closing ] = true
+        @reads.delete( dst )
+        add_write( dst )
+      end
     end
 
     ##
@@ -499,7 +554,10 @@ module Girl
     #
     def set_dst_closing_write( dst )
       return if dst.closed?
+
       dst_info = @dst_infos[ dst ]
+      return if dst_info[ :closed_write ]
+
       dst_info[ :closing_write ] = true
       add_write( dst )
     end
@@ -510,9 +568,14 @@ module Girl
     def set_streamd_closing( streamd )
       return if streamd.closed?
       streamd_info = @streamd_infos[ streamd ]
-      streamd_info[ :closing ] = true
-      @reads.delete( streamd )
-      add_write( streamd )
+
+      if streamd_info[ :closed_write ] then
+        close_read_streamd( streamd )
+      else
+        streamd_info[ :closing ] = true
+        @reads.delete( streamd )
+        add_write( streamd )
+      end
     end
 
     ##
@@ -520,7 +583,10 @@ module Girl
     #
     def set_streamd_closing_write( streamd )
       return if streamd.closed?
+
       streamd_info = @streamd_infos[ streamd ]
+      return if streamd_info[ :closed_write ]
+
       streamd_info[ :closing_write ] = true
       add_write( streamd )
     end
@@ -565,6 +631,13 @@ module Girl
         return
       end
 
+      im = data
+
+      unless @traff_ins.include?( im ) then
+        @traff_ins[ im ] = 0
+        @traff_outs[ im ] = 0
+      end
+
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       tund_port = tund.local_address.ip_port
@@ -578,6 +651,7 @@ module Girl
       add_read( tcpd, :tcpd )
 
       tund_info = {
+        im: im,               # 标识
         port: tund_port,      # 端口
         tcpd: tcpd,           # 对应的tcpd
         tcpd_port: tcpd_port, # tcpd端口
@@ -599,6 +673,28 @@ module Girl
 
       puts "p#{ Process.pid } #{ Time.new } a new tunnel #{ addrinfo.ip_unpack.inspect } - #{ tund_port }, #{ tcpd_port }, #{ @tund_infos.size } tunds"
       add_proxyd_ctlmsg_tund_port( tund_info )
+    end
+
+    ##
+    # read infod
+    #
+    def read_infod( infod )
+      data, addrinfo, rflags, *controls = infod.recvmsg
+      ctl_num = data[ 0 ].unpack( 'C' ).first
+      # puts "debug1 infod recv #{ ctl_num } #{ addrinfo.inspect }"
+
+      case ctl_num
+      when TRAFF_INFOS then
+        data2 = [ TRAFF_INFOS ].pack( 'C' )
+
+        @traff_ins.keys.sort.each do | im |
+          traff_in = @traff_ins[ im ]
+          traff_out = @traff_outs[ im ]
+          data2 << [ [ im.bytesize ].pack( 'C' ), im, [ traff_in, traff_out ].pack( 'Q>Q>' ) ].join
+        end
+
+        send_data( infod, data2, addrinfo )
+      end
     end
 
     ##
@@ -672,13 +768,18 @@ module Girl
       # puts "debug1 accept a streamd"
       tcpd_info = @tcpd_infos[ tcpd ]
       tund = tcpd_info[ :tund ]
+      tund_info = @tund_infos[ tund ]
 
       @streamd_infos[ streamd ] = {
-        tund: tund,       # 对应tund
-        dst: nil,         # 对应dst
-        domain_port: nil, # dst的目的地和端口
-        wbuff: '',        # 写前，写往近端stream
-        paused: false     # 是否已暂停读
+        tund: tund,           # 对应tund
+        im: tund_info[ :im ], # 标识
+        dst: nil,             # 对应dst
+        domain_port: nil,     # dst的目的地和端口
+        wbuff: '',            # 写前，写往近端stream
+        paused: false,        # 是否已暂停读
+        closing: false,       # 准备关闭
+        closing_write: false, # 准备关闭写
+        closed_write: false   # 已关闭写
       }
 
       add_read( streamd, :streamd )
@@ -688,6 +789,8 @@ module Girl
     # read dst
     #
     def read_dst( dst )
+      return if dst.closed?
+
       begin
         data = dst.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
@@ -702,6 +805,7 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
+      @traff_ins[ dst_info[ :im ] ] += data.bytesize
       streamd = dst_info[ :streamd ]
 
       if streamd then
@@ -732,6 +836,8 @@ module Girl
     # read streamd
     #
     def read_streamd( streamd )
+      return if streamd.closed?
+
       begin
         data = streamd.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
@@ -746,6 +852,7 @@ module Girl
       end
 
       streamd_info = @streamd_infos[ streamd ]
+      @traff_ins[ streamd_info[ :im ] ] += data.bytesize
       dst = streamd_info[ :dst ]
 
       unless dst then
@@ -866,12 +973,6 @@ module Girl
       # 处理关闭
       if dst_info[ :closing ] then
         close_dst( dst )
-
-        if streamd then
-          close_read_streamd( streamd )
-          set_streamd_closing_write( streamd )
-        end
-
         return
       end
 
@@ -904,6 +1005,7 @@ module Girl
       # puts "debug2 written dst #{ written }"
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
+      @traff_outs[ dst_info[ :im ] ] += written
     end
 
     ##
@@ -955,6 +1057,7 @@ module Girl
       # puts "debug2 written streamd #{ written }"
       data = data[ written..-1 ]
       streamd_info[ :wbuff ] = data
+      @traff_outs[ streamd_info[ :im ] ] += written
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]

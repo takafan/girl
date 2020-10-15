@@ -258,7 +258,20 @@ module Girl
     def close_src( src )
       # puts "debug1 close src"
       close_sock( src )
-      del_src_info( src )
+      src_info = del_src_info( src )
+      dst = src_info[ :dst ]
+
+      if dst then
+        close_read_dst( dst )
+        set_dst_closing_write( dst )
+      else
+        stream = src_info[ :stream ]
+
+        if stream then
+          close_read_stream( stream )
+          set_stream_closing_write( stream )
+        end
+      end
     end
 
     ##
@@ -287,6 +300,7 @@ module Girl
         src_info = @src_infos[ src ]
       end
 
+      src_info[ :closed_write ] = true
       src_info
     end
 
@@ -307,6 +321,7 @@ module Girl
         dst_info = @dst_infos[ dst ]
       end
 
+      dst_info[ :closed_write ] = true
       dst_info
     end
 
@@ -327,6 +342,7 @@ module Girl
         stream_info = @stream_infos[ stream ]
       end
 
+      stream_info[ :closed_write ] = true
       stream_info
     end
 
@@ -531,7 +547,8 @@ module Girl
         wbuff: '',              # 写前，从src读到的流量
         paused: false,          # 是否已暂停读
         closing: false,         # 准备关闭
-        closing_write: false    # 准备关闭写
+        closing_write: false,   # 准备关闭写
+        closed_write: false     # 已关闭写
       }
 
       @dst_infos[ dst ] = dst_info
@@ -590,10 +607,13 @@ module Girl
 
       domain = src_info[ :destination_domain ]
       @stream_infos[ stream ] = {
-        src: src,       # 对应src
-        domain: domain, # 目的地
-        wbuff: data,    # 写前，写往远端streamd
-        paused: false   # 是否已暂停读
+        src: src,             # 对应src
+        domain: domain,       # 目的地
+        wbuff: data,          # 写前，写往远端streamd
+        paused: false,        # 是否已暂停读
+        closing: false,       # 准备关闭
+        closing_write: false, # 准备关闭写
+        closed_write: false   # 已关闭写
       }
 
       src_info[ :dst_id ] = dst_id
@@ -750,9 +770,14 @@ module Girl
     def set_dst_closing( dst )
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
-      dst_info[ :closing ] = true
-      @reads.delete( dst )
-      add_write( dst )
+
+      if dst_info[ :closed_write ] then
+        close_read_dst( dst )
+      else
+        dst_info[ :closing ] = true
+        @reads.delete( dst )
+        add_write( dst )
+      end
     end
 
     ##
@@ -760,7 +785,10 @@ module Girl
     #
     def set_dst_closing_write( dst )
       return if dst.closed?
+
       dst_info = @dst_infos[ dst ]
+      return if dst_info[ :closed_write ]
+
       dst_info[ :closing_write ] = true
       add_write( dst )
     end
@@ -770,10 +798,16 @@ module Girl
     #
     def set_src_closing( src )
       return if src.closed?
-      @reads.delete( src )
+
       src_info = @src_infos[ src ]
-      src_info[ :closing ] = true
-      add_write( src )
+
+      if src_info[ :closed_write ] then
+        close_read_src( src )
+      else
+        @reads.delete( src )
+        src_info[ :closing ] = true
+        add_write( src )
+      end
     end
 
     ##
@@ -781,7 +815,10 @@ module Girl
     #
     def set_src_closing_write( src )
       return if src.closed?
+
       src_info = @src_infos[ src ]
+      return if src_info[ :closed_write ]
+
       src_info[ :closing_write ] = true
       add_write( src )
     end
@@ -807,22 +844,14 @@ module Girl
     end
 
     ##
-    # set stream closing
-    #
-    def set_stream_closing( stream )
-      return if stream.closed?
-      stream_info = @stream_infos[ stream ]
-      stream_info[ :closing ] = true
-      @reads.delete( stream )
-      add_write( stream )
-    end
-
-    ##
     # set stream closing write
     #
     def set_stream_closing_write( stream )
       return if stream.closed?
+
       stream_info = @stream_infos[ stream ]
+      return if stream_info[ :closed_write ]
+
       stream_info[ :closing_write ] = true
       add_write( stream )
     end
@@ -894,7 +923,8 @@ module Girl
         last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由stream发出）的时间
         paused: false,           # 是否已暂停读
         closing: false,          # 准备关闭
-        closing_write: false     # 准备关闭写
+        closing_write: false,    # 准备关闭写
+        closed_write: false      # 已关闭写
       }
 
       add_read( src, :src )
@@ -961,6 +991,8 @@ module Girl
     # read src
     #
     def read_src( src )
+      return if src.closed?
+
       begin
         data = src.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
@@ -1164,6 +1196,8 @@ module Girl
     # read dst
     #
     def read_dst( dst )
+      return if dst.closed?
+
       begin
         data = dst.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
@@ -1186,6 +1220,8 @@ module Girl
     # read stream
     #
     def read_stream( stream )
+      return if stream.closed?
+
       begin
         data = stream.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
@@ -1250,19 +1286,6 @@ module Girl
       # 处理关闭
       if src_info[ :closing ] then
         close_src( src )
-
-        if dst then
-          close_read_dst( dst )
-          set_dst_closing_write( dst )
-        else
-          stream = src_info[ :stream ]
-
-          if stream then
-            close_read_stream( stream )
-            set_stream_closing_write( stream )
-          end
-        end
-
         return
       end
 

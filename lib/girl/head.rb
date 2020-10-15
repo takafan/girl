@@ -5,6 +5,8 @@ module Girl
   SEND_HELLO_COUNT      = 10                # hello/a new source最多发几次
   SEND_HELLO_INTERVAL   = 0.5               # 发送hello/a new source间隔
   EXPIRE_AFTER          = 300               # 多久没有新流量，过期
+  RESET_TRAFF_DAY       = 1                 # 流量计数重置日，0为不重置
+  CHECK_TRAFF_INTERVAL  = 86400             # 检查今天是否是流量计数重置日间隔
   CHECK_EXPIRE_INTERVAL = 30                # 检查过期间隔
   CHECK_RESUME_INTERVAL = 1                 # 检查恢复读间隔
   RESOLV_CACHE_EXPIRE   = 300               # dns查询结果缓存多久过期
@@ -27,6 +29,7 @@ module Girl
   CONTINUE              = 17
   IS_RESEND_READY       = 18
   RESEND_READY          = 19
+  TRAFF_INFOS           = 101
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
   RESERVED_ROUTE = <<EOF
