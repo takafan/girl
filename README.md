@@ -80,10 +80,6 @@ require 'girl/proxyd'
 Girl::Proxyd.new '/etc/girl.conf.json'
 ```
 
-```bash
-ruby proxyd.rb
-```
-
 近端，可以是本机，树莓派，内网服务器，路由器：
 
 ```ruby
@@ -91,10 +87,6 @@ ruby proxyd.rb
 require 'girl/proxy'
 
 Girl::Proxy.new '/boot/girl.conf.json'
-```
-
-```bash
-ruby proxy.rb
 ```
 
 girl.conf.json的格式：
@@ -136,83 +128,6 @@ ytimg.com
 很多网站流行把静态资源放到额外的一个域名下，需要自行f12探索一下。
 
 不写的话，本地解析google.com会得到假ip，但只要假ip取值取在国内ip段之外，还是会走远端重新解析。
-
-启好了，测试一下：
-
-```bash
-curl -x http://127.0.0.1:6666 https://www.google.com/
-curl -x socks5h://127.0.0.1:6666 https://www.google.com/
-```
-
-妹子同时支持http和socks5代理。
-
-## docker
-
-快速体验可以直接使用我发布在docker hub的妹子镜像。
-
-远端一键启动：
-
-```bash
-docker run -d --restart=always -e USE=proxyd --network=host -it takafan/girl
-```
-
-近端一键启动：
-
-```bash
-docker run -d --restart=always -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -it takafan/girl
-```
-
-## mac版docker，cpu爆满bug
-
-bug细节，可以不看：容器里，当妹子近端发起向目的地的连接，docker会查看当前网络，如果当前网络勾了https代理，会生成一段针对目的地的CONNECT，改为请求代理地址，于是妹子又得到一个CONNECT，我连我自己，无限连，cpu爆满。
-
-不勾https代理，避免bug。
-
-不勾的话chrome有问题，好在有兼顾chrome的设法：只勾socks代理。
-
-dropbox又有问题，自动检测不灵了，好在dropbox支持设手动。
-
-## 设备端
-
-远端近端启好后，在想用的设备上设代理，填近端的地址。
-
-不论windows，mac，手机，游戏机，代理功能都有自带。
-
-windows: 开始 > 设置 > 网络和Internet > 代理 > 手动设置代理 > 使用代理服务器 > 开 > 填写地址和端口 > 保存
-
-macos: 系统偏好设置 > 网络 > 选中一个连接 > 高级 > 代理 > 打勾SOCKS代理 > 填写地址和端口 > 好 > 应用
-
-ios: 设置 > 无线局域网 > wifi详情 > 配置代理 > 手动 > 填写服务器和端口 > 存储
-
-android: 设置 > WLAN > wifi详情 > 代理 > 手动 > 填写主机名和端口 > 保存
-
-ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线 > 自订 > 选择一个连接 > 一路默认到Proxy伺服器 > 使用 > 填写位址和Port码 > 继续
-
-switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填写地址和端口 > 保存
-
-## ipv6
-
-妹子支持ipv6，优先走ipv6。如果近端所在的操作系统打开了ipv6，可以获取到ipv6地址，也可以dns解析到目的地的ipv6地址，还不够，需要连的通。
-
-简单的测法，连光猫wifi，访问test-ipv6.com，看通不通。
-
-如果不通，需关闭近端系统上的ipv6。
-
-windows: 开始 > 设置 > 网络和Internet > 以太网 > 更改适配器选项 > 右键属性 > 取消勾选Internet协议版本6（TCP/IPv6）
-
-mac:
-
-```bash
-networksetup -setv6off Ethernet
-networksetup -setv6off Wi-Fi
-```
-
-linux:
-
-```bash
-echo -e 'net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1' > /etc/sysctl.d/59-disable-ipv6.conf
-sysctl --system
-```
 
 ## 应对邪恶
 
@@ -295,6 +210,10 @@ end
 Girl::Proxyd.new '/etc/girl.conf.json'
 ```
 
+```bash
+ruby proxyd.rb
+```
+
 ```ruby
 # proxy.rb
 require 'girl/proxy'
@@ -318,4 +237,85 @@ module Girl
 end
 
 Girl::Proxy.new '/boot/girl.conf.json'
+```
+
+```bash
+ruby proxy.rb
+```
+
+启好了，测试一下：
+
+```bash
+curl -x http://127.0.0.1:6666 https://www.google.com/
+curl -x socks5h://127.0.0.1:6666 https://www.google.com/
+```
+
+妹子同时支持http和socks5代理。
+
+## docker
+
+快速体验可以直接使用我发布在docker hub的妹子镜像。
+
+远端一键启动：
+
+```bash
+docker run -d --restart=always -e USE=proxyd --network=host -it takafan/girl
+```
+
+近端一键启动：
+
+```bash
+docker run -d --restart=always -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -it takafan/girl
+```
+
+## mac版docker，cpu爆满bug
+
+bug细节，可以不看：容器里，当妹子近端发起向目的地的连接，docker会查看当前网络，如果当前网络勾了https代理，会生成一段针对目的地的CONNECT，改为请求代理地址，于是妹子又得到一个CONNECT，我连我自己，无限连，cpu爆满。
+
+不勾https代理，避免bug。
+
+不勾的话chrome有问题，好在有兼顾chrome的设法：只勾socks代理。
+
+dropbox又有问题，自动检测不灵了，好在dropbox支持设手动。
+
+## 设备端
+
+远端近端启好后，在想用的设备上设代理，填近端的地址。
+
+不论windows，mac，手机，游戏机，代理功能都有自带。
+
+windows: 开始 > 设置 > 网络和Internet > 代理 > 手动设置代理 > 使用代理服务器 > 开 > 填写地址和端口 > 保存
+
+macos: 系统偏好设置 > 网络 > 选中一个连接 > 高级 > 代理 > 打勾SOCKS代理 > 填写地址和端口 > 好 > 应用
+
+ios: 设置 > 无线局域网 > wifi详情 > 配置代理 > 手动 > 填写服务器和端口 > 存储
+
+android: 设置 > WLAN > wifi详情 > 代理 > 手动 > 填写主机名和端口 > 保存
+
+ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线 > 自订 > 选择一个连接 > 一路默认到Proxy伺服器 > 使用 > 填写位址和Port码 > 继续
+
+switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填写地址和端口 > 保存
+
+## ipv6
+
+妹子支持ipv6，优先走ipv6。如果近端所在的操作系统打开了ipv6，可以获取到ipv6地址，也可以dns解析到目的地的ipv6地址，还不够，需要连的通。
+
+简单的测法，连光猫wifi，访问test-ipv6.com，看通不通。
+
+如果不通，需关闭近端系统上的ipv6。
+
+windows: 开始 > 设置 > 网络和Internet > 以太网 > 更改适配器选项 > 右键属性 > 取消勾选Internet协议版本6（TCP/IPv6）
+
+mac:
+
+```bash
+networksetup -setv6off Ethernet
+networksetup -setv6off Wi-Fi
+```
+
+linux:
+
+```bash
+echo -e 'net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1' > /etc/sysctl.d/59-disable-ipv6.conf
+sysctl --system
 ```
