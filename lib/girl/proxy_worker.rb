@@ -785,11 +785,11 @@ module Girl
     def set_dst_closing( dst )
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
+      dst_info[ :closing ] = true
 
       if dst_info[ :closed_write ] then
-        close_read_dst( dst )
+        add_read( dst )
       else
-        dst_info[ :closing ] = true
         @reads.delete( dst )
         add_write( dst )
       end
@@ -813,14 +813,13 @@ module Girl
     #
     def set_src_closing( src )
       return if src.closed?
-
       src_info = @src_infos[ src ]
+      src_info[ :closing ] = true
 
       if src_info[ :closed_write ] then
-        close_read_src( src )
+        add_read( src )
       else
         @reads.delete( src )
-        src_info[ :closing ] = true
         add_write( src )
       end
     end
@@ -1029,6 +1028,13 @@ module Girl
       end
 
       src_info = @src_infos[ src ]
+
+      # 处理关闭
+      if src_info[ :closing ] then
+        close_src( src )
+        return
+      end
+
       proxy_type = src_info[ :proxy_type ]
 
       case proxy_type
@@ -1227,6 +1233,13 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
+
+      # 处理关闭
+      if dst_info[ :closing ] then
+        close_dst( dst )
+        return
+      end
+
       src = dst_info[ :src ]
       add_src_wbuff( src, data )
     end
