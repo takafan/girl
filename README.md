@@ -152,9 +152,7 @@ tcp也存在同样的被限速200K，但仅是我遇到的个例：电信被限�
 CONNECT google.com HTTP/1.1\r\n\r\n
 ```
 
-妹子提供加解密，开放式的。
-
-覆盖下面两个方法即可：
+妹子提供开放式的加解密。覆盖下面两个方法即可：
 
 ```ruby
 def encode( data )
@@ -170,18 +168,19 @@ end
 例如：
 
 ```ruby
-ALT = { '.' => '^', '^' => '.' }
+ALT = { '.' => '^', '^' => '.', 'g' => 'o', 'o' => 'g' }
 
 def encode( data )
-  data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
+  data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
 end
 
 def decode( data )
-  data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
+  data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
 end
 ```
 
-域名都含点，那就把点转了。可还行？
+把点转了，等于混淆了所有域名。域名是https唯一的漏洞。
+而对于明文的http，转掉点不一定够，仍然可能吃到90秒阻断，例如chrome后台程序产生的明文流量。对换g和o，可以避免chrome引发阻断。
 
 完整例子：
 
@@ -191,7 +190,7 @@ require 'girl/proxyd'
 
 module Girl
   module Custom
-    ALT = { '.' => '^', '^' => '.' }
+    ALT = { '.' => '^', '^' => '.', 'g' => 'o', 'o' => 'g' }
 
     def encode( data )
       confuse( data )
@@ -202,13 +201,15 @@ module Girl
     end
 
     def confuse( data )
-      data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
+      data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
     end
   end
 end
 
 Girl::Proxyd.new '/etc/girl.conf.json'
 ```
+
+启远端：
 
 ```bash
 ruby proxyd.rb
@@ -220,7 +221,7 @@ require 'girl/proxy'
 
 module Girl
   module Custom
-    ALT = { '.' => '^', '^' => '.' }
+    ALT = { '.' => '^', '^' => '.', 'g' => 'o', 'o' => 'g' }
 
     def encode( data )
       confuse( data )
@@ -231,13 +232,15 @@ module Girl
     end
 
     def confuse( data )
-      data.gsub( /\.|\^/ ){ | c | ALT[ c ] }
+      data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
     end
   end
 end
 
 Girl::Proxy.new '/boot/girl.conf.json'
 ```
+
+启近端：
 
 ```bash
 ruby proxy.rb
