@@ -37,7 +37,6 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
-          # 先读，再写，避免打上关闭标记后读到
           rs.each do | sock |
             case @roles[ sock ]
             when :dotr then
@@ -554,9 +553,7 @@ module Girl
       end
 
       # puts "debug1 a new dst #{ dst.local_address.inspect }"
-      local_port = dst.local_address.ip_port
       dst_info = {
-        local_port: local_port, # 本地端口
         src: src,               # 对应src
         domain: domain,         # 目的地
         wbuff: '',              # 写前，从src读到的流量
@@ -785,11 +782,11 @@ module Girl
     def set_dst_closing( dst )
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
-      dst_info[ :closing ] = true
-
+      
       if dst_info[ :closed_write ] then
-        add_read( dst )
+        close_dst( dst )
       else
+        dst_info[ :closing ] = true
         @reads.delete( dst )
         add_write( dst )
       end
@@ -814,11 +811,11 @@ module Girl
     def set_src_closing( src )
       return if src.closed?
       src_info = @src_infos[ src ]
-      src_info[ :closing ] = true
 
       if src_info[ :closed_write ] then
-        add_read( src )
+        close_src( src )
       else
+        src_info[ :closing ] = true
         @reads.delete( src )
         add_write( src )
       end

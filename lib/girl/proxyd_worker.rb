@@ -39,7 +39,6 @@ module Girl
         rs, ws = IO.select( @reads, @writes )
 
         @mutex.synchronize do
-          # 先读，再写，避免打上关闭标记后读到
           rs.each do | sock |
             case @roles[ sock ]
             when :dotr then
@@ -544,11 +543,11 @@ module Girl
     def set_dst_closing( dst )
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
-      dst_info[ :closing ] = true
 
       if dst_info[ :closed_write ] then
-        add_read( dst )
+        close_dst( dst )
       else
+        dst_info[ :closing ] = true
         @reads.delete( dst )
         add_write( dst )
       end
@@ -573,11 +572,11 @@ module Girl
     def set_streamd_closing( streamd )
       return if streamd.closed?
       streamd_info = @streamd_infos[ streamd ]
-      streamd_info[ :closing ] = true
 
       if streamd_info[ :closed_write ] then
-        add_read( streamd )
+        close_streamd( streamd )
       else
+        streamd_info[ :closing ] = true
         @reads.delete( streamd )
         add_write( streamd )
       end
