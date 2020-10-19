@@ -118,11 +118,32 @@ module Girl
     # add read
     #
     def add_read( sock, role = nil )
-      unless @reads.include?( sock ) then
+      if !sock.closed? && !@reads.include?( sock ) then
         @reads << sock
 
         if role then
           @roles[ sock ] = role
+        end
+      end
+    end
+
+    ##
+    # add streamd wbuff
+    #
+    def add_streamd_wbuff( streamd, data )
+      return if streamd.closed?
+      streamd_info = @streamd_infos[ streamd ]
+      streamd_info[ :wbuff ] << data
+      add_write( streamd )
+
+      if streamd_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        dst = streamd_info[ :dst ]
+        dst_info = @dst_infos[ dst ]
+
+        unless dst_info[ :paused ] then
+          puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_info[ :domain_port ] }"
+          dst_info[ :paused ] = true
+          @reads.delete( dst )
         end
       end
     end
@@ -809,13 +830,6 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
-
-      # 处理关闭
-      if dst_info[ :closing ] then
-        close_dst( dst )
-        return
-      end
-
       @traff_ins[ dst_info[ :im ] ] += data.bytesize
       streamd = dst_info[ :streamd ]
 
@@ -824,14 +838,7 @@ module Girl
           streamd_info = @streamd_infos[ streamd ]
           data = @custom.encode( data )
           # puts "debug2 add streamd.wbuff encoded #{ data.bytesize }"
-          streamd_info[ :wbuff ] << data
-          add_write( streamd )
-
-          if streamd_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-            puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_info[ :domain_port ] }"
-            dst_info[ :paused ] = true
-            @reads.delete( dst )
-          end
+          add_streamd_wbuff( streamd, data )
         end
       else
         dst_info[ :rbuff ] << data
@@ -863,13 +870,6 @@ module Girl
       end
 
       streamd_info = @streamd_infos[ streamd ]
-
-      # 处理关闭
-      if streamd_info[ :closing ] then
-        close_streamd( streamd )
-        return
-      end
-
       @traff_ins[ streamd_info[ :im ] ] += data.bytesize
       dst = streamd_info[ :dst ]
 
@@ -897,7 +897,8 @@ module Girl
 
         unless dst_info[ :rbuff ].empty? then
           # puts "debug1 encode and move dst.rbuff to streamd.wbuff"
-          streamd_info[ :wbuff ] << @custom.encode( dst_info[ :rbuff ] )
+          data2 = @custom.encode( dst_info[ :rbuff ] )
+          add_streamd_wbuff( streamd, data2 )
         end
 
         dst_info[ :streamd ] = streamd

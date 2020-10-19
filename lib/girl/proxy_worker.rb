@@ -107,7 +107,7 @@ module Girl
     # add read
     #
     def add_read( sock, role = nil )
-      unless @reads.include?( sock ) then
+      if !sock.closed? && !@reads.include?( sock ) then
         @reads << sock
 
         if role then
@@ -757,12 +757,12 @@ module Girl
             unless src.closed? then
               puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
               deal_with_destination_ip( src, ip_info )
+              next_tick
             end
           else
             set_src_closing( src )
+            next_tick
           end
-
-          next_tick
         end
       end
     end
@@ -782,7 +782,7 @@ module Girl
     def set_dst_closing( dst )
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
-      
+
       if dst_info[ :closed_write ] then
         close_dst( dst )
       else
@@ -838,10 +838,6 @@ module Girl
     # set src proxy type tunnel
     #
     def set_src_proxy_type_tunnel( src )
-      if @tun.nil? || @tun.closed? then
-        new_a_tun
-      end
-
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :tunnel
       src_id = src_info[ :id ]
@@ -939,6 +935,10 @@ module Girl
       }
 
       add_read( src, :src )
+
+      if @tun.nil? || @tun.closed? then
+        new_a_tun
+      end
     end
 
     ##
@@ -1025,13 +1025,6 @@ module Girl
       end
 
       src_info = @src_infos[ src ]
-
-      # 处理关闭
-      if src_info[ :closing ] then
-        close_src( src )
-        return
-      end
-
       proxy_type = src_info[ :proxy_type ]
 
       case proxy_type
@@ -1230,13 +1223,6 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
-
-      # 处理关闭
-      if dst_info[ :closing ] then
-        close_dst( dst )
-        return
-      end
-
       src = dst_info[ :src ]
       add_src_wbuff( src, data )
     end
