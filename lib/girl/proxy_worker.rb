@@ -13,6 +13,7 @@ module Girl
       @mutex = Mutex.new
       @reads = []
       @writes = []
+      @closing_srcs = []
       @roles = {}         # sock => :dotr / :proxy / :src / :dst / :tun / :stream
       @src_infos = {}     # src => {}
       @dst_infos = {}     # dst => {}
@@ -120,7 +121,7 @@ module Girl
     # add src wbuff
     #
     def add_src_wbuff( src, data )
-      return if src.closed?
+      return if src.closed? || @closing_srcs.include?( src )
       src_info = @src_infos[ src ]
       src_info[ :wbuff ] << data
       src_info[ :last_recv_at ] = Time.new
@@ -166,7 +167,7 @@ module Girl
     # add write
     #
     def add_write( sock )
-      unless @writes.include?( sock ) then
+      if !sock.closed? && !@writes.include?( sock ) then
         @writes << sock
       end
     end
@@ -294,7 +295,6 @@ module Girl
     def close_tun( tun )
       # puts "debug1 close tun"
       close_sock( tun )
-      @tun_info[ :srcs ].each{ | _, src | set_src_closing( src ) }
     end
 
     ##
@@ -314,7 +314,6 @@ module Girl
         src_info = @src_infos[ src ]
       end
 
-      src_info[ :closed_write ] = true
       src_info
     end
 
@@ -335,7 +334,6 @@ module Girl
         dst_info = @dst_infos[ dst ]
       end
 
-      dst_info[ :closed_write ] = true
       dst_info
     end
 
@@ -356,7 +354,6 @@ module Girl
         stream_info = @stream_infos[ stream ]
       end
 
-      stream_info[ :closed_write ] = true
       stream_info
     end
 
@@ -402,7 +399,7 @@ module Girl
             trigger = false
             now = Time.new
 
-            if @tun && !@tun.closed? then
+            if @tun && !@tun.closed? && !@tun_info[ :closing ] then
               last_recv_at = @tun_info[ :last_recv_at ] || @tun_info[ :created_at ]
 
               if @tun_info[ :srcs ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
@@ -512,7 +509,7 @@ module Girl
 
         Thread.new do
           SEND_HELLO_COUNT.times do | i |
-            if @tun.nil? || @tun.closed? || src.closed? || src_info[ :stream ] then
+            if @tun.nil? || @tun.closed? || @tun_info[ :closing ] || src.closed? || src_info[ :stream ] then
               # puts "debug1 break loop send a new source #{ src_info[ :dst_port ] }"
               break
             end
@@ -554,13 +551,11 @@ module Girl
 
       # puts "debug1 a new dst #{ dst.local_address.inspect }"
       dst_info = {
-        src: src,               # 对应src
-        domain: domain,         # 目的地
-        wbuff: '',              # 写前，从src读到的流量
-        paused: false,          # 是否已暂停读
-        closing: false,         # 准备关闭
-        closing_write: false,   # 准备关闭写
-        closed_write: false     # 已关闭写
+        src: src,            # 对应src
+        domain: domain,      # 目的地
+        wbuff: '',           # 写前，从src读到的流量
+        paused: false,       # 是否已暂停读
+        closing_write: false # 准备关闭写
       }
 
       @dst_infos[ dst ] = dst_info
@@ -623,9 +618,7 @@ module Girl
         domain: domain,       # 目的地
         wbuff: data,          # 写前，写往远端streamd
         paused: false,        # 是否已暂停读
-        closing: false,       # 准备关闭
-        closing_write: false, # 准备关闭写
-        closed_write: false   # 已关闭写
+        closing_write: false  # 准备关闭写
       }
 
       src_info[ :dst_id ] = dst_id
@@ -689,7 +682,7 @@ module Girl
 
       Thread.new do
         SEND_HELLO_COUNT.times do | i |
-          if @tun.nil? || @tun.closed? || @tun_info[ :tund_addr ] then
+          if @tun.nil? || @tun.closed? || @tun_info[ :closing ] || @tun_info[ :tund_addr ] then
             # puts "debug1 break loop send hello"
             break
           end
@@ -777,29 +770,13 @@ module Girl
     end
 
     ##
-    # set dst closing
-    #
-    def set_dst_closing( dst )
-      return if dst.closed?
-      dst_info = @dst_infos[ dst ]
-
-      if dst_info[ :closed_write ] then
-        close_dst( dst )
-      else
-        dst_info[ :closing ] = true
-        @reads.delete( dst )
-        add_write( dst )
-      end
-    end
-
-    ##
     # set dst closing write
     #
     def set_dst_closing_write( dst )
       return if dst.closed?
 
       dst_info = @dst_infos[ dst ]
-      return if dst_info[ :closed_write ]
+      return if dst_info[ :closing_write ]
 
       dst_info[ :closing_write ] = true
       add_write( dst )
@@ -809,26 +786,21 @@ module Girl
     # set src is closing
     #
     def set_src_closing( src )
-      return if src.closed?
-      src_info = @src_infos[ src ]
-
-      if src_info[ :closed_write ] then
-        close_src( src )
-      else
-        src_info[ :closing ] = true
-        @reads.delete( src )
-        add_write( src )
-      end
+      return if src.closed? || @closing_srcs.include?( src )
+      @reads.delete( src )
+      @writes.delete( src )
+      @closing_srcs << src
+      add_write( @tun ) if @tun
     end
 
     ##
     # set src closing write
     #
     def set_src_closing_write( src )
-      return if src.closed?
+      return if src.closed? || @closing_srcs.include?( src )
 
       src_info = @src_infos[ src ]
-      return if src_info[ :closed_write ]
+      return if src_info[ :closing_write ]
 
       src_info[ :closing_write ] = true
       add_write( src )
@@ -857,7 +829,7 @@ module Girl
       return if stream.closed?
 
       stream_info = @stream_infos[ stream ]
-      return if stream_info[ :closed_write ]
+      return if stream_info[ :closing_write ]
 
       stream_info[ :closing_write ] = true
       add_write( stream )
@@ -867,10 +839,11 @@ module Girl
     # set tun is closing
     #
     def set_tun_closing
-      return if @tun.closed?
+      return if @tun.closed? || @tun_info[ :closing ]
       @tun_info[ :closing ] = true
       @reads.delete( @tun )
       add_write( @tun )
+      @tun_info[ :srcs ].each{ | _, src | set_src_closing( src ) }
     end
 
     ##
@@ -929,9 +902,7 @@ module Girl
         last_recv_at: nil,       # 上一次收到新流量（由dst收到，或者由stream收到）的时间
         last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由stream发出）的时间
         paused: false,           # 是否已暂停读
-        closing: false,          # 准备关闭
-        closing_write: false,    # 准备关闭写
-        closed_write: false      # 已关闭写
+        closing_write: false     # 准备关闭写
       }
 
       add_read( src, :src )
@@ -1258,6 +1229,11 @@ module Girl
     #
     def write_tun( tun )
       # 处理关闭
+      if @closing_srcs.any? then
+        @closing_srcs.each{ | src | close_src( src ) }
+        @closing_srcs.clear
+      end
+
       if @tun_info[ :closing ] then
         close_tun( tun )
         return
@@ -1293,14 +1269,6 @@ module Girl
       return if src.closed?
       src_info = @src_infos[ src ]
       dst = src_info[ :dst ]
-
-      # 处理关闭
-      if src_info[ :closing ] then
-        close_src( src )
-        return
-      end
-
-      # 处理wbuff
       data = src_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1346,13 +1314,6 @@ module Girl
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
       src = dst_info[ :src ]
-
-      # 处理关闭
-      if dst_info[ :closing ] then
-        close_dst( dst )
-        return
-      end
-
       data = dst_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1395,13 +1356,6 @@ module Girl
       return if stream.closed?
       stream_info = @stream_infos[ stream ]
       src = stream_info[ :src ]
-
-      # 处理关闭
-      if stream_info[ :closing ] then
-        close_stream( stream )
-        return
-      end
-
       data = stream_info[ :wbuff ]
 
       # 写前为空，处理关闭写

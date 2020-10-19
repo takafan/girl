@@ -9,6 +9,8 @@ module Girl
       @mutex = Mutex.new
       @reads = []
       @writes = []
+      @closing_dsts = []
+      @closing_streamds = []
       @roles = {}           # sock => :dotr / :proxyd / :infod / :dst / :tund / :tcpd / :streamd
       @tund_infos = {}      # tund => {}
       @tcpd_infos = {}      # tcpd => {}
@@ -131,7 +133,7 @@ module Girl
     # add streamd wbuff
     #
     def add_streamd_wbuff( streamd, data )
-      return if streamd.closed?
+      return if streamd.closed? || @closing_streamds.include?( streamd )
       streamd_info = @streamd_infos[ streamd ]
       streamd_info[ :wbuff ] << data
       add_write( streamd )
@@ -152,7 +154,7 @@ module Girl
     # add write
     #
     def add_write( sock )
-      unless @writes.include?( sock ) then
+      if !sock.closed? && !@writes.include?( sock ) then
         @writes << sock
       end
     end
@@ -248,7 +250,6 @@ module Girl
       tcpd = tund_info[ :tcpd ]
       close_sock( tcpd )
       @tcpd_infos.delete( tcpd )
-      tund_info[ :dsts ].each{ | _, dst | set_dst_closing( dst ) }
       @tunneling_tunds.delete( tund_info[ :tun_addr ] )
     end
 
@@ -269,7 +270,6 @@ module Girl
         dst_info = @dst_infos[ dst ]
       end
 
-      dst_info[ :closed_write ] = true
       dst_info
     end
 
@@ -290,7 +290,6 @@ module Girl
         streamd_info = @streamd_infos[ streamd ]
       end
 
-      streamd_info[ :closed_write ] = true
       streamd_info
     end
 
@@ -325,9 +324,7 @@ module Girl
         last_recv_at: nil,        # 上一次收到新流量（由streamd收到）的时间
         last_sent_at: nil,        # 上一次发出流量（由streamd发出）的时间
         paused: false,            # 是否已暂停读
-        closing: false,           # 准备关闭
-        closing_write: false,     # 准备关闭写
-        closed_write: false       # 已关闭写
+        closing_write: false      # 准备关闭写
       }
 
       add_read( dst, :dst )
@@ -370,12 +367,14 @@ module Girl
             now = Time.new
 
             @tund_infos.each do | tund, tund_info |
-              last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
+              unless tund_info[ :closing ] then
+                last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
 
-              if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
-                puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
-                set_tund_closing( tund )
-                trigger = true
+                if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
+                  puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
+                  set_tund_closing( tund )
+                  trigger = true
+                end
               end
             end
 
@@ -562,26 +561,22 @@ module Girl
     # set dst closing
     #
     def set_dst_closing( dst )
-      return if dst.closed?
+      return if dst.closed? || @closing_dsts.include?( dst )
+      @reads.delete( dst )
+      @writes.delete( dst )
+      @closing_dsts << dst
       dst_info = @dst_infos[ dst ]
-
-      if dst_info[ :closed_write ] then
-        close_dst( dst )
-      else
-        dst_info[ :closing ] = true
-        @reads.delete( dst )
-        add_write( dst )
-      end
+      add_write( dst_info[ :tund ] )
     end
 
     ##
     # set dst closing write
     #
     def set_dst_closing_write( dst )
-      return if dst.closed?
+      return if dst.closed? || @closing_dsts.include?( dst )
 
       dst_info = @dst_infos[ dst ]
-      return if dst_info[ :closed_write ]
+      return if dst_info[ :closing_write ]
 
       dst_info[ :closing_write ] = true
       add_write( dst )
@@ -591,26 +586,22 @@ module Girl
     # set streamd closing
     #
     def set_streamd_closing( streamd )
-      return if streamd.closed?
+      return if streamd.closed? || @closing_streamds.include?( streamd )
+      @reads.delete( streamd )
+      @writes.delete( streamd )
+      @closing_streamds << streamd
       streamd_info = @streamd_infos[ streamd ]
-
-      if streamd_info[ :closed_write ] then
-        close_streamd( streamd )
-      else
-        streamd_info[ :closing ] = true
-        @reads.delete( streamd )
-        add_write( streamd )
-      end
+      add_write( streamd_info[ :tund ] )
     end
 
     ##
     # set streamd closing write
     #
     def set_streamd_closing_write( streamd )
-      return if streamd.closed?
+      return if streamd.closed? || @closing_streamds.include?( streamd )
 
       streamd_info = @streamd_infos[ streamd ]
-      return if streamd_info[ :closed_write ]
+      return if streamd_info[ :closing_write ]
 
       streamd_info[ :closing_write ] = true
       add_write( streamd )
@@ -621,10 +612,14 @@ module Girl
     #
     def set_tund_closing( tund )
       return if tund.closed?
+
       tund_info = @tund_infos[ tund ]
+      return if tund_info[ :closing ]
+
       tund_info[ :closing ] = true
       @reads.delete( tund )
       add_write( tund )
+      tund_info[ :dsts ].each{ | _, dst | set_dst_closing( dst ) }
     end
 
     ##
@@ -783,6 +778,8 @@ module Girl
     # read tcpd
     #
     def read_tcpd( tcpd )
+      return if tcpd.closed?
+
       begin
         streamd, addrinfo = tcpd.accept_nonblock
       rescue IO::WaitReadable, Errno::EINTR
@@ -802,9 +799,7 @@ module Girl
         domain_port: nil,     # dst的目的地和端口
         wbuff: '',            # 写前，写往近端stream
         paused: false,        # 是否已暂停读
-        closing: false,       # 准备关闭
-        closing_write: false, # 准备关闭写
-        closed_write: false   # 已关闭写
+        closing_write: false  # 准备关闭写
       }
 
       add_read( streamd, :streamd )
@@ -907,7 +902,7 @@ module Girl
         return if data.empty?
       end
 
-      unless dst.closed? then
+      if !dst.closed? && !@closing_dsts.include?( dst ) then
         dst_info = @dst_infos[ dst ]
         data = @custom.decode( data )
         # puts "debug2 add dst.wbuff decoded #{ data.bytesize }"
@@ -950,6 +945,16 @@ module Girl
       tund_info = @tund_infos[ tund ]
 
       # 处理关闭
+      if @closing_dsts.any? then
+        @closing_dsts.each{ | dst | close_dst( dst ) }
+        @closing_dsts.clear
+      end
+
+      if @closing_streamds.any? then
+        @closing_streamds.each{ | streamd | close_streamd( streamd ) }
+        @closing_streamds.clear
+      end
+
       if tund_info[ :closing ] then
         if tund_info[ :changed_tun_addr ] then
           data = [ 0, IP_CHANGED ].pack( 'Q>C' )
@@ -988,13 +993,6 @@ module Girl
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
       streamd = dst_info[ :streamd ]
-
-      # 处理关闭
-      if dst_info[ :closing ] then
-        close_dst( dst )
-        return
-      end
-
       data = dst_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1034,13 +1032,6 @@ module Girl
       return if streamd.closed?
       streamd_info = @streamd_infos[ streamd ]
       dst = streamd_info[ :dst ]
-
-      # 处理关闭
-      if streamd_info[ :closing ] then
-        close_streamd( streamd )
-        return
-      end
-
       data = streamd_info[ :wbuff ]
 
       # 写前为空，处理关闭写
