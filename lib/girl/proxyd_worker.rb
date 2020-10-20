@@ -9,8 +9,13 @@ module Girl
       @mutex = Mutex.new
       @reads = []
       @writes = []
+      @closing_tunds = []
       @closing_dsts = []
       @closing_streamds = []
+      @paused_dsts = []
+      @paused_streamds = []
+      @resume_dsts = []
+      @resume_streamds = []
       @roles = {}           # sock => :dotr / :proxyd / :infod / :dst / :tund / :tcpd / :streamd
       @tund_infos = {}      # tund => {}
       @tcpd_infos = {}      # tcpd => {}
@@ -99,12 +104,30 @@ module Girl
     private
 
     ##
-    # add proxyd ctlmsg
+    # add closing dst
     #
-    def add_proxyd_ctlmsg_tund_port( tund_info )
-      data = [ 0, TUND_PORT, tund_info[ :port ], tund_info[ :tcpd_port ] ].pack( 'Q>Cnn' )
-      @proxyd_info[ :ctlmsgs ] << [ data, tund_info[ :tun_addr ] ]
-      add_write( @proxyd )
+    def add_closing_dst( dst )
+      return if dst.closed? || @closing_dsts.include?( dst )
+      @closing_dsts << dst
+      next_tick
+    end
+
+    ##
+    # add closing streamd
+    #
+    def add_closing_streamd( streamd )
+      return if streamd.closed? || @closing_streamds.include?( streamd )
+      @closing_streamds << streamd
+      next_tick
+    end
+
+    ##
+    # add closing tund
+    #
+    def add_closing_tund( tund )
+      return if tund.closed? || @closing_tunds.include?( tund )
+      @closing_tunds << tund
+      next_tick
     end
 
     ##
@@ -114,6 +137,63 @@ module Girl
       tund_info = @tund_infos[ tund ]
       tund_info[ :ctlmsgs ] << data
       add_write( tund )
+    end
+
+    ##
+    # add dst rbuff
+    #
+    def add_dst_rbuff( dst, data )
+      dst_info = @dst_infos[ dst ]
+      dst_info[ :rbuff ] << data
+
+      if dst_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
+        # puts "debug1 dst.rbuff full"
+        add_closing_dst( dst )
+      end
+    end
+
+    ##
+    # add dst wbuff
+    #
+    def add_dst_wbuff( dst, data )
+      return if dst.closed? || @closing_dsts.include?( dst )
+
+      dst_info = @dst_infos[ dst ]
+      dst_info[ :wbuff ] << data
+      dst_info[ :last_recv_at ] = Time.new
+      add_write( dst )
+
+      if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "p#{ Process.pid } #{ Time.new } pause streamd #{ dst_info[ :domain_port ] }"
+        add_paused_streamd( dst_info[ :streamd ] )
+      end
+    end
+
+    ##
+    # add paused dst
+    #
+    def add_paused_dst( dst )
+      return if dst.closed? || @paused_dsts.include?( dst )
+      @reads.delete( dst )
+      @paused_dsts << dst
+    end
+
+    ##
+    # add paused streamd
+    #
+    def add_paused_streamd( streamd )
+      return if streamd.closed? || @paused_streamds.include?( streamd )
+      @reads.delete( streamd )
+      @paused_streamds << streamd
+    end
+
+    ##
+    # add proxyd ctlmsg
+    #
+    def add_proxyd_ctlmsg_tund_port( tund_info )
+      data = [ 0, TUND_PORT, tund_info[ :port ], tund_info[ :tcpd_port ] ].pack( 'Q>Cnn' )
+      @proxyd_info[ :ctlmsgs ] << [ data, tund_info[ :tun_addr ] ]
+      add_write( @proxyd )
     end
 
     ##
@@ -130,6 +210,24 @@ module Girl
     end
 
     ##
+    # add resume dst
+    #
+    def add_resume_dst( dst )
+      return if @resume_dsts.include?( dst )
+      @resume_dsts << dst
+      next_tick
+    end
+
+    ##
+    # add resume streamd
+    #
+    def add_resume_streamd( streamd )
+      return if @resume_streamds.include?( streamd )
+      @resume_streamds << streamd
+      next_tick
+    end
+
+    ##
     # add streamd wbuff
     #
     def add_streamd_wbuff( streamd, data )
@@ -139,14 +237,8 @@ module Girl
       add_write( streamd )
 
       if streamd_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        dst = streamd_info[ :dst ]
-        dst_info = @dst_infos[ dst ]
-
-        unless dst_info[ :paused ] then
-          puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_info[ :domain_port ] }"
-          dst_info[ :paused ] = true
-          @reads.delete( dst )
-        end
+        puts "p#{ Process.pid } #{ Time.new } pause dst #{ streamd_info[ :domain_port ] }"
+        add_paused_dst( streamd_info[ :dst ] )
       end
     end
 
@@ -163,6 +255,7 @@ module Girl
     # close dst
     #
     def close_dst( dst )
+      return if dst.closed?
       # puts "debug1 close dst"
       close_sock( dst )
       dst_info = del_dst_info( dst )
@@ -191,7 +284,6 @@ module Girl
         dst_info = @dst_infos[ dst ]
       end
 
-      dst_info[ :paused ] = false
       dst_info
     end
 
@@ -229,6 +321,7 @@ module Girl
     # close streamd
     #
     def close_streamd( streamd )
+      return if streamd.closed?
       # puts "debug1 close streamd"
       close_sock( streamd )
       streamd_info = @streamd_infos.delete( streamd )
@@ -251,6 +344,7 @@ module Girl
       close_sock( tcpd )
       @tcpd_infos.delete( tcpd )
       @tunneling_tunds.delete( tund_info[ :tun_addr ] )
+      tund_info[ :dsts ].each{ | _, dst | add_closing_dst( dst ) }
     end
 
     ##
@@ -323,7 +417,6 @@ module Girl
         created_at: Time.new,     # 创建时间
         last_recv_at: nil,        # 上一次收到新流量（由streamd收到）的时间
         last_sent_at: nil,        # 上一次发出流量（由streamd发出）的时间
-        paused: false,            # 是否已暂停读
         closing_write: false      # 准备关闭写
       }
 
@@ -363,18 +456,14 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
 
           @mutex.synchronize do
-            trigger = false
             now = Time.new
 
             @tund_infos.each do | tund, tund_info |
-              unless tund_info[ :closing ] then
-                last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
+              last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
 
-                if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
-                  puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
-                  set_tund_closing( tund )
-                  trigger = true
-                end
+              if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
+                puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
+                add_closing_tund( tund )
               end
             end
 
@@ -384,12 +473,9 @@ module Girl
 
               if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
                 puts "p#{ Process.pid } #{ Time.new } expire dst #{ dst_info[ :domain_port ] }"
-                set_dst_closing( dst )
-                trigger = true
+                add_closing_dst( dst )
               end
             end
-
-            next_tick if trigger
           end
         end
       end
@@ -404,33 +490,35 @@ module Girl
           sleep CHECK_RESUME_INTERVAL
 
           @mutex.synchronize do
-            trigger = false
+            @paused_dsts.each do | dst |
+              if dst.closed? then
+                add_resume_dst( dst )
+              else
+                dst_info = @dst_infos[ dst ]
+                streamd = dst_info[ :streamd ]
+                streamd_info = @streamd_infos[ streamd ]
 
-            @dst_infos.select{ | _, dst_info | dst_info[ :paused ] }.each do | dst, dst_info |
-              streamd = dst_info[ :streamd ]
-              streamd_info = @streamd_infos[ streamd ]
-
-              if streamd_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
-                dst_info[ :paused ] = false
-                add_read( dst )
-                trigger = true
+                if streamd_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
+                  add_resume_dst( dst )
+                end
               end
             end
 
-            @streamd_infos.select{ | _, streamd_info | streamd_info[ :paused ] }.each do | streamd, streamd_info |
-              dst = streamd_info[ :dst ]
-              dst_info = @dst_infos[ dst ]
+            @paused_streamds.each do | streamd |
+              if streamd.closed? then
+                add_resume_streamd( streamd )
+              else
+                streamd_info = @streamd_infos[ streamd ]
+                dst = streamd_info[ :dst ]
+                dst_info = @dst_infos[ dst ]
 
-              if dst_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume streamd #{ streamd_info[ :domain_port ] }"
-                streamd_info[ :paused ] = false
-                add_read( streamd )
-                trigger = true
+                if dst_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume streamd #{ streamd_info[ :domain_port ] }"
+                  add_resume_streamd( streamd )
+                end
               end
             end
-
-            next_tick if trigger
           end
         end
       end
@@ -558,18 +646,6 @@ module Girl
     end
 
     ##
-    # set dst closing
-    #
-    def set_dst_closing( dst )
-      return if dst.closed? || @closing_dsts.include?( dst )
-      @reads.delete( dst )
-      @writes.delete( dst )
-      @closing_dsts << dst
-      dst_info = @dst_infos[ dst ]
-      add_write( dst_info[ :tund ] )
-    end
-
-    ##
     # set dst closing write
     #
     def set_dst_closing_write( dst )
@@ -580,18 +656,6 @@ module Girl
 
       dst_info[ :closing_write ] = true
       add_write( dst )
-    end
-
-    ##
-    # set streamd closing
-    #
-    def set_streamd_closing( streamd )
-      return if streamd.closed? || @closing_streamds.include?( streamd )
-      @reads.delete( streamd )
-      @writes.delete( streamd )
-      @closing_streamds << streamd
-      streamd_info = @streamd_infos[ streamd ]
-      add_write( streamd_info[ :tund ] )
     end
 
     ##
@@ -608,25 +672,56 @@ module Girl
     end
 
     ##
-    # set tund is closing
-    #
-    def set_tund_closing( tund )
-      return if tund.closed?
-
-      tund_info = @tund_infos[ tund ]
-      return if tund_info[ :closing ]
-
-      tund_info[ :closing ] = true
-      @reads.delete( tund )
-      add_write( tund )
-      tund_info[ :dsts ].each{ | _, dst | set_dst_closing( dst ) }
-    end
-
-    ##
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read( 1 )
+      dotr.read_nonblock( READ_SIZE )
+
+      # 处理关闭
+      if @closing_tunds.any? then
+        @closing_tunds.each do | tund |
+          unless tund.closed? then
+            tund_info = @tund_infos[ tund ]
+
+            if tund_info[ :changed_tun_addr ] then
+              data = [ 0, IP_CHANGED ].pack( 'Q>C' )
+              send_data( tund, data, tund_info[ :changed_tun_addr ] )
+            end
+
+            close_tund( tund )
+          end
+        end
+
+        @closing_tunds.clear
+      end
+
+      if @closing_dsts.any? then
+        @closing_dsts.each{ | dst | close_dst( dst ) }
+        @closing_dsts.clear
+      end
+
+      if @closing_streamds.any? then
+        @closing_streamds.each{ | streamd | close_streamd( streamd ) }
+        @closing_streamds.clear
+      end
+
+      if @resume_dsts.any? then
+        @resume_dsts.each do | dst |
+          add_read( dst )
+          @paused_dsts.delete( dst )
+        end
+
+        @resume_dsts.clear
+      end
+
+      if @resume_streamds.any? then
+        @resume_streamds.each do | streamd |
+          add_read( streamd )
+          @paused_streamds.delete( streamd )
+        end
+
+        @resume_streamds.clear
+      end
     end
 
     ##
@@ -681,7 +776,6 @@ module Girl
         dst_ids: {},          # src_id => dst_id
         created_at: Time.new, # 创建时间
         last_recv_at: nil,    # 上一次收到流量的时间
-        closing: false,       # 准备关闭
         changed_tun_addr: nil # 记录到和tun addr不符的来源地址
       }
 
@@ -721,6 +815,8 @@ module Girl
     # read tund
     #
     def read_tund( tund )
+      return if tund.closed?
+      
       begin
         data, addrinfo, rflags, *controls = tund.recvmsg_nonblock
       rescue IO::WaitReadable, Errno::EINTR
@@ -735,7 +831,7 @@ module Girl
         # 通常是光猫刷新ip和端口，但万一不是，为了避免脏数据注入，关闭tund
         puts "p#{ Process.pid } #{ Time.new } from #{ addrinfo.inspect } not match tun addr #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
         tund_info[ :changed_tun_addr ] = from_addr
-        set_tund_closing( tund )
+        add_closing_tund( tund )
         return
       end
 
@@ -770,7 +866,7 @@ module Girl
         resolve_domain( tund, src_id, domain_port )
       when TUN_FIN then
         puts "p#{ Process.pid } #{ Time.new } recv tun fin"
-        set_tund_closing( tund )
+        add_closing_tund( tund )
       end
     end
 
@@ -798,7 +894,6 @@ module Girl
         dst: nil,             # 对应dst
         domain_port: nil,     # dst的目的地和端口
         wbuff: '',            # 写前，写往近端stream
-        paused: false,        # 是否已暂停读
         closing_write: false  # 准备关闭写
       }
 
@@ -836,12 +931,7 @@ module Girl
           add_streamd_wbuff( streamd, data )
         end
       else
-        dst_info[ :rbuff ] << data
-
-        if dst_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-          # puts "debug1 dst.rbuff full"
-          set_dst_closing( dst )
-        end
+        add_dst_rbuff( dst, data )
       end
     end
 
@@ -873,7 +963,7 @@ module Girl
         tund = streamd_info[ :tund ]
 
         if tund.closed? then
-          set_streamd_closing( streamd )
+          add_closing_streamd( streamd )
           return
         end
 
@@ -881,7 +971,7 @@ module Girl
         dst = tund_info[ :dsts ][ dst_id ]
 
         unless dst then
-          set_streamd_closing( streamd )
+          add_closing_streamd( streamd )
           return
         end
 
@@ -902,20 +992,9 @@ module Girl
         return if data.empty?
       end
 
-      if !dst.closed? && !@closing_dsts.include?( dst ) then
-        dst_info = @dst_infos[ dst ]
-        data = @custom.decode( data )
-        # puts "debug2 add dst.wbuff decoded #{ data.bytesize }"
-        dst_info[ :wbuff ] << data
-        dst_info[ :last_recv_at ] = Time.new
-        add_write( dst )
-
-        if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-          puts "p#{ Process.pid } #{ Time.new } pause streamd #{ streamd_info[ :domain_port ] }"
-          streamd_info[ :paused ] = true
-          @reads.delete( streamd )
-        end
-      end
+      data = @custom.decode( data )
+      # puts "debug2 add dst.wbuff decoded #{ data.bytesize }"
+      add_dst_wbuff( dst, data )
     end
 
     ##
@@ -942,30 +1021,8 @@ module Girl
     # write tund
     #
     def write_tund( tund )
+      return if tund.closed?
       tund_info = @tund_infos[ tund ]
-
-      # 处理关闭
-      if @closing_dsts.any? then
-        @closing_dsts.each{ | dst | close_dst( dst ) }
-        @closing_dsts.clear
-      end
-
-      if @closing_streamds.any? then
-        @closing_streamds.each{ | streamd | close_streamd( streamd ) }
-        @closing_streamds.clear
-      end
-
-      if tund_info[ :closing ] then
-        if tund_info[ :changed_tun_addr ] then
-          data = [ 0, IP_CHANGED ].pack( 'Q>C' )
-          send_data( tund, data, tund_info[ :changed_tun_addr ] )
-        end
-
-        close_tund( tund )
-        return
-      end
-
-      now = Time.new
 
       # 发ctlmsg
       while tund_info[ :ctlmsgs ].any? do

@@ -14,6 +14,12 @@ module Girl
       @reads = []
       @writes = []
       @closing_srcs = []
+      @paused_srcs = []
+      @paused_dsts = []
+      @paused_streams = []
+      @resume_srcs = []
+      @resume_dsts = []
+      @resume_streams = []
       @roles = {}         # sock => :dotr / :proxy / :src / :dst / :tun / :stream
       @src_infos = {}     # src => {}
       @dst_infos = {}     # dst => {}
@@ -91,6 +97,15 @@ module Girl
     private
 
     ##
+    # add closing src
+    #
+    def add_closing_src( src )
+      return if src.closed? || @closing_srcs.include?( src )
+      @closing_srcs << src
+      next_tick
+    end
+
+    ##
     # add ctlmsg
     #
     def add_ctlmsg( data, to_addr = nil )
@@ -101,7 +116,35 @@ module Girl
       if to_addr then
         @tun_info[ :ctlmsgs ] << [ data, to_addr ]
         add_write( @tun )
+        next_tick
       end
+    end
+
+    ##
+    # add paused src
+    #
+    def add_paused_src( src )
+      return if src.closed? || @paused_srcs.include?( src )
+      @reads.delete( src )
+      @paused_srcs << src
+    end
+
+    ##
+    # add paused dst
+    #
+    def add_paused_dst( dst )
+      return if dst.closed? || @paused_dsts.include?( dst )
+      @reads.delete( dst )
+      @paused_dsts << dst
+    end
+
+    ##
+    # add paused stream
+    #
+    def add_paused_stream( stream )
+      return if stream.closed? || @paused_streams.include?( stream )
+      @reads.delete( stream )
+      @paused_streams << stream
     end
 
     ##
@@ -114,6 +157,60 @@ module Girl
         if role then
           @roles[ sock ] = role
         end
+      end
+    end
+
+    ##
+    # add resume src
+    #
+    def add_resume_src( src )
+      return if @resume_srcs.include?( src )
+      @resume_srcs << src
+      next_tick
+    end
+
+    ##
+    # add resume dst
+    #
+    def add_resume_dst( dst )
+      return if @resume_dsts.include?( dst )
+      @resume_dsts << dst
+      next_tick
+    end
+
+    ##
+    # add resume stream
+    #
+    def add_resume_stream( stream )
+      return if @resume_streams.include?( stream )
+      @resume_streams << stream
+      next_tick
+    end
+
+    ##
+    # add dst wbuff
+    #
+    def add_dst_wbuff( dst, data )
+      dst_info = @dst_infos[ dst ]
+      dst_info[ :wbuff ] << data
+      add_write( dst )
+
+      if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "p#{ Process.pid } #{ Time.new } pause direct src #{ dst_info[ :domain ] }"
+        add_paused_src( dst_info[ :src ] )
+      end
+    end
+
+    ##
+    # add src rbuff
+    #
+    def add_src_rbuff( src, data )
+      src_info = @src_infos[ src ]
+      src_info[ :rbuff ] << data
+
+      if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
+        # puts "debug1 src.rbuff full"
+        add_closing_src( src )
       end
     end
 
@@ -131,20 +228,30 @@ module Girl
         dst = src_info[ :dst ]
 
         if dst then
-          dst_info = @dst_infos[ dst ]
-          puts "p#{ Process.pid } #{ Time.new } pause dst #{ dst_info[ :domain ] }"
-          dst_info[ :paused ] = true
-          @reads.delete( dst )
+          puts "p#{ Process.pid } #{ Time.new } pause dst #{ src_info[ :destination_domain ] }"
+          add_paused_dst( dst )
         else
           stream = src_info[ :stream ]
 
           if stream then
-            stream_info = @stream_infos[ stream ]
-            puts "p#{ Process.pid } #{ Time.new } pause stream #{ stream_info[ :domain ] }"
-            stream_info[ :paused ] = true
-            @reads.delete( stream )
+            puts "p#{ Process.pid } #{ Time.new } pause stream #{ src_info[ :destination_domain ] }"
+            add_paused_stream( stream )
           end
         end
+      end
+    end
+
+    ##
+    # add stream wbuff
+    #
+    def add_stream_wbuff( stream, data )
+      stream_info = @stream_infos[ stream ]
+      stream_info[ :wbuff ] << data
+      add_write( stream )
+
+      if stream_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ stream_info[ :domain ] }"
+        add_paused_src( stream_info[ :src ] )
       end
     end
 
@@ -183,18 +290,6 @@ module Girl
     end
 
     ##
-    # close dst
-    #
-    def close_dst( dst )
-      # puts "debug1 close dst"
-      close_sock( dst )
-      dst_info = @dst_infos.delete( dst )
-      src = dst_info[ :src ]
-      close_read_src( src )
-      set_src_closing_write( src )
-    end
-
-    ##
     # close read src
     #
     def close_read_src( src )
@@ -211,7 +306,6 @@ module Girl
         src_info = @src_infos[ src ]
       end
 
-      src_info[ :paused ] = false
       src_info
     end
 
@@ -259,6 +353,7 @@ module Girl
     # close src
     #
     def close_src( src )
+      return if src.closed?
       # puts "debug1 close src"
       close_sock( src )
       src_info = del_src_info( src )
@@ -278,23 +373,13 @@ module Girl
     end
 
     ##
-    # close stream
-    #
-    def close_stream( stream )
-      # puts "debug1 close stream"
-      close_sock( stream )
-      stream_info = @stream_infos.delete( stream )
-      src = stream_info[ :src ]
-      close_read_src( src )
-      set_src_closing_write( src )
-    end
-
-    ##
     # close tun
     #
     def close_tun( tun )
       # puts "debug1 close tun"
       close_sock( tun )
+      @tun_info[ :ctlmsgs ].clear
+      @tun_info[ :srcs ].each{ | _, src | close_src( src ) }
     end
 
     ##
@@ -380,7 +465,7 @@ module Girl
     def del_src_info( src )
       src_info = @src_infos.delete( src )
 
-      if ( src_info[ :proxy_type ] == :tunnel ) && @tun && !@tun.closed? then
+      if ( src_info[ :proxy_type ] == :tunnel ) && @tun then
         @tun_info[ :srcs ].delete( src_info[ :id ] )
       end
 
@@ -396,10 +481,9 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
 
           @mutex.synchronize do
-            trigger = false
             now = Time.new
 
-            if @tun && !@tun.closed? && !@tun_info[ :closing ] then
+            if @tun && !@tun.closed? then
               last_recv_at = @tun_info[ :last_recv_at ] || @tun_info[ :created_at ]
 
               if @tun_info[ :srcs ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
@@ -410,8 +494,6 @@ module Girl
                 data = [ 0, HEARTBEAT ].pack( 'Q>C' )
                 add_ctlmsg( data )
               end
-
-              trigger = true
             end
 
             @src_infos.each do | src, src_info |
@@ -420,12 +502,9 @@ module Girl
 
               if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
                 puts "p#{ Process.pid } #{ Time.new } expire src #{ src_info[ :destination_domain ] }"
-                set_src_closing( src )
-                trigger = true
+                add_closing_src( src )
               end
             end
-
-            next_tick if trigger
           end
         end
       end
@@ -440,56 +519,61 @@ module Girl
           sleep CHECK_RESUME_INTERVAL
 
           @mutex.synchronize do
-            trigger = false
-
-            @src_infos.select{ | _, src_info | src_info[ :paused ] }.each do | src, src_info |
-              dst = src_info[ :dst ]
-
-              if dst then
-                dst_info = @dst_infos[ dst ]
-
-                if dst_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } dst.wbuff below #{ RESUME_BELOW }, resume src #{ src_info[ :destination_domain ] }"
-                  resume_src( src )
-                  trigger = true
-                end
+            @paused_srcs.each do | src |
+              if src.closed? then
+                add_resume_src( src )
               else
-                stream = src_info[ :stream ]
-                stream_info = @stream_infos[ stream ]
+                src_info = @src_infos[ src ]
+                dst = src_info[ :dst ]
 
-                if stream_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } stream.wbuff below #{ RESUME_BELOW }, resume src #{ src_info[ :destination_domain ] }"
-                  resume_src( src )
-                  trigger = true
+                if dst then
+                  dst_info = @dst_infos[ dst ]
+
+                  if dst_info[ :wbuff ].size < RESUME_BELOW then
+                    puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
+                    add_resume_src( src )
+                  end
+                else
+                  stream = src_info[ :stream ]
+                  stream_info = @stream_infos[ stream ]
+
+                  if stream_info[ :wbuff ].size < RESUME_BELOW then
+                    puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
+                    add_resume_src( src )
+                  end
                 end
               end
             end
 
-            @dst_infos.select{ | _, dst_info | dst_info[ :paused ] }.each do | dst, dst_info |
-              src = dst_info[ :src ]
-              src_info = @src_infos[ src ]
+            @paused_dsts.each do | dst |
+              if dst.closed? then
+                add_resume_dst( dst )
+              else
+                dst_info = @dst_infos[ dst ]
+                src = dst_info[ :src ]
+                src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } src.wbuff below #{ RESUME_BELOW }, resume dst #{ dst_info[ :domain ] }"
-                dst_info[ :paused ] = false
-                add_read( dst )
-                trigger = true
+                if src_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
+                  add_resume_dst( dst )
+                end
               end
             end
 
-            @stream_infos.select{ | _, stream_info | stream_info[ :paused ] }.each do | stream, stream_info |
-              src = stream_info[ :src ]
-              src_info = @src_infos[ src ]
+            @paused_streams.each do | stream |
+              if stream.closed? then
+                add_resume_stream( stream )
+              else
+                stream_info = @stream_infos[ stream ]
+                src = stream_info[ :src ]
+                src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } src.wbuff below #{ RESUME_BELOW }, resume stream #{ stream_info[ :domain ] }"
-                stream_info[ :paused ] = false
-                add_read( stream )
-                trigger = true
+                if src_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume stream #{ stream_info[ :domain ] }"
+                  add_resume_stream( stream )
+                end
               end
             end
-
-            next_tick if trigger
           end
         end
       end
@@ -520,7 +604,6 @@ module Girl
               end
 
               add_ctlmsg( data )
-              next_tick
             end
 
             sleep SEND_HELLO_INTERVAL
@@ -545,7 +628,7 @@ module Girl
         # connect nonblock 必抛 wait writable
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }, close src"
-        set_src_closing( src )
+        add_closing_src( src )
         return
       end
 
@@ -554,7 +637,6 @@ module Girl
         src: src,            # 对应src
         domain: domain,      # 目的地
         wbuff: '',           # 写前，从src读到的流量
-        paused: false,       # 是否已暂停读
         closing_write: false # 准备关闭写
       }
 
@@ -589,7 +671,7 @@ module Girl
 
       if dst_id == 0 then
         puts "p#{ Process.pid } #{ Time.new } remote dst already closed"
-        set_src_closing( src )
+        add_closing_src( src )
         return
       end
 
@@ -617,7 +699,6 @@ module Girl
         src: src,             # 对应src
         domain: domain,       # 目的地
         wbuff: data,          # 写前，写往远端streamd
-        paused: false,        # 是否已暂停读
         closing_write: false  # 准备关闭写
       }
 
@@ -693,7 +774,6 @@ module Girl
             # puts "debug1 #{ data.inspect }"
 
             add_ctlmsg( data, @proxyd_addr )
-            next_tick
           end
 
           sleep SEND_HELLO_INTERVAL
@@ -753,20 +833,10 @@ module Girl
               next_tick
             end
           else
-            set_src_closing( src )
-            next_tick
+            add_closing_src( src )
           end
         end
       end
-    end
-
-    ##
-    # resume src
-    #
-    def resume_src( src )
-      src_info = @src_infos[ src ]
-      src_info[ :paused ] = false
-      add_read( src )
     end
 
     ##
@@ -780,17 +850,6 @@ module Girl
 
       dst_info[ :closing_write ] = true
       add_write( dst )
-    end
-
-    ##
-    # set src is closing
-    #
-    def set_src_closing( src )
-      return if src.closed? || @closing_srcs.include?( src )
-      @reads.delete( src )
-      @writes.delete( src )
-      @closing_srcs << src
-      add_write( @tun ) if @tun
     end
 
     ##
@@ -842,8 +901,8 @@ module Girl
       return if @tun.closed? || @tun_info[ :closing ]
       @tun_info[ :closing ] = true
       @reads.delete( @tun )
-      add_write( @tun )
-      @tun_info[ :srcs ].each{ | _, src | set_src_closing( src ) }
+      @writes.delete( @tun )
+      next_tick
     end
 
     ##
@@ -869,7 +928,43 @@ module Girl
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read( 1 )
+      dotr.read_nonblock( READ_SIZE )
+
+      if @tun && !@tun.closed? && @tun_info[ :closing ] then
+        close_tun( @tun )
+      end
+
+      if @closing_srcs.any? then
+        @closing_srcs.each{ | src | close_src( src ) }
+        @closing_srcs.clear
+      end
+
+      if @resume_srcs.any? then
+        @resume_srcs.each do | src |
+          add_read( src )
+          @paused_srcs.delete( src )
+        end
+
+        @resume_srcs.clear
+      end
+
+      if @resume_dsts.any? then
+        @resume_dsts.each do | dst |
+          add_read( dst )
+          @paused_dsts.delete( dst )
+        end
+
+        @resume_dsts.clear
+      end
+
+      if @resume_streams.any? then
+        @resume_streams.each do | stream |
+          add_read( stream )
+          @paused_streams.delete( stream )
+        end
+
+        @resume_streams.clear
+      end
     end
 
     ##
@@ -901,12 +996,12 @@ module Girl
         created_at: Time.new,    # 创建时间
         last_recv_at: nil,       # 上一次收到新流量（由dst收到，或者由stream收到）的时间
         last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由stream发出）的时间
-        paused: false,           # 是否已暂停读
         closing_write: false     # 准备关闭写
       }
 
       add_read( src, :src )
 
+      # 用到tun，是在解析目的地域名得出是国外ip之后。但解析域名是额外的线程，为避免多线程重复建tun，在accept到src时就建。
       if @tun.nil? || @tun.closed? then
         new_a_tun
       end
@@ -916,6 +1011,8 @@ module Girl
     # read tun
     #
     def read_tun( tun )
+      return if tun.closed?
+      
       begin
         data, addrinfo, rflags, *controls = tun.recvmsg_nonblock
       rescue IO::WaitReadable, Errno::EINTR
@@ -1006,7 +1103,7 @@ module Girl
 
           unless domain_port then
             puts "p#{ Process.pid } #{ Time.new } CONNECT miss domain"
-            set_src_closing( src )
+            add_closing_src( src )
             return
           end
         elsif data[ 0 ].unpack( 'C' ).first == 5 then
@@ -1024,7 +1121,7 @@ module Girl
 
           unless methods.include?( 0 ) then
             puts "p#{ Process.pid } #{ Time.new } miss method 00"
-            set_src_closing( src )
+            add_closing_src( src )
             return
           end
 
@@ -1044,7 +1141,7 @@ module Girl
 
           unless host_line then
             # puts "debug1 not found host line"
-            set_src_closing( src )
+            add_closing_src( src )
             return
           end
 
@@ -1056,7 +1153,7 @@ module Girl
 
             unless domain_port then
               puts "p#{ Process.pid } #{ Time.new } Host line miss domain"
-              set_src_closing( src )
+              add_closing_src( src )
               return
             end
           end
@@ -1121,26 +1218,13 @@ module Girl
               data, _ = sub_http_request( data )
             end
 
-            stream_info = @stream_infos[ stream ]
             data = @custom.encode( data )
             # puts "debug2 add stream.wbuff encoded #{ data.bytesize }"
-            stream_info[ :wbuff ] << data
-            add_write( stream )
-
-            if stream_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-              puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ src_info[ :destination_domain ] }"
-              src_info[ :paused ] = true
-              @reads.delete( src )
-            end
+            add_stream_wbuff( stream, data )
           end
         else
           # puts "debug1 stream not ready, save data to src.rbuff"
-          src_info[ :rbuff ] << data
-
-          if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-            # puts "debug1 tunnel src.rbuff full"
-            set_src_closing( src )
-          end
+          add_src_rbuff( src, data )
         end
       when :direct then
         dst = src_info[ :dst ]
@@ -1151,25 +1235,12 @@ module Girl
               data, _ = sub_http_request( data )
             end
 
-            dst_info = @dst_infos[ dst ]
             # puts "debug2 add dst.wbuff #{ data.bytesize }"
-            dst_info[ :wbuff ] << data
-            add_write( dst )
-
-            if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-              puts "p#{ Process.pid } #{ Time.new } pause direct src #{ src_info[ :destination_domain ] }"
-              src_info[ :paused ] = true
-              @reads.delete( src )
-            end
+            add_dst_wbuff( dst, data )
           end
         else
           # puts "debug1 dst not ready, save data to src.rbuff"
-          src_info[ :rbuff ] << data
-
-          if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-            # puts "debug1 direct src.rbuff full"
-            set_src_closing( src )
-          end
+          add_src_rbuff( src, data )
         end
       end
     end
@@ -1228,18 +1299,7 @@ module Girl
     # write tun
     #
     def write_tun( tun )
-      # 处理关闭
-      if @closing_srcs.any? then
-        @closing_srcs.each{ | src | close_src( src ) }
-        @closing_srcs.clear
-      end
-
-      if @tun_info[ :closing ] then
-        close_tun( tun )
-        return
-      end
-
-      now = Time.new
+      return if tun.closed?
 
       # 发ctlmsg
       while @tun_info[ :ctlmsgs ].any? do
@@ -1251,8 +1311,8 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } wait send ctlmsg, left #{ @tun_info[ :ctlmsgs ].size }"
           return
         rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-          puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }, close tun"
-          close_tun( tun )
+          puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }, set tun closing"
+          set_tun_closing
           return
         end
 
