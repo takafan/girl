@@ -344,7 +344,7 @@ module Girl
       close_sock( tcpd )
       @tcpd_infos.delete( tcpd )
       @tunneling_tunds.delete( tund_info[ :tun_addr ] )
-      tund_info[ :dsts ].each{ | _, dst | add_closing_dst( dst ) }
+      tund_info[ :dsts ].each{ | _, dst | close_dst( dst ) }
     end
 
     ##
@@ -437,13 +437,13 @@ module Girl
     def del_dst_info( dst )
       dst_info = @dst_infos.delete( dst )
       tund = dst_info[ :tund ]
+      tund_info = @tund_infos[ tund ]
 
-      unless tund.closed? then
-        tund_info = @tund_infos[ tund ]
+      if tund_info then
         tund_info[ :dsts ].delete( dst_info[ :id ] )
         tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
       end
-
+      
       dst_info
     end
 
@@ -816,7 +816,7 @@ module Girl
     #
     def read_tund( tund )
       return if tund.closed?
-      
+
       begin
         data, addrinfo, rflags, *controls = tund.recvmsg_nonblock
       rescue IO::WaitReadable, Errno::EINTR
