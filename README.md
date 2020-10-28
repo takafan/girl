@@ -1,6 +1,6 @@
 # girl
 
-妹子，高速通道。
+妹子，高速通道，通用加速。
 
 访问海外资源，往往很慢：
 
@@ -22,9 +22,7 @@
 流量 -> 代理 ----- 10M/s -----> vps（代理服务端） -> 目的地
 ```
 
-自动了。
-
-还有个事，邪恶的存在。
+自动了。但还不够。
 
 妹子来了，和传统代理稍不同，妹子是一根通道：
 
@@ -32,9 +30,11 @@
 流量 -> 代理 -> 本机/路由器（妹子近端） ----- 10M/s -----> vps（妹子远端）-> 目的地
 ```
 
-通道的好处是，可以在流量出门前改动它，以回避邪恶。
+通道的好处是，可以在近端区分国内外，国内直连，海外走通道。
 
-直连还是走通道是可以控制的，借助一个域名列表，和一个ip段列表。完整的路线图：
+第二，可以在流量出门前改动它，以回避邪恶。
+
+借助一个域名列表，和一个ip段列表，完整的路线图：
 
 ```
 流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit ----------> 远端 -> 解析域名 -> 目的地
@@ -60,7 +60,7 @@ udp的快，是指：低延迟。从家到代理服务器的ping值，加上代�
 
 只剩下vpn能使得与国外玩家联机变快。但要是匹配到国内玩家，反而变慢了。
 
-提高p2p联机质量的正确姿势其实是厂商开多个匹配服务器，亚洲玩家全去同一个服务器，直连。
+提高p2p联机质量的正确姿势是厂商开多个匹配服务器，亚洲玩家全去同一个服务器，直连。
 
 ## 使用篇
 
@@ -80,6 +80,10 @@ require 'girl/proxyd'
 Girl::Proxyd.new '/etc/girl.conf.json'
 ```
 
+```bash
+ruby proxyd.rb
+```
+
 近端，可以是本机，树莓派，内网服务器，路由器：
 
 ```ruby
@@ -87,6 +91,10 @@ Girl::Proxyd.new '/etc/girl.conf.json'
 require 'girl/proxy'
 
 Girl::Proxy.new '/boot/girl.conf.json'
+```
+
+```bash
+ruby proxy.rb
 ```
 
 girl.conf.json的格式：
@@ -129,7 +137,31 @@ ytimg.com
 
 不写的话，本地解析google.com会得到假ip，但只要假ip取值取在国内ip段之外，还是会走远端重新解析。
 
-## 应对邪恶
+启好了，测试一下。下载一个海外资源，比较一下速度：
+
+直连：
+
+```bash
+curl --verbose -x '' -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
+```
+
+走妹子：
+
+```bash
+curl --verbose -x http://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
+```
+
+或者：
+
+```bash
+curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
+```
+
+妹子同时支持http和socks5代理。
+
+## 回避邪恶
+
+不想回避邪恶，可以不看。
 
 实际是解决2个问题：
 
@@ -151,6 +183,8 @@ tcp也存在同样的被限速，但仅是我遇到的个例：电信被限，�
 ```text
 CONNECT google.com HTTP/1.1\r\n\r\n
 ```
+
+另一种是被短暂拦断，ping不通vps，3分钟后恢复。可以由vps回来的明文http流量引起。
 
 妹子提供开放式的加解密。覆盖下面两个方法即可：
 
@@ -181,7 +215,7 @@ end
 
 把点转了，等于混淆了所有域名。域名是https唯一的漏洞。
 
-而对于明文的http，转掉点不一定够，仍然可能吃到3分钟阻断，例如chrome后台程序产生的明文流量。对换g和o，用于避免chrome引发阻断。
+chrome后台程序会产生明文http流量。对换g和o就够了。
 
 完整例子：
 
@@ -212,10 +246,6 @@ end
 Girl::Proxyd.new '/etc/girl.conf.json'
 ```
 
-```bash
-ruby proxyd.rb
-```
-
 近端：
 
 ```ruby
@@ -243,18 +273,11 @@ end
 Girl::Proxy.new '/boot/girl.conf.json'
 ```
 
-```bash
-ruby proxy.rb
-```
-
-启好了，测试一下：
+测试一下：
 
 ```bash
 curl -x http://127.0.0.1:6666 https://www.google.com/
-curl -x socks5h://127.0.0.1:6666 https://www.google.com/
 ```
-
-妹子同时支持http和socks5代理。
 
 ## docker
 
