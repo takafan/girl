@@ -25,8 +25,6 @@ lib/girl/proxy.rb
 lib/girl/proxyd_custom.rb
 lib/girl/proxyd_worker.rb
 lib/girl/proxyd.rb
-lib/girl/udp.rb
-lib/girl/udpd.rb
 lib/girl/version.rb
   ]
 

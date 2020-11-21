@@ -262,8 +262,8 @@ module Girl
       streamd = dst_info[ :streamd ]
 
       if streamd then
-        close_read_streamd( streamd )
-        set_streamd_closing_write( streamd )
+        close_sock( streamd )
+        @streamd_infos.delete( streamd )
       end
     end
 
@@ -328,8 +328,8 @@ module Girl
       dst = streamd_info[ :dst ]
 
       if dst then
-        close_read_dst( dst )
-        set_dst_closing_write( dst )
+        close_sock( dst )
+        del_dst_info( dst )
       end
     end
 
@@ -399,6 +399,7 @@ module Girl
       rescue IO::WaitWritable
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } connect destination #{ domain_port } #{ e.class }"
+        dst.close
         return false
       end
 
@@ -443,7 +444,7 @@ module Girl
         tund_info[ :dsts ].delete( dst_info[ :id ] )
         tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
       end
-      
+
       dst_info
     end
 

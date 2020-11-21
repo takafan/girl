@@ -121,12 +121,17 @@ module Girl
     end
 
     ##
-    # add paused src
+    # add dst wbuff
     #
-    def add_paused_src( src )
-      return if src.closed? || @paused_srcs.include?( src )
-      @reads.delete( src )
-      @paused_srcs << src
+    def add_dst_wbuff( dst, data )
+      dst_info = @dst_infos[ dst ]
+      dst_info[ :wbuff ] << data
+      add_write( dst )
+
+      if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "p#{ Process.pid } #{ Time.new } pause direct src #{ dst_info[ :domain ] }"
+        add_paused_src( dst_info[ :src ] )
+      end
     end
 
     ##
@@ -136,6 +141,15 @@ module Girl
       return if dst.closed? || @paused_dsts.include?( dst )
       @reads.delete( dst )
       @paused_dsts << dst
+    end
+
+    ##
+    # add paused src
+    #
+    def add_paused_src( src )
+      return if src.closed? || @paused_srcs.include?( src )
+      @reads.delete( src )
+      @paused_srcs << src
     end
 
     ##
@@ -161,20 +175,20 @@ module Girl
     end
 
     ##
-    # add resume src
-    #
-    def add_resume_src( src )
-      return if @resume_srcs.include?( src )
-      @resume_srcs << src
-      next_tick
-    end
-
-    ##
     # add resume dst
     #
     def add_resume_dst( dst )
       return if @resume_dsts.include?( dst )
       @resume_dsts << dst
+      next_tick
+    end
+
+    ##
+    # add resume src
+    #
+    def add_resume_src( src )
+      return if @resume_srcs.include?( src )
+      @resume_srcs << src
       next_tick
     end
 
@@ -185,20 +199,6 @@ module Girl
       return if @resume_streams.include?( stream )
       @resume_streams << stream
       next_tick
-    end
-
-    ##
-    # add dst wbuff
-    #
-    def add_dst_wbuff( dst, data )
-      dst_info = @dst_infos[ dst ]
-      dst_info[ :wbuff ] << data
-      add_write( dst )
-
-      if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause direct src #{ dst_info[ :domain ] }"
-        add_paused_src( dst_info[ :src ] )
-      end
     end
 
     ##
@@ -242,20 +242,6 @@ module Girl
     end
 
     ##
-    # add stream wbuff
-    #
-    def add_stream_wbuff( stream, data )
-      stream_info = @stream_infos[ stream ]
-      stream_info[ :wbuff ] << data
-      add_write( stream )
-
-      if stream_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ stream_info[ :domain ] }"
-        add_paused_src( stream_info[ :src ] )
-      end
-    end
-
-    ##
     # add src wbuff socks5 conn reply
     #
     def add_src_wbuff_socks5_conn_reply( src )
@@ -271,42 +257,26 @@ module Girl
     end
 
     ##
+    # add stream wbuff
+    #
+    def add_stream_wbuff( stream, data )
+      stream_info = @stream_infos[ stream ]
+      stream_info[ :wbuff ] << data
+      add_write( stream )
+
+      if stream_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ stream_info[ :domain ] }"
+        add_paused_src( stream_info[ :src ] )
+      end
+    end
+
+    ##
     # add write
     #
     def add_write( sock )
       if !sock.closed? && !@writes.include?( sock ) then
         @writes << sock
       end
-    end
-
-    ##
-    # close sock
-    #
-    def close_sock( sock )
-      sock.close
-      @reads.delete( sock )
-      @writes.delete( sock )
-      @roles.delete( sock )
-    end
-
-    ##
-    # close read src
-    #
-    def close_read_src( src )
-      return if src.closed?
-      # puts "debug1 close read src"
-      src.close_read
-      @reads.delete( src )
-
-      if src.closed? then
-        # puts "debug1 delete src info"
-        @roles.delete( src )
-        src_info = del_src_info( src )
-      else
-        src_info = @src_infos[ src ]
-      end
-
-      src_info
     end
 
     ##
@@ -330,6 +300,26 @@ module Girl
     end
 
     ##
+    # close read src
+    #
+    def close_read_src( src )
+      return if src.closed?
+      # puts "debug1 close read src"
+      src.close_read
+      @reads.delete( src )
+
+      if src.closed? then
+        # puts "debug1 delete src info"
+        @roles.delete( src )
+        src_info = del_src_info( src )
+      else
+        src_info = @src_infos[ src ]
+      end
+
+      src_info
+    end
+
+    ##
     # close read stream
     #
     def close_read_stream( stream )
@@ -350,6 +340,16 @@ module Girl
     end
 
     ##
+    # close sock
+    #
+    def close_sock( sock )
+      sock.close
+      @reads.delete( sock )
+      @writes.delete( sock )
+      @roles.delete( sock )
+    end
+
+    ##
     # close src
     #
     def close_src( src )
@@ -360,14 +360,14 @@ module Girl
       dst = src_info[ :dst ]
 
       if dst then
-        close_read_dst( dst )
-        set_dst_closing_write( dst )
+        close_sock( dst )
+        @dst_infos.delete( dst )
       else
         stream = src_info[ :stream ]
 
         if stream then
-          close_read_stream( stream )
-          set_stream_closing_write( stream )
+          close_sock( stream )
+          @stream_infos.delete( stream )
         end
       end
     end
@@ -380,26 +380,6 @@ module Girl
       close_sock( tun )
       @tun_info[ :ctlmsgs ].clear
       @tun_info[ :srcs ].each{ | _, src | close_src( src ) }
-    end
-
-    ##
-    # close write src
-    #
-    def close_write_src( src )
-      return if src.closed?
-      # puts "debug1 close write src"
-      src.close_write
-      @writes.delete( src )
-
-      if src.closed? then
-        # puts "debug1 delete src info"
-        @roles.delete( src )
-        src_info = del_src_info( src )
-      else
-        src_info = @src_infos[ src ]
-      end
-
-      src_info
     end
 
     ##
@@ -420,6 +400,26 @@ module Girl
       end
 
       dst_info
+    end
+
+    ##
+    # close write src
+    #
+    def close_write_src( src )
+      return if src.closed?
+      # puts "debug1 close write src"
+      src.close_write
+      @writes.delete( src )
+
+      if src.closed? then
+        # puts "debug1 delete src info"
+        @roles.delete( src )
+        src_info = del_src_info( src )
+      else
+        src_info = @src_infos[ src ]
+      end
+
+      src_info
     end
 
     ##
@@ -628,6 +628,7 @@ module Girl
         # connect nonblock 必抛 wait writable
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }, close src"
+        dst.close
         add_closing_src( src )
         return
       end
@@ -660,6 +661,25 @@ module Girl
     end
 
     ##
+    # new a proxy
+    #
+    def new_a_proxy( proxy_port )
+      proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      end
+
+      proxy.bind( Socket.sockaddr_in( proxy_port, '0.0.0.0' ) )
+      proxy.listen( 127 )
+      puts "p#{ Process.pid } #{ Time.new } proxy listen on #{ proxy_port }"
+      add_read( proxy, :proxy )
+      @proxy_local_address = proxy.local_address
+    end
+
+    ##
     # new a stream
     #
     def new_a_stream( src_id, dst_id )
@@ -683,6 +703,7 @@ module Girl
       rescue IO::WaitWritable
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } connect tcpd #{ e.class }"
+        stream.close
         return
       end
 
@@ -715,25 +736,6 @@ module Girl
       elsif src_info[ :proxy_proto ] == :socks5 then
         add_src_wbuff_socks5_conn_reply( src )
       end
-    end
-
-    ##
-    # new a proxy
-    #
-    def new_a_proxy( proxy_port )
-      proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      end
-
-      proxy.bind( Socket.sockaddr_in( proxy_port, '0.0.0.0' ) )
-      proxy.listen( 127 )
-      puts "p#{ Process.pid } #{ Time.new } proxy listen on #{ proxy_port }"
-      add_read( proxy, :proxy )
-      @proxy_local_address = proxy.local_address
     end
 
     ##
@@ -793,7 +795,7 @@ module Girl
     #
     def resolve_domain( src, domain )
       if @remotes.any? { | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) } then
-        # puts "debug1 #{ domain } hit remotes"
+        puts "p#{ Process.pid } #{ Time.new } #{ domain } hit remotes"
         set_src_proxy_type_tunnel( src )
         return
       end
@@ -1012,7 +1014,7 @@ module Girl
     #
     def read_tun( tun )
       return if tun.closed?
-      
+
       begin
         data, addrinfo, rflags, *controls = tun.recvmsg_nonblock
       rescue IO::WaitReadable, Errno::EINTR

@@ -1,21 +1,2 @@
 .DS_Store
-.env
-.env.local
-.pnp.js
-.yarn
-.yarnrc.yml
-node_modules/
-dist/
-npm-debug.log
-yarn-error.log
-yarn.lock
-
-# Editor directories and files
-.idea
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-
 *.gem
-package-lock.json
