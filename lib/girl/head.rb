@@ -4,10 +4,11 @@ module Girl
   RESUME_BELOW          = WBUFF_LIMIT / 2   # 降到多少以下恢复读
   SEND_HELLO_COUNT      = 10                # hello/a new source最多发几次
   SEND_HELLO_INTERVAL   = 0.5               # 发送hello/a new source间隔
+  EXPIRE_NEW            = 5                 # 多久没有结到对子，过期
   EXPIRE_AFTER          = 300               # 多久没有新流量，过期
   RESET_TRAFF_DAY       = 1                 # 流量计数重置日，0为不重置
   CHECK_TRAFF_INTERVAL  = 86400             # 检查今天是否是流量计数重置日间隔
-  CHECK_EXPIRE_INTERVAL = 30                # 检查过期间隔
+  CHECK_EXPIRE_INTERVAL = 5                 # 检查过期间隔
   CHECK_RESUME_INTERVAL = 1                 # 检查恢复读间隔
   RESOLV_CACHE_EXPIRE   = 300               # dns查询结果缓存多久过期
   TUND_PORT             = 1
@@ -47,6 +48,7 @@ EOF
     RESUME_BELOW
     SEND_HELLO_COUNT
     SEND_HELLO_INTERVAL
+    EXPIRE_NEW
     EXPIRE_AFTER
     CHECK_EXPIRE_INTERVAL
     CHECK_RESUME_INTERVAL

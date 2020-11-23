@@ -499,9 +499,10 @@ module Girl
             @src_infos.each do | src, src_info |
               last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
               last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
+              expire_after = ( src_info[ :dst ] || src_info[ :stream ] ) ? EXPIRE_AFTER : EXPIRE_NEW
 
-              if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
-                puts "p#{ Process.pid } #{ Time.new } expire src #{ src_info[ :destination_domain ] }"
+              if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
+                puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :destination_domain ] }"
                 add_closing_src( src )
               end
             end

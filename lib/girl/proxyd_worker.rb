@@ -471,9 +471,10 @@ module Girl
             @dst_infos.each do | dst, dst_info |
               last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
               last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
+              expire_after = dst_info[ :streamd ] ? EXPIRE_AFTER : EXPIRE_NEW
 
-              if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
-                puts "p#{ Process.pid } #{ Time.new } expire dst #{ dst_info[ :domain_port ] }"
+              if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
+                puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
                 add_closing_dst( dst )
               end
             end
