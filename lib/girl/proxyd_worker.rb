@@ -278,6 +278,7 @@ module Girl
 
       if dst.closed? then
         # puts "debug1 delete dst info"
+        @writes.delete( dst )
         @roles.delete( dst )
         dst_info = del_dst_info( dst )
       else
@@ -298,6 +299,7 @@ module Girl
 
       if streamd.closed? then
         # puts "debug1 delete streamd info"
+        @writes.delete( streamd )
         @roles.delete( streamd )
         streamd_info = @streamd_infos.delete( streamd )
       else
@@ -358,6 +360,7 @@ module Girl
 
       if dst.closed? then
         # puts "debug1 delete dst info"
+        @reads.delete( dst )
         @roles.delete( dst )
         dst_info = del_dst_info( dst )
       else
@@ -378,6 +381,7 @@ module Girl
 
       if streamd.closed? then
         # puts "debug1 delete streamd info"
+        @reads.delete( streamd )
         @roles.delete( streamd )
         streamd_info = @streamd_infos.delete( streamd )
       else
