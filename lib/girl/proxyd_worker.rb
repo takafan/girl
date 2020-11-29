@@ -134,6 +134,7 @@ module Girl
     # add ctlmsg
     #
     def add_ctlmsg( tund, data )
+      return if tund.closed? || @closing_tunds.include?( tund )
       tund_info = @tund_infos[ tund ]
       tund_info[ :ctlmsgs ] << data
       add_write( tund )
@@ -200,12 +201,11 @@ module Girl
     # add read
     #
     def add_read( sock, role = nil )
-      if !sock.closed? && !@reads.include?( sock ) then
-        @reads << sock
+      return if sock.closed? || @reads.include?( sock )
+      @reads << sock
 
-        if role then
-          @roles[ sock ] = role
-        end
+      if role then
+        @roles[ sock ] = role
       end
     end
 
@@ -246,9 +246,8 @@ module Girl
     # add write
     #
     def add_write( sock )
-      if !sock.closed? && !@writes.include?( sock ) then
-        @writes << sock
-      end
+      return if sock.closed? || @writes.include?( sock )
+      @writes << sock
     end
 
     ##
@@ -620,15 +619,13 @@ module Girl
           end
         end
 
-        @mutex.synchronize do
-          if destination_addr then
-            # puts "debug1 resolved #{ domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
-            @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
+        if destination_addr then
+          # puts "debug1 resolved #{ domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
+          @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
 
-            unless tund.closed? then
-              if deal_with_destination_addr( tund, src_id, destination_addr, domain_port ) then
-                next_tick
-              end
+          unless tund.closed? then
+            if deal_with_destination_addr( tund, src_id, destination_addr, domain_port ) then
+              next_tick
             end
           end
         end
@@ -821,7 +818,10 @@ module Girl
     # read tund
     #
     def read_tund( tund )
-      return if tund.closed?
+      if tund.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read tund but tund closed?"
+        return
+      end
 
       begin
         data, addrinfo, rflags, *controls = tund.recvmsg_nonblock
@@ -880,7 +880,10 @@ module Girl
     # read tcpd
     #
     def read_tcpd( tcpd )
-      return if tcpd.closed?
+      if tcpd.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read tcpd but tcpd closed?"
+        return
+      end
 
       begin
         streamd, addrinfo = tcpd.accept_nonblock
@@ -910,7 +913,10 @@ module Girl
     # read dst
     #
     def read_dst( dst )
-      return if dst.closed?
+      if dst.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read dst but dst closed?"
+        return
+      end
 
       begin
         data = dst.read_nonblock( READ_SIZE )
@@ -945,7 +951,10 @@ module Girl
     # read streamd
     #
     def read_streamd( streamd )
-      return if streamd.closed?
+      if streamd.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read streamd but streamd closed?"
+        return
+      end
 
       begin
         data = streamd.read_nonblock( READ_SIZE )
@@ -1027,7 +1036,11 @@ module Girl
     # write tund
     #
     def write_tund( tund )
-      return if tund.closed?
+      if tund.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write tund but tund closed?"
+        return
+      end
+
       tund_info = @tund_infos[ tund ]
 
       # 发ctlmsg
@@ -1053,7 +1066,11 @@ module Girl
     # write dst
     #
     def write_dst( dst )
-      return if dst.closed?
+      if dst.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write dst but dst closed?"
+        return
+      end
+
       dst_info = @dst_infos[ dst ]
       streamd = dst_info[ :streamd ]
       data = dst_info[ :wbuff ]
@@ -1092,7 +1109,10 @@ module Girl
     # write streamd
     #
     def write_streamd( streamd )
-      return if streamd.closed?
+      if streamd.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write streamd but streamd closed?"
+        return
+      end
       streamd_info = @streamd_infos[ streamd ]
       dst = streamd_info[ :dst ]
       data = streamd_info[ :wbuff ]

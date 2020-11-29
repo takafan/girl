@@ -109,6 +109,8 @@ module Girl
     # add ctlmsg
     #
     def add_ctlmsg( data, to_addr = nil )
+      return if @tun.nil? || @tun.closed? || @tun_info[ :closing ]
+
       unless to_addr then
         to_addr = @tun_info[ :tund_addr ]
       end
@@ -165,12 +167,11 @@ module Girl
     # add read
     #
     def add_read( sock, role = nil )
-      if !sock.closed? && !@reads.include?( sock ) then
-        @reads << sock
+      return if sock.closed? || @reads.include?( sock )
+      @reads << sock
 
-        if role then
-          @roles[ sock ] = role
-        end
+      if role then
+        @roles[ sock ] = role
       end
     end
 
@@ -274,9 +275,8 @@ module Girl
     # add write
     #
     def add_write( sock )
-      if !sock.closed? && !@writes.include?( sock ) then
-        @writes << sock
-      end
+      return if sock.closed? || @writes.include?( sock )
+      @writes << sock
     end
 
     ##
@@ -489,7 +489,7 @@ module Girl
           @mutex.synchronize do
             now = Time.new
 
-            if @tun && !@tun.closed? then
+            if @tun then
               last_recv_at = @tun_info[ :last_recv_at ] || @tun_info[ :created_at ]
 
               if @tun_info[ :srcs ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
@@ -600,19 +600,16 @@ module Girl
 
         Thread.new do
           SEND_HELLO_COUNT.times do | i |
-            if @tun.nil? || @tun.closed? || @tun_info[ :closing ] || src.closed? || src_info[ :stream ] then
+            if src.closed? || src_info[ :stream ] then
               # puts "debug1 break loop send a new source #{ src_info[ :dst_port ] }"
               break
             end
 
-            @mutex.synchronize do
-              if i >= 1 then
-                puts "p#{ Process.pid } #{ Time.new } resend a new source #{ domain_port } #{ i }"
-              end
-
-              add_ctlmsg( data )
+            if i >= 1 then
+              puts "p#{ Process.pid } #{ Time.new } resend a new source #{ domain_port } #{ i }"
             end
 
+            add_ctlmsg( data )
             sleep SEND_HELLO_INTERVAL
           end
         end
@@ -772,19 +769,16 @@ module Girl
 
       Thread.new do
         SEND_HELLO_COUNT.times do | i |
-          if @tun.nil? || @tun.closed? || @tun_info[ :closing ] || @tun_info[ :tund_addr ] then
+          if @tun_info[ :tund_addr ] then
             # puts "debug1 break loop send hello"
             break
           end
 
-          @mutex.synchronize do
-            msg = i >= 1 ? "resend hello #{ i }" : "hello i'm tun"
-            puts "p#{ Process.pid } #{ Time.new } #{ msg }"
-            # puts "debug1 #{ data.inspect }"
+          msg = i >= 1 ? "resend hello #{ i }" : "hello i'm tun"
+          puts "p#{ Process.pid } #{ Time.new } #{ msg }"
+          # puts "debug1 #{ data.inspect }"
 
-            add_ctlmsg( data, @proxyd_addr )
-          end
-
+          add_ctlmsg( data, @proxyd_addr )
           sleep SEND_HELLO_INTERVAL
         end
       end
@@ -832,18 +826,16 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } resolv #{ domain } #{ e.class }"
         end
 
-        @mutex.synchronize do
-          if ip_info then
-            @resolv_caches[ domain ] = [ ip_info, Time.new ]
+        if ip_info then
+          @resolv_caches[ domain ] = [ ip_info, Time.new ]
 
-            unless src.closed? then
-              puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
-              deal_with_destination_ip( src, ip_info )
-              next_tick
-            end
-          else
-            add_closing_src( src )
+          unless src.closed? then
+            puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
+            deal_with_destination_ip( src, ip_info )
+            next_tick
           end
+        else
+          add_closing_src( src )
         end
       end
     end
@@ -1020,7 +1012,10 @@ module Girl
     # read tun
     #
     def read_tun( tun )
-      return if tun.closed?
+      if tun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read tun but tun closed?"
+        return
+      end
 
       begin
         data, addrinfo, rflags, *controls = tun.recvmsg_nonblock
@@ -1079,7 +1074,10 @@ module Girl
     # read src
     #
     def read_src( src )
-      return if src.closed?
+      if src.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read src but src closed?"
+        return
+      end
 
       begin
         data = src.read_nonblock( READ_SIZE )
@@ -1258,7 +1256,10 @@ module Girl
     # read dst
     #
     def read_dst( dst )
-      return if dst.closed?
+      if dst.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read dst but dst closed?"
+        return
+      end
 
       begin
         data = dst.read_nonblock( READ_SIZE )
@@ -1282,7 +1283,10 @@ module Girl
     # read stream
     #
     def read_stream( stream )
-      return if stream.closed?
+      if stream.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read stream but stream closed?"
+        return
+      end
 
       begin
         data = stream.read_nonblock( READ_SIZE )
@@ -1308,7 +1312,10 @@ module Girl
     # write tun
     #
     def write_tun( tun )
-      return if tun.closed?
+      if tun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write tun but tun closed?"
+        return
+      end
 
       # 发ctlmsg
       while @tun_info[ :ctlmsgs ].any? do
@@ -1335,7 +1342,11 @@ module Girl
     # write src
     #
     def write_src( src )
-      return if src.closed?
+      if src.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write src but src closed?"
+        return
+      end
+
       src_info = @src_infos[ src ]
       dst = src_info[ :dst ]
       data = src_info[ :wbuff ]
@@ -1380,7 +1391,11 @@ module Girl
     # write dst
     #
     def write_dst( dst )
-      return if dst.closed?
+      if dst.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write dst but dst closed?"
+        return
+      end
+
       dst_info = @dst_infos[ dst ]
       src = dst_info[ :src ]
       data = dst_info[ :wbuff ]
@@ -1422,7 +1437,11 @@ module Girl
     # write stream
     #
     def write_stream( stream )
-      return if stream.closed?
+      if stream.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write stream but stream closed?"
+        return
+      end
+
       stream_info = @stream_infos[ stream ]
       src = stream_info[ :src ]
       data = stream_info[ :wbuff ]
