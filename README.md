@@ -299,11 +299,7 @@ docker run -d --restart=always -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -
 
 bug细节，可以不看：容器里，当妹子近端发起向目的地的连接，docker会查看当前网络，如果当前网络勾了https代理，会生成一段针对目的地的CONNECT，改为请求代理地址，于是妹子又得到一个CONNECT，我连我自己，无限连，cpu爆满。
 
-不勾https代理，避免bug。
-
-不勾的话chrome有问题，好在有兼顾chrome的设法：只勾socks代理。
-
-dropbox又有问题，自动检测不灵了，好在dropbox支持设手动。
+不勾https代理（只勾socks代理），避免bug。
 
 ## 设备端
 
