@@ -45,37 +45,35 @@ module Girl
       loop do
         rs, ws = IO.select( @reads, @writes )
 
-        @mutex.synchronize do
-          rs.each do | sock |
-            case @roles[ sock ]
-            when :dotr then
-              read_dotr( sock )
-            when :proxyd then
-              read_proxyd( sock )
-            when :infod then
-              read_infod( sock )
-            when :tund then
-              read_tund( sock )
-            when :tcpd then
-              read_tcpd( sock )
-            when :dst then
-              read_dst( sock )
-            when :streamd then
-              read_streamd( sock )
-            end
+        rs.each do | sock |
+          case @roles[ sock ]
+          when :dotr then
+            read_dotr( sock )
+          when :proxyd then
+            read_proxyd( sock )
+          when :infod then
+            read_infod( sock )
+          when :tund then
+            read_tund( sock )
+          when :tcpd then
+            read_tcpd( sock )
+          when :dst then
+            read_dst( sock )
+          when :streamd then
+            read_streamd( sock )
           end
+        end
 
-          ws.each do | sock |
-            case @roles[ sock ]
-            when :proxyd then
-              write_proxyd( sock )
-            when :tund then
-              write_tund( sock )
-            when :dst then
-              write_dst( sock )
-            when :streamd then
-              write_streamd( sock )
-            end
+        ws.each do | sock |
+          case @roles[ sock ]
+          when :proxyd then
+            write_proxyd( sock )
+          when :tund then
+            write_tund( sock )
+          when :dst then
+            write_dst( sock )
+          when :streamd then
+            write_streamd( sock )
           end
         end
       end
@@ -345,7 +343,10 @@ module Girl
       close_sock( tcpd )
       @tcpd_infos.delete( tcpd )
       @tunneling_tunds.delete( tund_info[ :tun_addr ] )
-      tund_info[ :dsts ].each{ | _, dst | close_dst( dst ) }
+
+      @mutex.synchronize do
+        tund_info[ :dsts ].each{ | _, dst | close_dst( dst ) }
+      end
     end
 
     ##

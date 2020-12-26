@@ -43,35 +43,33 @@ module Girl
       loop do
         rs, ws = IO.select( @reads, @writes )
 
-        @mutex.synchronize do
-          rs.each do | sock |
-            case @roles[ sock ]
-            when :dotr then
-              read_dotr( sock )
-            when :proxy then
-              read_proxy( sock )
-            when :tun then
-              read_tun( sock )
-            when :src then
-              read_src( sock )
-            when :dst then
-              read_dst( sock )
-            when :stream then
-              read_stream( sock )
-            end
+        rs.each do | sock |
+          case @roles[ sock ]
+          when :dotr then
+            read_dotr( sock )
+          when :proxy then
+            read_proxy( sock )
+          when :tun then
+            read_tun( sock )
+          when :src then
+            read_src( sock )
+          when :dst then
+            read_dst( sock )
+          when :stream then
+            read_stream( sock )
           end
+        end
 
-          ws.each do | sock |
-            case @roles[ sock ]
-            when :tun then
-              write_tun( sock )
-            when :src then
-              write_src( sock )
-            when :dst then
-              write_dst( sock )
-            when :stream then
-              write_stream( sock )
-            end
+        ws.each do | sock |
+          case @roles[ sock ]
+          when :tun then
+            write_tun( sock )
+          when :src then
+            write_src( sock )
+          when :dst then
+            write_dst( sock )
+          when :stream then
+            write_stream( sock )
           end
         end
       end
@@ -382,7 +380,10 @@ module Girl
       # puts "debug1 close tun"
       close_sock( tun )
       @tun_info[ :ctlmsgs ].clear
-      @tun_info[ :srcs ].each{ | _, src | close_src( src ) }
+
+      @mutex.synchronize do
+        @tun_info[ :srcs ].each{ | _, src | close_src( src ) }
+      end
     end
 
     ##
