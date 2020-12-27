@@ -1,4 +1,5 @@
 require 'etc'
+require 'girl/concurrent_hash'
 require 'girl/head'
 require 'girl/proxy_custom'
 require 'girl/proxy_worker'

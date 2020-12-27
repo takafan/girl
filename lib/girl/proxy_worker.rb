@@ -10,7 +10,6 @@ module Girl
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
-      @mutex = Mutex.new
       @reads = []
       @writes = []
       @closing_srcs = []
@@ -20,11 +19,11 @@ module Girl
       @resume_srcs = []
       @resume_dsts = []
       @resume_streams = []
-      @roles = {}         # sock => :dotr / :proxy / :src / :dst / :tun / :stream
-      @src_infos = {}     # src => {}
-      @dst_infos = {}     # dst => {}
-      @stream_infos = {}  # stream => {}
-      @resolv_caches = {} # domain => [ ip, created_at ]
+      @roles = ConcurrentHash.new         # sock => :dotr / :proxy / :src / :dst / :tun / :stream
+      @src_infos = ConcurrentHash.new     # src => {}
+      @dst_infos = ConcurrentHash.new     # dst => {}
+      @stream_infos = ConcurrentHash.new  # stream => {}
+      @resolv_caches = ConcurrentHash.new # domain => [ ip, created_at ]
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -380,10 +379,7 @@ module Girl
       # puts "debug1 close tun"
       close_sock( tun )
       @tun_info[ :ctlmsgs ].clear
-
-      @mutex.synchronize do
-        @tun_info[ :srcs ].each{ | _, src | close_src( src ) }
-      end
+      @tun_info[ :srcs ].each{ | _, src | close_src( src ) }
     end
 
     ##
@@ -486,32 +482,29 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_EXPIRE_INTERVAL
+          now = Time.new
 
-          @mutex.synchronize do
-            now = Time.new
+          if @tun then
+            last_recv_at = @tun_info[ :last_recv_at ] || @tun_info[ :created_at ]
 
-            if @tun then
-              last_recv_at = @tun_info[ :last_recv_at ] || @tun_info[ :created_at ]
-
-              if @tun_info[ :srcs ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
-                puts "p#{ Process.pid } #{ Time.new } expire tun"
-                set_tun_closing
-              else
-                # puts "debug1 #{ Time.new } heartbeat"
-                data = [ 0, HEARTBEAT ].pack( 'Q>C' )
-                add_ctlmsg( data )
-              end
+            if @tun_info[ :srcs ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
+              puts "p#{ Process.pid } #{ Time.new } expire tun"
+              set_tun_closing
+            else
+              # puts "debug1 #{ Time.new } heartbeat"
+              data = [ 0, HEARTBEAT ].pack( 'Q>C' )
+              add_ctlmsg( data )
             end
+          end
 
-            @src_infos.each do | src, src_info |
-              last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
-              last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
-              expire_after = ( src_info[ :dst ] || src_info[ :stream ] ) ? EXPIRE_AFTER : EXPIRE_NEW
+          @src_infos.each do | src, src_info |
+            last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
+            last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
+            expire_after = ( src_info[ :dst ] || src_info[ :stream ] ) ? EXPIRE_AFTER : EXPIRE_NEW
 
-              if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
-                puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :destination_domain ] }"
-                add_closing_src( src )
-              end
+            if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
+              puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :destination_domain ] }"
+              add_closing_src( src )
             end
           end
         end
@@ -526,60 +519,58 @@ module Girl
         loop do
           sleep CHECK_RESUME_INTERVAL
 
-          @mutex.synchronize do
-            @paused_srcs.each do | src |
-              if src.closed? then
-                add_resume_src( src )
-              else
-                src_info = @src_infos[ src ]
-                dst = src_info[ :dst ]
+          @paused_srcs.each do | src |
+            if src.closed? then
+              add_resume_src( src )
+            else
+              src_info = @src_infos[ src ]
+              dst = src_info[ :dst ]
 
-                if dst then
-                  dst_info = @dst_infos[ dst ]
-
-                  if dst_info[ :wbuff ].size < RESUME_BELOW then
-                    puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
-                    add_resume_src( src )
-                  end
-                else
-                  stream = src_info[ :stream ]
-                  stream_info = @stream_infos[ stream ]
-
-                  if stream_info[ :wbuff ].size < RESUME_BELOW then
-                    puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
-                    add_resume_src( src )
-                  end
-                end
-              end
-            end
-
-            @paused_dsts.each do | dst |
-              if dst.closed? then
-                add_resume_dst( dst )
-              else
+              if dst then
                 dst_info = @dst_infos[ dst ]
-                src = dst_info[ :src ]
-                src_info = @src_infos[ src ]
 
-                if src_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
-                  add_resume_dst( dst )
+                if dst_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
+                  add_resume_src( src )
+                end
+              else
+                stream = src_info[ :stream ]
+                stream_info = @stream_infos[ stream ]
+
+                if stream_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
+                  add_resume_src( src )
                 end
               end
             end
+          end
 
-            @paused_streams.each do | stream |
-              if stream.closed? then
+          @paused_dsts.each do | dst |
+            if dst.closed? then
+              add_resume_dst( dst )
+            else
+              dst_info = @dst_infos[ dst ]
+              src = dst_info[ :src ]
+              src_info = @src_infos[ src ]
+
+              if src_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
+                add_resume_dst( dst )
+              end
+            end
+          end
+
+          @paused_streams.each do | stream |
+            if stream.closed? then
+              add_resume_stream( stream )
+            else
+              stream_info = @stream_infos[ stream ]
+              src = stream_info[ :src ]
+              src_info = @src_infos[ src ]
+
+              if src_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume stream #{ stream_info[ :domain ] }"
                 add_resume_stream( stream )
-              else
-                stream_info = @stream_infos[ stream ]
-                src = stream_info[ :src ]
-                src_info = @src_infos[ src ]
-
-                if src_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume stream #{ stream_info[ :domain ] }"
-                  add_resume_stream( stream )
-                end
               end
             end
           end
@@ -751,15 +742,15 @@ module Girl
       tun.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       port = tun.local_address.ip_port
       tun_info = {
-        port: port,           # 端口
-        pending_sources: [],  # 还没配上tund，暂存的src
-        ctlmsgs: [],          # [ ctlmsg, to_addr ]
-        tund_addr: nil,       # tund地址
-        tcpd_addr: nil,       # tcpd地址
-        srcs: {},             # src_id => src
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量的时间
-        closing: false        # 是否准备关闭
+        port: port,               # 端口
+        pending_sources: [],      # 还没配上tund，暂存的src
+        ctlmsgs: [],              # [ ctlmsg, to_addr ]
+        tund_addr: nil,           # tund地址
+        tcpd_addr: nil,           # tcpd地址
+        srcs: ConcurrentHash.new, # src_id => src
+        created_at: Time.new,     # 创建时间
+        last_recv_at: nil,        # 上一次收到流量的时间
+        closing: false            # 是否准备关闭
       }
 
       @tun = tun
@@ -1058,11 +1049,6 @@ module Girl
 
         # puts "debug1 got paired #{ src_id } #{ dst_id }"
         new_a_stream( src_id, dst_id )
-      when TUND_FIN then
-        return if from_addr != @tun_info[ :tund_addr ]
-
-        puts "p#{ Process.pid } #{ Time.new } recv tund fin"
-        set_tun_closing
       when IP_CHANGED then
         return if from_addr != @tun_info[ :tund_addr ]
 

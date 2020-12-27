@@ -6,7 +6,6 @@ module Girl
     #
     def initialize( proxyd_port, infod_port )
       @custom = Girl::ProxydCustom.new
-      @mutex = Mutex.new
       @reads = []
       @writes = []
       @closing_tunds = []
@@ -16,15 +15,15 @@ module Girl
       @paused_streamds = []
       @resume_dsts = []
       @resume_streamds = []
-      @roles = {}           # sock => :dotr / :proxyd / :infod / :dst / :tund / :tcpd / :streamd
-      @tund_infos = {}      # tund => {}
-      @tcpd_infos = {}      # tcpd => {}
-      @dst_infos = {}       # dst => {}
-      @streamd_infos = {}   # streamd => {}
-      @tunneling_tunds = {} # tunneling_addr => tund
-      @resolv_caches = {}   # domain => [ ip, created_at ]
-      @traff_ins = {}       # im => 0
-      @traff_outs = {}      # im => 0
+      @roles = ConcurrentHash.new           # sock => :dotr / :proxyd / :infod / :dst / :tund / :tcpd / :streamd
+      @tund_infos = ConcurrentHash.new      # tund => {}
+      @tcpd_infos = ConcurrentHash.new      # tcpd => {}
+      @dst_infos = ConcurrentHash.new       # dst => {}
+      @streamd_infos = ConcurrentHash.new   # streamd => {}
+      @tunneling_tunds = ConcurrentHash.new # tunneling_addr => tund
+      @resolv_caches = ConcurrentHash.new   # domain => [ ip, created_at ]
+      @traff_ins = ConcurrentHash.new       # im => 0
+      @traff_outs = ConcurrentHash.new      # im => 0
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -86,15 +85,6 @@ module Girl
     # quit!
     #
     def quit!
-      data = [ 0, TUND_FIN ].pack( 'Q>C' )
-
-      @tund_infos.each do | tund, tund_info |
-        if !tund.closed? && tund_info[ :tun_addr ] then
-          # puts "debug1 send tund fin"
-          tund.sendmsg( data, 0, tund_info[ :tun_addr ] )
-        end
-      end
-
       # puts "debug1 exit"
       exit
     end
@@ -343,10 +333,7 @@ module Girl
       close_sock( tcpd )
       @tcpd_infos.delete( tcpd )
       @tunneling_tunds.delete( tund_info[ :tun_addr ] )
-
-      @mutex.synchronize do
-        tund_info[ :dsts ].each{ | _, dst | close_dst( dst ) }
-      end
+      tund_info[ :dsts ].each{ | _, dst | close_dst( dst ) }
     end
 
     ##
@@ -459,28 +446,25 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_EXPIRE_INTERVAL
+          now = Time.new
 
-          @mutex.synchronize do
-            now = Time.new
+          @tund_infos.each do | tund, tund_info |
+            last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
 
-            @tund_infos.each do | tund, tund_info |
-              last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
-
-              if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
-                puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
-                add_closing_tund( tund )
-              end
+            if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
+              puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
+              add_closing_tund( tund )
             end
+          end
 
-            @dst_infos.each do | dst, dst_info |
-              last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
-              last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
-              expire_after = dst_info[ :streamd ] ? EXPIRE_AFTER : EXPIRE_NEW
+          @dst_infos.each do | dst, dst_info |
+            last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
+            last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
+            expire_after = dst_info[ :streamd ] ? EXPIRE_AFTER : EXPIRE_NEW
 
-              if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
-                puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
-                add_closing_dst( dst )
-              end
+            if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
+              puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
+              add_closing_dst( dst )
             end
           end
         end
@@ -495,34 +479,32 @@ module Girl
         loop do
           sleep CHECK_RESUME_INTERVAL
 
-          @mutex.synchronize do
-            @paused_dsts.each do | dst |
-              if dst.closed? then
-                add_resume_dst( dst )
-              else
-                dst_info = @dst_infos[ dst ]
-                streamd = dst_info[ :streamd ]
-                streamd_info = @streamd_infos[ streamd ]
+          @paused_dsts.each do | dst |
+            if dst.closed? then
+              add_resume_dst( dst )
+            else
+              dst_info = @dst_infos[ dst ]
+              streamd = dst_info[ :streamd ]
+              streamd_info = @streamd_infos[ streamd ]
 
-                if streamd_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
-                  add_resume_dst( dst )
-                end
+              if streamd_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
+                add_resume_dst( dst )
               end
             end
+          end
 
-            @paused_streamds.each do | streamd |
-              if streamd.closed? then
+          @paused_streamds.each do | streamd |
+            if streamd.closed? then
+              add_resume_streamd( streamd )
+            else
+              streamd_info = @streamd_infos[ streamd ]
+              dst = streamd_info[ :dst ]
+              dst_info = @dst_infos[ dst ]
+
+              if dst_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume streamd #{ streamd_info[ :domain_port ] }"
                 add_resume_streamd( streamd )
-              else
-                streamd_info = @streamd_infos[ streamd ]
-                dst = streamd_info[ :dst ]
-                dst_info = @dst_infos[ dst ]
-
-                if dst_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume streamd #{ streamd_info[ :domain_port ] }"
-                  add_resume_streamd( streamd )
-                end
               end
             end
           end
@@ -539,12 +521,10 @@ module Girl
           loop do
             sleep CHECK_TRAFF_INTERVAL
 
-            @mutex.synchronize do
-              if Time.new.day == RESET_TRAFF_DAY then
-                puts "p#{ Process.pid } #{ Time.new } reset traffs"
-                @traff_ins.transform_values!{ | _ | 0 }
-                @traff_outs.transform_values!{ | _ | 0 }
-              end
+            if Time.new.day == RESET_TRAFF_DAY then
+              puts "p#{ Process.pid } #{ Time.new } reset traffs"
+              @traff_ins.transform_values!{ | _ | 0 }
+              @traff_outs.transform_values!{ | _ | 0 }
             end
           end
         end
@@ -770,17 +750,17 @@ module Girl
       add_read( tcpd, :tcpd )
 
       tund_info = {
-        im: im,               # 标识
-        port: tund_port,      # 端口
-        tcpd: tcpd,           # 对应的tcpd
-        tcpd_port: tcpd_port, # tcpd端口
-        ctlmsgs: [],          # [ ctlmsg, to_addr ]
-        tun_addr: from_addr,  # tun地址
-        dsts: {},             # dst_id => dst
-        dst_ids: {},          # src_id => dst_id
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量的时间
-        changed_tun_addr: nil # 记录到和tun addr不符的来源地址
+        im: im,                      # 标识
+        port: tund_port,             # 端口
+        tcpd: tcpd,                  # 对应的tcpd
+        tcpd_port: tcpd_port,        # tcpd端口
+        ctlmsgs: [],                 # [ ctlmsg, to_addr ]
+        tun_addr: from_addr,         # tun地址
+        dsts: ConcurrentHash.new,    # dst_id => dst
+        dst_ids: ConcurrentHash.new, # src_id => dst_id
+        created_at: Time.new,        # 创建时间
+        last_recv_at: nil,           # 上一次收到流量的时间
+        changed_tun_addr: nil        # 记录到和tun addr不符的来源地址
       }
 
       @tunneling_tunds[ from_addr ] = tund
