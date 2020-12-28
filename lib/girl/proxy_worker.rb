@@ -379,7 +379,6 @@ module Girl
       # puts "debug1 close tun"
       close_sock( tun )
       @tun_info[ :ctlmsgs ].clear
-      @tun_info[ :srcs ].each{ | _, src | close_src( src ) }
     end
 
     ##
@@ -928,7 +927,7 @@ module Girl
       end
 
       if @closing_srcs.any? then
-        @closing_srcs.each{ | src | close_src( src ) }
+        @closing_srcs.each { | src | close_src( src ) }
         @closing_srcs.clear
       end
 

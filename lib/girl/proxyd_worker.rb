@@ -333,7 +333,6 @@ module Girl
       close_sock( tcpd )
       @tcpd_infos.delete( tcpd )
       @tunneling_tunds.delete( tund_info[ :tun_addr ] )
-      tund_info[ :dsts ].each{ | _, dst | close_dst( dst ) }
     end
 
     ##
@@ -680,12 +679,12 @@ module Girl
       end
 
       if @closing_dsts.any? then
-        @closing_dsts.each{ | dst | close_dst( dst ) }
+        @closing_dsts.each { | dst | close_dst( dst ) }
         @closing_dsts.clear
       end
 
       if @closing_streamds.any? then
-        @closing_streamds.each{ | streamd | close_streamd( streamd ) }
+        @closing_streamds.each { | streamd | close_streamd( streamd ) }
         @closing_streamds.clear
       end
 
