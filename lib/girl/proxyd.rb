@@ -8,7 +8,7 @@ require 'json'
 require 'socket'
 
 ##
-# Girl::Proxyd - 代理服务，远端。
+# Girl::Proxyd - 远端
 #
 module Girl
   class Proxyd

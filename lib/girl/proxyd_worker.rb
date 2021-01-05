@@ -8,22 +8,21 @@ module Girl
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
-      @closing_tunds = []
+      @closing_proxys = []
       @closing_dsts = []
-      @closing_streamds = []
+      @closing_tuns = []
       @paused_dsts = []
-      @paused_streamds = []
+      @paused_tuns = []
       @resume_dsts = []
-      @resume_streamds = []
-      @roles = ConcurrentHash.new           # sock => :dotr / :proxyd / :infod / :dst / :tund / :tcpd / :streamd
-      @tund_infos = ConcurrentHash.new      # tund => {}
-      @tcpd_infos = ConcurrentHash.new      # tcpd => {}
-      @dst_infos = ConcurrentHash.new       # dst => {}
-      @streamd_infos = ConcurrentHash.new   # streamd => {}
-      @tunneling_tunds = ConcurrentHash.new # tunneling_addr => tund
-      @resolv_caches = ConcurrentHash.new   # domain => [ ip, created_at ]
-      @traff_ins = ConcurrentHash.new       # im => 0
-      @traff_outs = ConcurrentHash.new      # im => 0
+      @resume_tuns = []
+      @roles = ConcurrentHash.new         # sock => :dotr / :proxyd / :proxy / :infod / :dst / :tund / :tun
+      @proxy_infos = ConcurrentHash.new   # proxy => {}
+      @dst_infos = ConcurrentHash.new     # dst => {}
+      @tund_infos = ConcurrentHash.new    # tund => {}
+      @tun_infos = ConcurrentHash.new     # tun => {}
+      @resolv_caches = ConcurrentHash.new # domain => [ ip, created_at ]
+      @traff_ins = ConcurrentHash.new     # im => 0
+      @traff_outs = ConcurrentHash.new    # im => 0
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -50,29 +49,27 @@ module Girl
             read_dotr( sock )
           when :proxyd then
             read_proxyd( sock )
+          when :proxy then
+            read_proxy( sock )
           when :infod then
             read_infod( sock )
-          when :tund then
-            read_tund( sock )
-          when :tcpd then
-            read_tcpd( sock )
           when :dst then
             read_dst( sock )
-          when :streamd then
-            read_streamd( sock )
+          when :tund then
+            read_tund( sock )
+          when :tun then
+            read_tun( sock )
           end
         end
 
         ws.each do | sock |
           case @roles[ sock ]
-          when :proxyd then
-            write_proxyd( sock )
-          when :tund then
-            write_tund( sock )
+          when :proxy then
+            write_proxy( sock )
           when :dst then
             write_dst( sock )
-          when :streamd then
-            write_streamd( sock )
+          when :tun then
+            write_tun( sock )
           end
         end
       end
@@ -101,31 +98,32 @@ module Girl
     end
 
     ##
-    # add closing streamd
+    # add closing proxy
     #
-    def add_closing_streamd( streamd )
-      return if streamd.closed? || @closing_streamds.include?( streamd )
-      @closing_streamds << streamd
+    def add_closing_proxy( proxy )
+      return if proxy.closed? || @closing_proxys.include?( proxy )
+      @closing_proxys << proxy
       next_tick
     end
 
     ##
-    # add closing tund
+    # add closing tun
     #
-    def add_closing_tund( tund )
-      return if tund.closed? || @closing_tunds.include?( tund )
-      @closing_tunds << tund
+    def add_closing_tun( tun )
+      return if tun.closed? || @closing_tuns.include?( tun )
+      @closing_tuns << tun
       next_tick
     end
 
     ##
     # add ctlmsg
     #
-    def add_ctlmsg( tund, data )
-      return if tund.closed? || @closing_tunds.include?( tund )
-      tund_info = @tund_infos[ tund ]
-      tund_info[ :ctlmsgs ] << data
-      add_write( tund )
+    def add_ctlmsg( proxy, data )
+      return if proxy.closed? || @closing_proxys.include?( proxy )
+      proxy_info = @proxy_infos[ proxy ]
+      proxy_info[ :ctlmsgs ] << "#{ data }\r\n"
+      add_write( proxy )
+      next_tick
     end
 
     ##
@@ -153,8 +151,8 @@ module Girl
       add_write( dst )
 
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause streamd #{ dst_info[ :domain_port ] }"
-        add_paused_streamd( dst_info[ :streamd ] )
+        puts "p#{ Process.pid } #{ Time.new } pause tun #{ dst_info[ :domain_port ] }"
+        add_paused_tun( dst_info[ :tun ] )
       end
     end
 
@@ -168,21 +166,20 @@ module Girl
     end
 
     ##
-    # add paused streamd
+    # add paused tun
     #
-    def add_paused_streamd( streamd )
-      return if streamd.closed? || @paused_streamds.include?( streamd )
-      @reads.delete( streamd )
-      @paused_streamds << streamd
+    def add_paused_tun( tun )
+      return if tun.closed? || @paused_tuns.include?( tun )
+      @reads.delete( tun )
+      @paused_tuns << tun
     end
 
     ##
-    # add proxyd ctlmsg
+    # add ctlmsg tund port
     #
-    def add_proxyd_ctlmsg_tund_port( tund_info )
-      data = [ 0, TUND_PORT, tund_info[ :port ], tund_info[ :tcpd_port ] ].pack( 'Q>Cnn' )
-      @proxyd_info[ :ctlmsgs ] << [ data, tund_info[ :tun_addr ] ]
-      add_write( @proxyd )
+    def add_ctlmsg_tund_port( proxy, tund_port )
+      data = [ 0, TUND_PORT, tund_port ].pack( 'Q>Cn' )
+      add_ctlmsg( proxy, data )
     end
 
     ##
@@ -207,26 +204,26 @@ module Girl
     end
 
     ##
-    # add resume streamd
+    # add resume tun
     #
-    def add_resume_streamd( streamd )
-      return if @resume_streamds.include?( streamd )
-      @resume_streamds << streamd
+    def add_resume_tun( tun )
+      return if @resume_tuns.include?( tun )
+      @resume_tuns << tun
       next_tick
     end
 
     ##
-    # add streamd wbuff
+    # add tun wbuff
     #
-    def add_streamd_wbuff( streamd, data )
-      return if streamd.closed? || @closing_streamds.include?( streamd )
-      streamd_info = @streamd_infos[ streamd ]
-      streamd_info[ :wbuff ] << data
-      add_write( streamd )
+    def add_tun_wbuff( tun, data )
+      return if tun.closed? || @closing_tuns.include?( tun )
+      tun_info = @tun_infos[ tun ]
+      tun_info[ :wbuff ] << data
+      add_write( tun )
 
-      if streamd_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause dst #{ streamd_info[ :domain_port ] }"
-        add_paused_dst( streamd_info[ :dst ] )
+      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "p#{ Process.pid } #{ Time.new } pause dst #{ tun_info[ :domain_port ] }"
+        add_paused_dst( tun_info[ :dst ] )
       end
     end
 
@@ -246,11 +243,11 @@ module Girl
       # puts "debug1 close dst"
       close_sock( dst )
       dst_info = del_dst_info( dst )
-      streamd = dst_info[ :streamd ]
+      tun = dst_info[ :tun ]
 
-      if streamd then
-        close_sock( streamd )
-        @streamd_infos.delete( streamd )
+      if tun then
+        close_sock( tun )
+        @tun_infos.delete( tun )
       end
     end
 
@@ -276,24 +273,24 @@ module Girl
     end
 
     ##
-    # close read streamd
+    # close read tun
     #
-    def close_read_streamd( streamd )
-      return if streamd.closed?
-      # puts "debug1 close read streamd"
-      streamd.close_read
-      @reads.delete( streamd )
+    def close_read_tun( tun )
+      return if tun.closed?
+      # puts "debug1 close read tun"
+      tun.close_read
+      @reads.delete( tun )
 
-      if streamd.closed? then
-        # puts "debug1 delete streamd info"
-        @writes.delete( streamd )
-        @roles.delete( streamd )
-        streamd_info = @streamd_infos.delete( streamd )
+      if tun.closed? then
+        # puts "debug1 delete tun info"
+        @writes.delete( tun )
+        @roles.delete( tun )
+        tun_info = @tun_infos.delete( tun )
       else
-        streamd_info = @streamd_infos[ streamd ]
+        tun_info = @tun_infos[ tun ]
       end
 
-      streamd_info
+      tun_info
     end
 
     ##
@@ -307,14 +304,14 @@ module Girl
     end
 
     ##
-    # close streamd
+    # close tun
     #
-    def close_streamd( streamd )
-      return if streamd.closed?
-      # puts "debug1 close streamd"
-      close_sock( streamd )
-      streamd_info = @streamd_infos.delete( streamd )
-      dst = streamd_info[ :dst ]
+    def close_tun( tun )
+      return if tun.closed?
+      # puts "debug1 close tun"
+      close_sock( tun )
+      tun_info = @tun_infos.delete( tun )
+      dst = tun_info[ :dst ]
 
       if dst then
         close_sock( dst )
@@ -323,16 +320,19 @@ module Girl
     end
 
     ##
-    # close tund
+    # close proxy
     #
-    def close_tund( tund )
-      # puts "debug1 close tund"
-      close_sock( tund )
-      tund_info = @tund_infos.delete( tund )
-      tcpd = tund_info[ :tcpd ]
-      close_sock( tcpd )
-      @tcpd_infos.delete( tcpd )
-      @tunneling_tunds.delete( tund_info[ :tun_addr ] )
+    def close_proxy( proxy )
+      return if proxy.closed?
+      # puts "debug1 close proxy"
+      close_sock( proxy )
+      proxy_info = @proxy_infos.delete( proxy )
+      tund = proxy_info[ :tund ]
+
+      if tund then
+        close_sock( tund )
+        @tund_infos.delete( tund )
+      end
     end
 
     ##
@@ -357,30 +357,30 @@ module Girl
     end
 
     ##
-    # close write streamd
+    # close write tun
     #
-    def close_write_streamd( streamd )
-      return if streamd.closed?
-      # puts "debug1 close write streamd"
-      streamd.close_write
-      @writes.delete( streamd )
+    def close_write_tun( tun )
+      return if tun.closed?
+      # puts "debug1 close write tun"
+      tun.close_write
+      @writes.delete( tun )
 
-      if streamd.closed? then
-        # puts "debug1 delete streamd info"
-        @reads.delete( streamd )
-        @roles.delete( streamd )
-        streamd_info = @streamd_infos.delete( streamd )
+      if tun.closed? then
+        # puts "debug1 delete tun info"
+        @reads.delete( tun )
+        @roles.delete( tun )
+        tun_info = @tun_infos.delete( tun )
       else
-        streamd_info = @streamd_infos[ streamd ]
+        tun_info = @tun_infos[ tun ]
       end
 
-      streamd_info
+      tun_info
     end
 
     ##
     # deal with destination addr
     #
-    def deal_with_destination_addr( tund, src_id, destination_addr, domain_port )
+    def deal_with_destination_addr( proxy, src_id, destination_addr, domain_port )
       dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
@@ -394,31 +394,31 @@ module Girl
       end
 
       dst_id = dst.local_address.ip_port
-      tund_info = @tund_infos[ tund ]
+      proxy_info = @proxy_infos[ proxy ]
 
       @dst_infos[ dst ] = {
         id: dst_id,               # id
-        tund: tund,               # 对应tund
-        im: tund_info[ :im ],     # 标识
+        proxy: proxy,             # 对应proxy
+        im: proxy_info[ :im ],    # 标识
         domain_port: domain_port, # 目的地和端口
-        rbuff: '',                # 对应的streamd没准备好，暂存读到的流量
-        streamd: nil,             # 对应的streamd
-        wbuff: '',                # 从streamd读到的流量
+        rbuff: '',                # 对应的tun没准备好，暂存读到的流量
+        tun: nil,                 # 对应的tun
+        wbuff: '',                # 从tun读到的流量
         src_id: src_id,           # 近端src id
         created_at: Time.new,     # 创建时间
-        last_recv_at: nil,        # 上一次收到新流量（由streamd收到）的时间
-        last_sent_at: nil,        # 上一次发出流量（由streamd发出）的时间
+        last_recv_at: nil,        # 上一次收到新流量（由tun收到）的时间
+        last_sent_at: nil,        # 上一次发出流量（由tun发出）的时间
         closing_write: false      # 准备关闭写
       }
 
       add_read( dst, :dst )
 
-      tund_info[ :dst_ids ][ src_id ] = dst_id
-      tund_info[ :dsts ][ dst_id ] = dst
+      proxy_info[ :dst_ids ][ src_id ] = dst_id
+      proxy_info[ :dsts ][ dst_id ] = dst
 
       data = [ 0, PAIRED, src_id, dst_id ].pack( 'Q>CQ>n' )
       # puts "debug1 add ctlmsg paired #{ src_id } #{ dst_id }"
-      add_ctlmsg( tund, data )
+      add_ctlmsg( proxy, data )
       true
     end
 
@@ -427,12 +427,12 @@ module Girl
     #
     def del_dst_info( dst )
       dst_info = @dst_infos.delete( dst )
-      tund = dst_info[ :tund ]
-      tund_info = @tund_infos[ tund ]
+      proxy = dst_info[ :proxy ]
 
-      if tund_info then
-        tund_info[ :dsts ].delete( dst_info[ :id ] )
-        tund_info[ :dst_ids ].delete( dst_info[ :src_id ] )
+      unless proxy.closed? then
+        proxy_info = @proxy_infos[ proxy ]
+        proxy_info[ :dsts ].delete( dst_info[ :id ] )
+        proxy_info[ :dst_ids ].delete( dst_info[ :src_id ] )
       end
 
       dst_info
@@ -447,19 +447,19 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          @tund_infos.each do | tund, tund_info |
-            last_recv_at = tund_info[ :last_recv_at ] || tund_info[ :created_at ]
+          @proxy_infos.each do | proxy, proxy_info |
+            last_recv_at = proxy_info[ :last_recv_at ] || proxy_info[ :created_at ]
 
-            if tund_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
-              puts "p#{ Process.pid } #{ Time.new } expire tund #{ tund_info[ :port ] }"
-              add_closing_tund( tund )
+            if proxy_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
+              puts "p#{ Process.pid } #{ Time.new } expire proxy #{ proxy_info[ :addrinfo ].inspect }"
+              add_closing_proxy( proxy )
             end
           end
 
           @dst_infos.each do | dst, dst_info |
             last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
             last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
-            expire_after = dst_info[ :streamd ] ? EXPIRE_AFTER : EXPIRE_NEW
+            expire_after = dst_info[ :tun ] ? EXPIRE_AFTER : EXPIRE_NEW
 
             if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
               puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
@@ -483,27 +483,27 @@ module Girl
               add_resume_dst( dst )
             else
               dst_info = @dst_infos[ dst ]
-              streamd = dst_info[ :streamd ]
-              streamd_info = @streamd_infos[ streamd ]
+              tun = dst_info[ :tun ]
+              tun_info = @tun_infos[ tun ]
 
-              if streamd_info[ :wbuff ].size < RESUME_BELOW then
+              if tun_info[ :wbuff ].size < RESUME_BELOW then
                 puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
                 add_resume_dst( dst )
               end
             end
           end
 
-          @paused_streamds.each do | streamd |
-            if streamd.closed? then
-              add_resume_streamd( streamd )
+          @paused_tuns.each do | tun |
+            if tun.closed? then
+              add_resume_tun( tun )
             else
-              streamd_info = @streamd_infos[ streamd ]
-              dst = streamd_info[ :dst ]
+              tun_info = @tun_infos[ tun ]
+              dst = tun_info[ :dst ]
               dst_info = @dst_infos[ dst ]
 
               if dst_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume streamd #{ streamd_info[ :domain_port ] }"
-                add_resume_streamd( streamd )
+                puts "p#{ Process.pid } #{ Time.new } resume tun #{ tun_info[ :domain_port ] }"
+                add_resume_tun( tun )
               end
             end
           end
@@ -534,16 +534,18 @@ module Girl
     # new a proxyd
     #
     def new_a_proxyd( proxyd_port )
-      proxyd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      proxyd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        proxyd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      end
+
       proxyd.bind( Socket.sockaddr_in( proxyd_port, '0.0.0.0' ) )
+      proxyd.listen( 127 )
 
       puts "p#{ Process.pid } #{ Time.new } proxyd bind on #{ proxyd_port }"
-      @proxyd = proxyd
-      @proxyd_info = {
-        ctlmsgs: [] # [ ctlmsg, to_addr ]
-      }
-
       add_read( proxyd, :proxyd )
     end
 
@@ -569,7 +571,7 @@ module Girl
     ##
     # resolve domain
     #
-    def resolve_domain( tund, src_id, domain_port )
+    def resolve_domain( proxy, src_id, domain_port )
       resolv_cache = @resolv_caches[ domain_port ]
 
       if resolv_cache then
@@ -577,7 +579,7 @@ module Girl
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
           # puts "debug1 #{ domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
-          deal_with_destination_addr( tund, src_id, destination_addr, domain_port )
+          deal_with_destination_addr( proxy, src_id, destination_addr, domain_port )
           return
         end
 
@@ -603,29 +605,13 @@ module Girl
           # puts "debug1 resolved #{ domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
           @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
 
-          unless tund.closed? then
-            if deal_with_destination_addr( tund, src_id, destination_addr, domain_port ) then
+          unless proxy.closed? then
+            if deal_with_destination_addr( proxy, src_id, destination_addr, domain_port ) then
               next_tick
             end
           end
         end
       end
-    end
-
-    ##
-    # send data
-    #
-    def send_data( sock, data, to_addr )
-      begin
-        written = sock.sendmsg_nonblock( data, 0, to_addr )
-      rescue IO::WaitWritable, Errno::EINTR
-        return :wait
-      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
-        puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
-        return :fatal
-      end
-
-      written
     end
 
     ##
@@ -642,16 +628,16 @@ module Girl
     end
 
     ##
-    # set streamd closing write
+    # set tun closing write
     #
-    def set_streamd_closing_write( streamd )
-      return if streamd.closed? || @closing_streamds.include?( streamd )
+    def set_tun_closing_write( tun )
+      return if tun.closed? || @closing_tuns.include?( tun )
 
-      streamd_info = @streamd_infos[ streamd ]
-      return if streamd_info[ :closing_write ]
+      tun_info = @tun_infos[ tun ]
+      return if tun_info[ :closing_write ]
 
-      streamd_info[ :closing_write ] = true
-      add_write( streamd )
+      tun_info[ :closing_write ] = true
+      add_write( tun )
     end
 
     ##
@@ -661,21 +647,9 @@ module Girl
       dotr.read_nonblock( READ_SIZE )
 
       # 处理关闭
-      if @closing_tunds.any? then
-        @closing_tunds.each do | tund |
-          unless tund.closed? then
-            tund_info = @tund_infos[ tund ]
-
-            if tund_info[ :changed_tun_addr ] then
-              data = [ 0, IP_CHANGED ].pack( 'Q>C' )
-              send_data( tund, data, tund_info[ :changed_tun_addr ] )
-            end
-
-            close_tund( tund )
-          end
-        end
-
-        @closing_tunds.clear
+      if @closing_proxys.any? then
+        @closing_proxys.each { | proxy | close_proxy( proxy ) }
+        @closing_proxys.clear
       end
 
       if @closing_dsts.any? then
@@ -683,9 +657,9 @@ module Girl
         @closing_dsts.clear
       end
 
-      if @closing_streamds.any? then
-        @closing_streamds.each { | streamd | close_streamd( streamd ) }
-        @closing_streamds.clear
+      if @closing_tuns.any? then
+        @closing_tuns.each { | tun | close_tun( tun ) }
+        @closing_tuns.clear
       end
 
       if @resume_dsts.any? then
@@ -697,13 +671,13 @@ module Girl
         @resume_dsts.clear
       end
 
-      if @resume_streamds.any? then
-        @resume_streamds.each do | streamd |
-          add_read( streamd )
-          @paused_streamds.delete( streamd )
+      if @resume_tuns.any? then
+        @resume_tuns.each do | tun |
+          add_read( tun )
+          @paused_tuns.delete( tun )
         end
 
-        @resume_streamds.clear
+        @resume_tuns.clear
       end
     end
 
@@ -711,65 +685,128 @@ module Girl
     # read proxyd
     #
     def read_proxyd( proxyd )
-      data, addrinfo, rflags, *controls = proxyd.recvmsg
-      from_addr = addrinfo.to_sockaddr
-
-      if @tunneling_tunds.include?( from_addr ) then
-        tund = @tunneling_tunds[ from_addr ]
-        tund_info = @tund_infos[ tund ]
-        puts "p#{ Process.pid } #{ Time.new } resend tund port #{ tund_info[ :port ] }, #{ tund_info[ :stream_port ] }"
-        add_proxyd_ctlmsg_tund_port( tund_info )
+      begin
+        proxy, addrinfo = proxyd.accept_nonblock
+      rescue IO::WaitReadable, Errno::EINTR
+        print 'r'
         return
       end
 
-      result = @custom.check( data, addrinfo )
-
-      if result != :success then
-        puts "p#{ Process.pid } #{ Time.new } #{ result }"
-        return
-      end
-
-      im = data
-
-      unless @traff_ins.include?( im ) then
-        @traff_ins[ im ] = 0
-        @traff_outs[ im ] = 0
-      end
-
-      tund = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-      tund_port = tund.local_address.ip_port
-      add_read( tund, :tund )
-
-      tcpd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      tcpd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
-      tcpd.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-      tcpd_port = tcpd.local_address.ip_port
-      tcpd.listen( 127 )
-      add_read( tcpd, :tcpd )
-
-      tund_info = {
-        im: im,                      # 标识
-        port: tund_port,             # 端口
-        tcpd: tcpd,                  # 对应的tcpd
-        tcpd_port: tcpd_port,        # tcpd端口
-        ctlmsgs: [],                 # [ ctlmsg, to_addr ]
-        tun_addr: from_addr,         # tun地址
+      @proxy_infos[ proxy ] = {
+        addrinfo: addrinfo,          # proxy地址
+        im: nil,                     # 标识
+        tund: nil,                   # 对应tund
+        tund_port: nil,              # tund端口
+        ctlmsgs: [],                 # ctlmsg\r\n
         dsts: ConcurrentHash.new,    # dst_id => dst
         dst_ids: ConcurrentHash.new, # src_id => dst_id
         created_at: Time.new,        # 创建时间
-        last_recv_at: nil,           # 上一次收到流量的时间
-        changed_tun_addr: nil        # 记录到和tun addr不符的来源地址
+        last_recv_at: nil            # 上一次收到流量的时间
       }
 
-      @tunneling_tunds[ from_addr ] = tund
-      @tund_infos[ tund ] = tund_info
-      @tcpd_infos[ tcpd ] = {
-        tund: tund
-      }
+      puts "p#{ Process.pid } #{ Time.new } accept a proxy #{ addrinfo.ip_unpack.inspect }, #{ @proxy_infos.size } proxys"
+      add_read( proxy, :proxy )
+    end
 
-      puts "p#{ Process.pid } #{ Time.new } a new tunnel #{ addrinfo.ip_unpack.inspect } - #{ tund_port }, #{ tcpd_port }, #{ @tund_infos.size } tunds"
-      add_proxyd_ctlmsg_tund_port( tund_info )
+    ##
+    # read proxy
+    #
+    def read_proxy( proxy )
+      if proxy.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read proxy but proxy closed?"
+        return
+      end
+
+      begin
+        data = proxy.read_nonblock( READ_SIZE )
+      rescue IO::WaitReadable, Errno::EINTR
+        print 'r'
+        return
+      rescue Exception => e
+        # puts "debug1 read proxy #{ e.class }"
+        close_proxy( proxy )
+        return
+      end
+
+      proxy_info = @proxy_infos[ proxy ]
+      proxy_info[ :last_recv_at ] = Time.new
+
+      data.split( "\r\n" ).each do | ctlmsg |
+        ctl_num_chr = ctlmsg[ 8 ]
+
+        if ctl_num_chr && !ctl_num_chr.empty? then
+          ctl_num = ctl_num_chr.unpack( 'C' ).first
+
+          case ctl_num
+          when TUND_PORT then
+            tund_port = proxy_info[ :tund_port ]
+
+            if tund_port then
+              puts "p#{ Process.pid } #{ Time.new } resend tund port #{ tund_port }"
+              add_ctlmsg_tund_port( proxy, tund_port )
+              return
+            end
+
+            addrinfo = proxy_info[ :addrinfo ]
+
+            im = ctlmsg[ 9..-1 ]
+            result = @custom.check( im, addrinfo )
+
+            if result != :success then
+              puts "p#{ Process.pid } #{ Time.new } #{ result }"
+              return
+            end
+
+            unless @traff_ins.include?( im ) then
+              @traff_ins[ im ] = 0
+              @traff_outs[ im ] = 0
+            end
+
+            tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+            tund.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+            tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+            tund_port = tund.local_address.ip_port
+            tund.listen( 127 )
+            add_read( tund, :tund )
+
+            @tund_infos[ tund ] = {
+              proxy: proxy
+            }
+
+            proxy_info[ :im ] = im
+            proxy_info[ :tund ] = tund
+            proxy_info[ :tund_port ] = tund_port
+
+            puts "p#{ Process.pid } #{ Time.new } tunnel #{ im.inspect } #{ tund_port }"
+            add_ctlmsg_tund_port( proxy, tund_port )
+          when A_NEW_SOURCE then
+            src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
+            dst_id = proxy_info[ :dst_ids ][ src_id ]
+
+            if dst_id then
+              dst = proxy_info[ :dsts ][ dst_id ]
+              return unless dst
+
+              if dst.closed? then
+                dst_id = 0
+              end
+
+              # puts "debug1 resend paired #{ src_id } #{ dst_id }"
+              data2 = [ 0, PAIRED, src_id, dst_id ].pack( 'Q>CQ>n' )
+              add_ctlmsg( proxy, data2 )
+              return
+            end
+
+            enc_domain_port = ctlmsg[ 17..-1 ]
+            domain_port = @custom.decode( enc_domain_port )
+            # puts "debug1 a new source #{ src_id } #{ domain_port }"
+            resolve_domain( proxy, src_id, domain_port )
+          when TUN_FIN then
+            puts "p#{ Process.pid } #{ Time.new } recv tun fin"
+            add_closing_proxy( proxy )
+          end
+        end
+      end
     end
 
     ##
@@ -778,7 +815,7 @@ module Girl
     def read_infod( infod )
       data, addrinfo, rflags, *controls = infod.recvmsg
       ctl_num = data[ 0 ].unpack( 'C' ).first
-      # puts "debug1 infod recv #{ ctl_num } #{ addrinfo.inspect }"
+      # puts "debug1 infod recv #{ ctl_num } #{ addrinfo.ip_unpack.inspect }"
 
       case ctl_num
       when TRAFF_INFOS then
@@ -790,103 +827,14 @@ module Girl
           data2 << [ [ im.bytesize ].pack( 'C' ), im, [ traff_in, traff_out ].pack( 'Q>Q>' ) ].join
         end
 
-        send_data( infod, data2, addrinfo )
-      end
-    end
-
-    ##
-    # read tund
-    #
-    def read_tund( tund )
-      if tund.closed? then
-        puts "p#{ Process.pid } #{ Time.new } read tund but tund closed?"
-        return
-      end
-
-      begin
-        data, addrinfo, rflags, *controls = tund.recvmsg_nonblock
-      rescue IO::WaitReadable, Errno::EINTR
-        print 'r'
-        return
-      end
-
-      from_addr = addrinfo.to_sockaddr
-      tund_info = @tund_infos[ tund ]
-
-      if from_addr != tund_info[ :tun_addr ] then
-        # 通常是光猫刷新ip和端口，但万一不是，为了避免脏数据注入，关闭tund
-        puts "p#{ Process.pid } #{ Time.new } from #{ addrinfo.inspect } not match tun addr #{ Addrinfo.new( tund_info[ :tun_addr ] ).inspect }"
-        tund_info[ :changed_tun_addr ] = from_addr
-        add_closing_tund( tund )
-        return
-      end
-
-      pack_id = data[ 0, 8 ].unpack( 'Q>' ).first
-      return if pack_id != 0
-
-      tund_info[ :last_recv_at ] = Time.new
-      ctl_num = data[ 8 ].unpack( 'C' ).first
-
-      case ctl_num
-      when A_NEW_SOURCE then
-        src_id = data[ 9, 8 ].unpack( 'Q>' ).first
-        dst_id = tund_info[ :dst_ids ][ src_id ]
-
-        if dst_id then
-          dst = tund_info[ :dsts ][ dst_id ]
-          return unless dst
-
-          if dst.closed? then
-            dst_id = 0
-          end
-
-          # puts "debug1 resend paired #{ dst_id }"
-          data2 = [ 0, PAIRED, src_id, dst_id ].pack( 'Q>CQ>n' )
-          add_ctlmsg( tund, data2 )
-          return
+        begin
+          infod.sendmsg_nonblock( data2, 0, addrinfo )
+        rescue IO::WaitWritable, Errno::EINTR
+          print 'w'
+        rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+          puts "p#{ Process.pid } #{ Time.new } infod sendmsg to #{ addrinfo.ip_unpack.inspect } #{ e.class }"
         end
-
-        data = data[ 17..-1 ]
-        domain_port = @custom.decode( data )
-        # puts "debug1 a new source #{ src_id } #{ domain_port }"
-        resolve_domain( tund, src_id, domain_port )
-      when TUN_FIN then
-        puts "p#{ Process.pid } #{ Time.new } recv tun fin"
-        add_closing_tund( tund )
       end
-    end
-
-    ##
-    # read tcpd
-    #
-    def read_tcpd( tcpd )
-      if tcpd.closed? then
-        puts "p#{ Process.pid } #{ Time.new } read tcpd but tcpd closed?"
-        return
-      end
-
-      begin
-        streamd, addrinfo = tcpd.accept_nonblock
-      rescue IO::WaitReadable, Errno::EINTR
-        print 'r'
-        return
-      end
-
-      # puts "debug1 accept a streamd"
-      tcpd_info = @tcpd_infos[ tcpd ]
-      tund = tcpd_info[ :tund ]
-      tund_info = @tund_infos[ tund ]
-
-      @streamd_infos[ streamd ] = {
-        tund: tund,           # 对应tund
-        im: tund_info[ :im ], # 标识
-        dst: nil,             # 对应dst
-        domain_port: nil,     # dst的目的地和端口
-        wbuff: '',            # 写前，写往近端stream
-        closing_write: false  # 准备关闭写
-      }
-
-      add_read( streamd, :streamd )
     end
 
     ##
@@ -906,21 +854,21 @@ module Girl
       rescue Exception => e
         # puts "debug1 read dst #{ e.class }"
         dst_info = close_read_dst( dst )
-        streamd = dst_info[ :streamd ]
-        set_streamd_closing_write( streamd ) if streamd
+        tun = dst_info[ :tun ]
+        set_tun_closing_write( tun ) if tun
         return
       end
 
       dst_info = @dst_infos[ dst ]
       @traff_ins[ dst_info[ :im ] ] += data.bytesize
-      streamd = dst_info[ :streamd ]
+      tun = dst_info[ :tun ]
 
-      if streamd then
-        unless streamd.closed? then
-          streamd_info = @streamd_infos[ streamd ]
+      if tun then
+        unless tun.closed? then
+          tun_info = @tun_infos[ tun ]
           data = @custom.encode( data )
-          # puts "debug2 add streamd.wbuff encoded #{ data.bytesize }"
-          add_streamd_wbuff( streamd, data )
+          # puts "debug2 add tun.wbuff encoded #{ data.bytesize }"
+          add_tun_wbuff( tun, data )
         end
       else
         add_dst_rbuff( dst, data )
@@ -928,60 +876,93 @@ module Girl
     end
 
     ##
-    # read streamd
+    # read tund
     #
-    def read_streamd( streamd )
-      if streamd.closed? then
-        puts "p#{ Process.pid } #{ Time.new } read streamd but streamd closed?"
+    def read_tund( tund )
+      if tund.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read tund but tund closed?"
         return
       end
 
       begin
-        data = streamd.read_nonblock( READ_SIZE )
+        tun, addrinfo = tund.accept_nonblock
+      rescue IO::WaitReadable, Errno::EINTR
+        print 'r'
+        return
+      end
+
+      # puts "debug1 accept a tun"
+      tund_info = @tund_infos[ tund ]
+      proxy = tund_info[ :proxy ]
+      proxy_info = @proxy_infos[ proxy ]
+
+      @tun_infos[ tun ] = {
+        proxy: proxy,          # 对应proxy
+        im: proxy_info[ :im ], # 标识
+        dst: nil,              # 对应dst
+        domain_port: nil,      # dst的目的地和端口
+        wbuff: '',             # 写前
+        closing_write: false   # 准备关闭写
+      }
+
+      add_read( tun, :tun )
+    end
+
+    ##
+    # read tun
+    #
+    def read_tun( tun )
+      if tun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read tun but tun closed?"
+        return
+      end
+
+      begin
+        data = tun.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
         print 'r'
         return
       rescue Exception => e
-        # puts "debug1 read streamd #{ e.class }"
-        streamd_info = close_read_streamd( streamd )
-        dst = streamd_info[ :dst ]
+        # puts "debug1 read tun #{ e.class }"
+        tun_info = close_read_tun( tun )
+        dst = tun_info[ :dst ]
         set_dst_closing_write( dst ) if dst
         return
       end
 
-      streamd_info = @streamd_infos[ streamd ]
-      @traff_ins[ streamd_info[ :im ] ] += data.bytesize
-      dst = streamd_info[ :dst ]
+      tun_info = @tun_infos[ tun ]
+      @traff_ins[ tun_info[ :im ] ] += data.bytesize
+      dst = tun_info[ :dst ]
 
       unless dst then
         dst_id = data[ 0, 2 ].unpack( 'n' ).first
-        tund = streamd_info[ :tund ]
+        proxy = tun_info[ :proxy ]
 
-        if tund.closed? then
-          add_closing_streamd( streamd )
+        if proxy.closed? then
+          add_closing_tun( tun )
           return
         end
 
-        tund_info = @tund_infos[ tund ]
-        dst = tund_info[ :dsts ][ dst_id ]
+        proxy_info = @proxy_infos[ proxy ]
+        dst = proxy_info[ :dsts ][ dst_id ]
 
         unless dst then
-          add_closing_streamd( streamd )
+          add_closing_tun( tun )
           return
         end
 
-        # puts "debug1 set streamd.dst #{ dst_id }"
-        streamd_info[ :dst ] = dst
+        # puts "debug1 set tun.dst #{ dst_id }"
+        tun_info[ :dst ] = dst
         dst_info = @dst_infos[ dst ]
-        streamd_info[ :domain_port ] = dst_info[ :domain_port ]
+        tun_info[ :domain_port ] = dst_info[ :domain_port ]
 
         unless dst_info[ :rbuff ].empty? then
-          # puts "debug1 encode and move dst.rbuff to streamd.wbuff"
+          # puts "debug1 encode and move dst.rbuff to tun.wbuff"
           data2 = @custom.encode( dst_info[ :rbuff ] )
-          add_streamd_wbuff( streamd, data2 )
+          add_tun_wbuff( tun, data2 )
         end
 
-        dst_info[ :streamd ] = streamd
+        dst_info[ :tun ] = tun
         data = data[ 2..-1 ]
 
         return if data.empty?
@@ -993,53 +974,31 @@ module Girl
     end
 
     ##
-    # write proxyd
+    # write proxy
     #
-    def write_proxyd( proxyd )
-      # 发ctlmsg
-      while @proxyd_info[ :ctlmsgs ].any? do
-        data, to_addr = @proxyd_info[ :ctlmsgs ].first
-        sent = send_data( proxyd, data, to_addr )
-
-        if sent == :wait then
-          puts "p#{ Process.pid } #{ Time.new } wait proxyd send ctlmsg, left #{ @proxyd_info[ :ctlmsgs ].size }"
-          return
-        else
-          @proxyd_info[ :ctlmsgs ].shift
-        end
-      end
-
-      @writes.delete( proxyd )
-    end
-
-    ##
-    # write tund
-    #
-    def write_tund( tund )
-      if tund.closed? then
-        puts "p#{ Process.pid } #{ Time.new } write tund but tund closed?"
-        return
-      end
-
-      tund_info = @tund_infos[ tund ]
+    def write_proxy( proxy )
+      proxy_info = @proxy_infos[ proxy ]
 
       # 发ctlmsg
-      while tund_info[ :ctlmsgs ].any? do
-        data = tund_info[ :ctlmsgs ].first
-        sent = send_data( tund, data, tund_info[ :tun_addr ] )
+      while proxy_info[ :ctlmsgs ].any? do
+        data = proxy_info[ :ctlmsgs ].join
 
-        if sent == :fatal then
-          close_tund( tund )
+        # 写入
+        begin
+          written = proxy.write( data )
+        rescue IO::WaitWritable, Errno::EINTR
+          print 'w'
           return
-        elsif sent == :wait then
-          puts "p#{ Process.pid } #{ Time.new } wait tund #{ tund_info[ :port ] } send ctlmsg, left #{ tund_info[ :ctlmsgs ].size }"
+        rescue Exception => e
+          # puts "debug1 write proxy #{ e.class }"
+          close_proxy( proxy )
           return
         end
 
-        tund_info[ :ctlmsgs ].shift
+        proxy_info[ :ctlmsgs ].clear
       end
 
-      @writes.delete( tund )
+      @writes.delete( proxy )
     end
 
     ##
@@ -1052,7 +1011,7 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
-      streamd = dst_info[ :streamd ]
+      tun = dst_info[ :tun ]
       data = dst_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1075,7 +1034,7 @@ module Girl
       rescue Exception => e
         # puts "debug1 write dst #{ e.class }"
         close_write_dst( dst )
-        close_read_streamd( streamd ) if streamd
+        close_read_tun( tun ) if tun
         return
       end
 
@@ -1086,23 +1045,24 @@ module Girl
     end
 
     ##
-    # write streamd
+    # write tun
     #
-    def write_streamd( streamd )
-      if streamd.closed? then
-        puts "p#{ Process.pid } #{ Time.new } write streamd but streamd closed?"
+    def write_tun( tun )
+      if tun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write tun but tun closed?"
         return
       end
-      streamd_info = @streamd_infos[ streamd ]
-      dst = streamd_info[ :dst ]
-      data = streamd_info[ :wbuff ]
+
+      tun_info = @tun_infos[ tun ]
+      dst = tun_info[ :dst ]
+      data = tun_info[ :wbuff ]
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if streamd_info[ :closing_write ] then
-          close_write_streamd( streamd )
+        if tun_info[ :closing_write ] then
+          close_write_tun( tun )
         else
-          @writes.delete( streamd )
+          @writes.delete( tun )
         end
 
         return
@@ -1110,21 +1070,21 @@ module Girl
 
       # 写入
       begin
-        written = streamd.write_nonblock( data )
+        written = tun.write_nonblock( data )
       rescue IO::WaitWritable, Errno::EINTR
         print 'w'
         return
       rescue Exception => e
-        # puts "debug1 write streamd #{ e.class }"
-        close_write_streamd( streamd )
+        # puts "debug1 write tun #{ e.class }"
+        close_write_tun( tun )
         close_read_dst( dst ) if dst
         return
       end
 
-      # puts "debug2 written streamd #{ written }"
+      # puts "debug2 written tun #{ written }"
       data = data[ written..-1 ]
-      streamd_info[ :wbuff ] = data
-      @traff_outs[ streamd_info[ :im ] ] += written
+      tun_info[ :wbuff ] = data
+      @traff_outs[ tun_info[ :im ] ] += written
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]

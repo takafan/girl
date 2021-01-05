@@ -9,7 +9,7 @@ require 'json'
 require 'socket'
 
 =begin
-# Girl::Proxy - 代理服务，近端。
+# Girl::Proxy - 近端
 
 ## 包结构
 
@@ -62,16 +62,16 @@ module Girl
       raise "missing config file #{ config_path }" unless File.exist?( config_path )
 
       # {
-      #     "proxy_port": 6666,                   // 代理服务，近端（本地）端口
-      #     "proxyd_host": "1.2.3.4",             // 代理服务，远端服务器
-      #     "proxyd_port": 6060,                  // 代理服务，远端端口
+      #     "redir_port": 6666,                   // 近端（本地）端口
+      #     "proxyd_host": "1.2.3.4",             // 远端服务器
+      #     "proxyd_port": 6060,                  // 远端端口
       #     "direct_path": "girl.direct.txt",     // 直连ip段
       #     "remote_path": "girl.remote.txt",     // 交给远端解析的域名列表
       #     "im": "girl",                         // 标识，用来识别近端
-      #     "worker_count": 4                     // 子进程数，默认取cpu个数
+      #     "worker_count": 1                     // 子进程数，默认取cpu个数
       # }
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
-      proxy_port = conf[ :proxy_port ]
+      redir_port = conf[ :redir_port ]
       proxyd_host = conf[ :proxyd_host ]
       proxyd_port = conf[ :proxyd_port ]
       direct_path = conf[ :direct_path ]
@@ -79,8 +79,8 @@ module Girl
       im = conf[ :im ]
       worker_count = conf[ :worker_count ]
 
-      unless proxy_port then
-        proxy_port = 6666
+      unless redir_port then
+        redir_port = 6666
       end
 
       raise "missing proxyd host" unless proxyd_host
@@ -115,7 +115,7 @@ module Girl
 
       title = "girl proxy #{ Girl::VERSION }"
       puts title
-      puts "proxy port #{ proxy_port }"
+      puts "redir port #{ redir_port }"
       puts "proxyd host #{ proxyd_host }"
       puts "proxyd port #{ proxyd_port }"
       puts "#{ direct_path } #{ directs.size } directs"
@@ -140,7 +140,7 @@ module Girl
         worker_count.times do | i |
           workers << fork do
             $0 = 'girl proxy worker'
-            worker = Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, im )
+            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
 
             Signal.trap( :TERM ) do
               puts "w#{ i } exit"
@@ -164,7 +164,7 @@ module Girl
 
         Process.waitall
       else
-        Girl::ProxyWorker.new( proxy_port, proxyd_host, proxyd_port, directs, remotes, im ).looping
+        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im ).looping
       end
     end
 

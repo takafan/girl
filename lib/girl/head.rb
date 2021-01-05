@@ -2,9 +2,7 @@ module Girl
   READ_SIZE             = 1024 * 1024       # 一次读多少
   WBUFF_LIMIT           = 100 * 1024 * 1024 # 写前上限，超过上限暂停读
   RESUME_BELOW          = WBUFF_LIMIT / 2   # 降到多少以下恢复读
-  SEND_HELLO_COUNT      = 10                # hello/a new source最多发几次
-  SEND_HELLO_INTERVAL   = 0.5               # 发送hello/a new source间隔
-  EXPIRE_NEW            = 5                 # 多久没有结到对子，过期
+  EXPIRE_NEW            = 5                 # 多久没有建立通道，过期
   EXPIRE_AFTER          = 300               # 多久没有新流量，过期
   RESET_TRAFF_DAY       = 1                 # 流量计数重置日，0为不重置
   CHECK_TRAFF_INTERVAL  = 86400             # 检查今天是否是流量计数重置日间隔
@@ -46,8 +44,6 @@ EOF
     READ_SIZE
     WBUFF_LIMIT
     RESUME_BELOW
-    SEND_HELLO_COUNT
-    SEND_HELLO_INTERVAL
     EXPIRE_NEW
     EXPIRE_AFTER
     CHECK_EXPIRE_INTERVAL
