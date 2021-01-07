@@ -83,7 +83,7 @@ module Girl
     def quit!
       if @proxy && !@proxy.closed? then
         # puts "debug1 send tun fin"
-        data = "#{ [ 0, TUN_FIN ].pack( 'Q>C' ) }\r\n"
+        data = "#{ [ 0, TUN_FIN ].pack( 'Q>C' ) }#{ SEPARATE }"
         @proxy.write( data )
       end
 
@@ -120,7 +120,7 @@ module Girl
     def add_ctlmsg( data )
       return if @proxy.nil? || @proxy.closed?
 
-      @proxy_info[ :ctlmsgs ] << "#{ data }\r\n"
+      @proxy_info[ :ctlmsgs ] << "#{ data }#{ SEPARATE }"
       add_write( @proxy )
       next_tick
     end
@@ -639,7 +639,7 @@ module Girl
 
       proxy_info = {
         pending_sources: [],      # 还没配到tund，暂存的src
-        ctlmsgs: [],              # ctlmsg\r\n
+        ctlmsgs: [],              # ctlmsg
         srcs: ConcurrentHash.new, # src_id => src
         tund_addr: nil,           # tund地址
         created_at: Time.new,     # 创建时间
@@ -661,7 +661,7 @@ module Girl
       add_read( proxy, :proxy )
       hello = @custom.hello
       puts "p#{ Process.pid } #{ Time.new } tunnel #{ hello.inspect }"
-      data = [ [ 0, TUND_PORT ].pack( 'Q>C' ), hello ].join
+      data = [ [ 0, HELLO ].pack( 'Q>C' ), hello ].join
       add_ctlmsg( data )
     end
 
@@ -693,12 +693,6 @@ module Girl
 
       src_info = @src_infos[ src ]
       return if src_info[ :dst_id ]
-
-      if dst_id == 0 then
-        puts "p#{ Process.pid } #{ Time.new } remote dst already closed"
-        add_closing_src( src )
-        return
-      end
 
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
@@ -976,30 +970,32 @@ module Girl
         return
       end
 
-      data.split( "\r\n" ).each do | ctlmsg |
+      data.split( SEPARATE ).each do | ctlmsg |
+        next unless ctlmsg[ 8 ]
+
         ctl_num = ctlmsg[ 8 ].unpack( 'C' ).first
 
         case ctl_num
         when TUND_PORT then
-          unless @proxy_info[ :tund_addr ] then
-            tund_port = data[ 9, 2 ].unpack( 'n' ).first
+          next if @proxy_info[ :tund_addr ] || ( ctlmsg.size != 11 )
 
-            puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
-            @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
+          tund_port = data[ 9, 2 ].unpack( 'n' ).first
+          puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
+          @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
 
-            if @proxy_info[ :pending_sources ].any? then
-              puts "p#{ Process.pid } #{ Time.new } send pending sources"
-              @proxy_info[ :pending_sources ].each { | src | add_a_new_source( src ) }
-              @proxy_info[ :pending_sources ].clear
-            end
+          if @proxy_info[ :pending_sources ].any? then
+            puts "p#{ Process.pid } #{ Time.new } send pending sources"
+            @proxy_info[ :pending_sources ].each { | src | add_a_new_source( src ) }
+            @proxy_info[ :pending_sources ].clear
           end
         when PAIRED then
-          src_id, dst_id = data[ 9, 10 ].unpack( 'Q>n' )
+          next if ctlmsg.size != 19
 
+          src_id, dst_id = data[ 9, 10 ].unpack( 'Q>n' )
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
           new_a_tun( src_id, dst_id )
-        when IP_CHANGED then
-          puts "p#{ Process.pid } #{ Time.new } recv ip changed"
+        when TUND_FIN then
+          puts "p#{ Process.pid } #{ Time.new } got tund fin"
           close_proxy( proxy )
           return
         end

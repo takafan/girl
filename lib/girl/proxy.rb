@@ -8,30 +8,21 @@ require 'ipaddr'
 require 'json'
 require 'socket'
 
-=begin
+##
 # Girl::Proxy - 近端
+#
+=begin
 
-## 包结构
+# ctlmsg结构
 
-tun-proxyd:
+proxy-proxyd:
 
-hello
+Q>: 0 ctlmsg -> C: 1 hello -> hello
 
-proxyd-tun:
+proxyd-proxy:
 
-Q>: 0 ctlmsg -> C: 1 tund port -> n: tund port -> n: tcpd port
-
-local-infod:
-
-C: 101 traff infos
-
-infod-local:
-
-C: 101 traff infos -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
-
-tun-tund:
-
-Q>: 0 ctlmsg -> C: 2 heartbeat
+Q>: 0 ctlmsg -> C: 1 tund port       -> n: tund port
+                   2 heartbeat       NOT USE
                    3 a new source    -> Q>: src id -> encoded destination address
                    4 paired          -> Q>: src id -> n: dst id
                    5 dest status     NOT USE
@@ -43,12 +34,21 @@ Q>: 0 ctlmsg -> C: 2 heartbeat
                   11 confirm fin2    NOT USE
                   12 tund fin
                   13 tun fin
-                  14 tun ip changed
+                  14 tun ip changed  NOT USE
                   15 single miss     NOT USE
                   16 range miss      NOT USE
                   17 continue        NOT USE
                   18 is resend ready NOT USE
                   19 resend ready    NOT USE
+
+local-infod:
+
+C: 101 traff infos
+
+infod-local:
+
+C: 101 traff infos -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
+
 =end
 
 module Girl

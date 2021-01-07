@@ -9,6 +9,7 @@ module Girl
   CHECK_EXPIRE_INTERVAL = 5                 # 检查过期间隔
   CHECK_RESUME_INTERVAL = 1                 # 检查恢复读间隔
   RESOLV_CACHE_EXPIRE   = 300               # dns查询结果缓存多久过期
+  HELLO                 = 1
   TUND_PORT             = 1
   HEARTBEAT             = 2
   A_NEW_SOURCE          = 3
@@ -29,6 +30,7 @@ module Girl
   IS_RESEND_READY       = 18
   RESEND_READY          = 19
   TRAFF_INFOS           = 101
+  SEPARATE              = "\r\n"
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
   RESERVED_ROUTE = <<EOF

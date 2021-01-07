@@ -82,6 +82,12 @@ module Girl
     # quit!
     #
     def quit!
+      @proxy_infos.keys.each do | proxy |
+        # puts "debug1 send tund fin"
+        data = "#{ [ 0, TUND_FIN ].pack( 'Q>C' ) }#{ SEPARATE }"
+        proxy.write( data )
+      end
+
       # puts "debug1 exit"
       exit
     end
@@ -89,39 +95,12 @@ module Girl
     private
 
     ##
-    # add closing dst
-    #
-    def add_closing_dst( dst )
-      return if dst.closed? || @closing_dsts.include?( dst )
-      @closing_dsts << dst
-      next_tick
-    end
-
-    ##
-    # add closing proxy
-    #
-    def add_closing_proxy( proxy )
-      return if proxy.closed? || @closing_proxys.include?( proxy )
-      @closing_proxys << proxy
-      next_tick
-    end
-
-    ##
-    # add closing tun
-    #
-    def add_closing_tun( tun )
-      return if tun.closed? || @closing_tuns.include?( tun )
-      @closing_tuns << tun
-      next_tick
-    end
-
-    ##
     # add ctlmsg
     #
     def add_ctlmsg( proxy, data )
       return if proxy.closed? || @closing_proxys.include?( proxy )
       proxy_info = @proxy_infos[ proxy ]
-      proxy_info[ :ctlmsgs ] << "#{ data }\r\n"
+      proxy_info[ :ctlmsgs ] << "#{ data }#{ SEPARATE }"
       add_write( proxy )
       next_tick
     end
@@ -135,7 +114,7 @@ module Girl
 
       if dst_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
         # puts "debug1 dst.rbuff full"
-        add_closing_dst( dst )
+        close_dst( dst )
       end
     end
 
@@ -172,14 +151,6 @@ module Girl
       return if tun.closed? || @paused_tuns.include?( tun )
       @reads.delete( tun )
       @paused_tuns << tun
-    end
-
-    ##
-    # add ctlmsg tund port
-    #
-    def add_ctlmsg_tund_port( proxy, tund_port )
-      data = [ 0, TUND_PORT, tund_port ].pack( 'Q>Cn' )
-      add_ctlmsg( proxy, data )
     end
 
     ##
@@ -452,7 +423,11 @@ module Girl
 
             if proxy_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
               puts "p#{ Process.pid } #{ Time.new } expire proxy #{ proxy_info[ :addrinfo ].inspect }"
-              add_closing_proxy( proxy )
+
+              unless @closing_proxys.include?( proxy ) then
+                @closing_proxys << proxy
+                next_tick
+              end
             end
           end
 
@@ -463,7 +438,11 @@ module Girl
 
             if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
               puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
-              add_closing_dst( dst )
+
+              unless @closing_dsts.include?( dst ) then
+                @closing_dsts << dst
+                next_tick
+              end
             end
           end
         end
@@ -697,7 +676,7 @@ module Girl
         im: nil,                     # 标识
         tund: nil,                   # 对应tund
         tund_port: nil,              # tund端口
-        ctlmsgs: [],                 # ctlmsg\r\n
+        ctlmsgs: [],                 # ctlmsg
         dsts: ConcurrentHash.new,    # dst_id => dst
         dst_ids: ConcurrentHash.new, # src_id => dst_id
         created_at: Time.new,        # 创建时间
@@ -729,83 +708,66 @@ module Girl
       end
 
       proxy_info = @proxy_infos[ proxy ]
-      proxy_info[ :last_recv_at ] = Time.new
 
-      data.split( "\r\n" ).each do | ctlmsg |
-        ctl_num_chr = ctlmsg[ 8 ]
+      data.split( SEPARATE ).each do | ctlmsg |
+        next unless ctlmsg[ 8 ]
 
-        if ctl_num_chr && !ctl_num_chr.empty? then
-          ctl_num = ctl_num_chr.unpack( 'C' ).first
+        ctl_num = ctlmsg[ 8 ].unpack( 'C' ).first
 
-          case ctl_num
-          when TUND_PORT then
-            tund_port = proxy_info[ :tund_port ]
+        case ctl_num
+        when HELLO then
+          next if proxy_info[ :tund_port ] || ctlmsg.size <= 9
 
-            if tund_port then
-              puts "p#{ Process.pid } #{ Time.new } resend tund port #{ tund_port }"
-              add_ctlmsg_tund_port( proxy, tund_port )
-              return
-            end
+          im = ctlmsg[ 9..-1 ]
+          addrinfo = proxy_info[ :addrinfo ]
+          result = @custom.check( im, addrinfo )
 
-            addrinfo = proxy_info[ :addrinfo ]
-
-            im = ctlmsg[ 9..-1 ]
-            result = @custom.check( im, addrinfo )
-
-            if result != :success then
-              puts "p#{ Process.pid } #{ Time.new } #{ result }"
-              return
-            end
-
-            unless @traff_ins.include?( im ) then
-              @traff_ins[ im ] = 0
-              @traff_outs[ im ] = 0
-            end
-
-            tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-            tund.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
-            tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-            tund_port = tund.local_address.ip_port
-            tund.listen( 127 )
-            add_read( tund, :tund )
-
-            @tund_infos[ tund ] = {
-              proxy: proxy
-            }
-
-            proxy_info[ :im ] = im
-            proxy_info[ :tund ] = tund
-            proxy_info[ :tund_port ] = tund_port
-
-            puts "p#{ Process.pid } #{ Time.new } tunnel #{ im.inspect } #{ tund_port }"
-            add_ctlmsg_tund_port( proxy, tund_port )
-          when A_NEW_SOURCE then
-            src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
-            dst_id = proxy_info[ :dst_ids ][ src_id ]
-
-            if dst_id then
-              dst = proxy_info[ :dsts ][ dst_id ]
-              return unless dst
-
-              if dst.closed? then
-                dst_id = 0
-              end
-
-              # puts "debug1 resend paired #{ src_id } #{ dst_id }"
-              data2 = [ 0, PAIRED, src_id, dst_id ].pack( 'Q>CQ>n' )
-              add_ctlmsg( proxy, data2 )
-              return
-            end
-
-            enc_domain_port = ctlmsg[ 17..-1 ]
-            domain_port = @custom.decode( enc_domain_port )
-            # puts "debug1 a new source #{ src_id } #{ domain_port }"
-            resolve_domain( proxy, src_id, domain_port )
-          when TUN_FIN then
-            puts "p#{ Process.pid } #{ Time.new } recv tun fin"
-            add_closing_proxy( proxy )
+          if result != :success then
+            puts "p#{ Process.pid } #{ Time.new } #{ result }"
+            return
           end
+
+          unless @traff_ins.include?( im ) then
+            @traff_ins[ im ] = 0
+            @traff_outs[ im ] = 0
+          end
+
+          tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+          tund.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+          tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+          tund_port = tund.local_address.ip_port
+          tund.listen( 127 )
+          add_read( tund, :tund )
+
+          @tund_infos[ tund ] = {
+            proxy: proxy
+          }
+
+          proxy_info[ :im ] = im
+          proxy_info[ :tund ] = tund
+          proxy_info[ :tund_port ] = tund_port
+
+          puts "p#{ Process.pid } #{ Time.new } tunnel #{ im.inspect } #{ tund_port }"
+          data2 = [ 0, TUND_PORT, tund_port ].pack( 'Q>Cn' )
+          add_ctlmsg( proxy, data2 )
+        when A_NEW_SOURCE then
+          next if ctlmsg.size <= 17
+
+          src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
+          dst_id = proxy_info[ :dst_ids ][ src_id ]
+          next if dst_id
+
+          enc_domain_port = ctlmsg[ 17..-1 ]
+          domain_port = @custom.decode( enc_domain_port )
+          # puts "debug1 a new source #{ src_id } #{ domain_port }"
+          resolve_domain( proxy, src_id, domain_port )
+        when TUN_FIN then
+          puts "p#{ Process.pid } #{ Time.new } got tun fin"
+          close_proxy( proxy )
+          return
         end
+
+        proxy_info[ :last_recv_at ] = Time.new
       end
     end
 
@@ -815,7 +777,7 @@ module Girl
     def read_infod( infod )
       data, addrinfo, rflags, *controls = infod.recvmsg
       ctl_num = data[ 0 ].unpack( 'C' ).first
-      # puts "debug1 infod recv #{ ctl_num } #{ addrinfo.ip_unpack.inspect }"
+      # puts "debug1 infod got #{ ctl_num } #{ addrinfo.ip_unpack.inspect }"
 
       case ctl_num
       when TRAFF_INFOS then
@@ -939,7 +901,7 @@ module Girl
         proxy = tun_info[ :proxy ]
 
         if proxy.closed? then
-          add_closing_tun( tun )
+          close_tun( tun )
           return
         end
 
@@ -947,7 +909,7 @@ module Girl
         dst = proxy_info[ :dsts ][ dst_id ]
 
         unless dst then
-          add_closing_tun( tun )
+          close_tun( tun )
           return
         end
 
