@@ -24,6 +24,7 @@ module Girl
       @dst_infos = ConcurrentHash.new     # dst => {}
       @tun_infos = ConcurrentHash.new     # tun => {}
       @resolv_caches = ConcurrentHash.new # domain => [ ip, created_at ]
+      @ip_address_list = Socket.ip_address_list
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -111,7 +112,6 @@ module Girl
     def add_closing_src( src )
       return if src.closed? || @closing_srcs.include?( src )
       @closing_srcs << src
-      next_tick
     end
 
     ##
@@ -122,7 +122,6 @@ module Girl
 
       @proxy_info[ :ctlmsgs ] << "#{ data }#{ SEPARATE }"
       add_write( @proxy )
-      next_tick
     end
 
     ##
@@ -454,17 +453,27 @@ module Girl
     # deal with destination ip
     #
     def deal_with_destination_ip( src, ip_info )
+      return false if src.closed?
       src_info = @src_infos[ src ]
 
-      if ( @directs.any? { | direct | direct.include?( ip_info.ip_address ) } ) || ( ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) ) then
+      if ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) \
+        && ( src_info[ :destination_port ] == @redir_port ) then
+        puts "p#{ Process.pid } #{ Time.new } ignore #{ ip_info.ip_address }:#{ src_info[ :destination_port ] }"
+        add_closing_src( src )
+        return false
+      end
+
+      if ( @directs.any? { | direct | direct.include?( ip_info.ip_address ) } ) \
+        || ( ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) ) then
         # ip命中直连列表，或者访问远端非80/443端口，直连
         # puts "debug1 #{ ip_info.inspect } hit directs"
-        new_a_dst( src, ip_info )
-      else
-        # 走远端
-        # puts "debug1 #{ ip_info.inspect } go tunnel"
-        set_proxy_type_tunnel( src )
+        return new_a_dst( src, ip_info )
       end
+      
+      # 走远端
+      # puts "debug1 #{ ip_info.inspect } go tunnel"
+      set_proxy_type_tunnel( src )
+      true
     end
 
     ##
@@ -504,6 +513,7 @@ module Girl
             if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
               puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :destination_domain ] }"
               add_closing_src( src )
+              next_tick
             end
           end
         end
@@ -595,7 +605,7 @@ module Girl
         puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }, close src"
         dst.close
         add_closing_src( src )
-        return
+        return false
       end
 
       # puts "debug1 a new dst #{ dst.local_address.inspect }"
@@ -623,6 +633,8 @@ module Girl
       elsif src_info[ :proxy_proto ] == :socks5 then
         add_socks5_conn_reply( src )
       end
+
+      true
     end
 
     ##
@@ -681,6 +693,7 @@ module Girl
       redir.listen( 127 )
       puts "p#{ Process.pid } #{ Time.new } redir listen on #{ redir_port }"
       add_read( redir, :redir )
+      @redir_port = redir_port
       @redir_local_address = redir.local_address
     end
 
@@ -781,15 +794,13 @@ module Girl
 
         if ip_info then
           @resolv_caches[ domain ] = [ ip_info, Time.new ]
-
-          unless src.closed? then
-            puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
-            deal_with_destination_ip( src, ip_info )
-            next_tick
-          end
+          puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
+          deal_with_destination_ip( src, ip_info )
         else
           add_closing_src( src )
         end
+
+        next_tick
       end
     end
 

@@ -102,7 +102,6 @@ module Girl
       proxy_info = @proxy_infos[ proxy ]
       proxy_info[ :ctlmsgs ] << "#{ data }#{ SEPARATE }"
       add_write( proxy )
-      next_tick
     end
 
     ##
@@ -515,12 +514,8 @@ module Girl
     def new_a_proxyd( proxyd_port )
       proxyd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        proxyd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      end
-
+      proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      proxyd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       proxyd.bind( Socket.sockaddr_in( proxyd_port, '0.0.0.0' ) )
       proxyd.listen( 127 )
 
@@ -733,7 +728,7 @@ module Girl
           end
 
           tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-          tund.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+          tund.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
           tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
           tund_port = tund.local_address.ip_port
           tund.listen( 127 )
