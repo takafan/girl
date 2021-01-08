@@ -473,6 +473,7 @@ module Girl
         # ip命中直连列表，或者访问远端非80/443端口，直连
         # puts "debug1 #{ ip_info.inspect } hit directs"
         new_a_dst( src, ip_info )
+        return
       end
 
       # 走远端
