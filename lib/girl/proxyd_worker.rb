@@ -162,6 +162,8 @@ module Girl
       if role then
         @roles[ sock ] = role
       end
+
+      next_tick
     end
 
     ##
@@ -203,6 +205,7 @@ module Girl
     def add_write( sock )
       return if sock.closed? || @writes.include?( sock )
       @writes << sock
+      next_tick
     end
 
     ##
@@ -360,7 +363,7 @@ module Girl
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } connect destination #{ domain_port } #{ e.class }"
         dst.close
-        return false
+        return
       end
 
       dst_id = dst.local_address.ip_port
@@ -389,7 +392,6 @@ module Girl
       data = [ 0, PAIRED, src_id, dst_id ].pack( 'Q>CQ>n' )
       # puts "debug1 add ctlmsg paired #{ src_id } #{ dst_id }"
       add_ctlmsg( proxy, data )
-      true
     end
 
     ##
@@ -580,9 +582,7 @@ module Girl
           @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
 
           unless proxy.closed? then
-            if deal_with_destination_addr( proxy, src_id, destination_addr, domain_port ) then
-              next_tick
-            end
+            deal_with_destination_addr( proxy, src_id, destination_addr, domain_port )
           end
         end
       end
