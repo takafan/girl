@@ -113,8 +113,9 @@ girl.conf.json的格式：
     "proxyd_port": 6060,                  // 远端端口
     "infod_port": 6070,                   // 查询服务，供远端本机调用
     "direct_path": "girl.direct.txt",     // 直连ip段
-    "remote_path": "girl.remote.txt",     // 交给远端解析的域名列表
+    "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
     "im": "girl",                         // 标识，用来识别近端
+    "use_remote_resolv": false,           // 域名列表之外的域名交给远端解析
     "worker_count": 1                     // 子进程数，默认取cpu个数
 }
 ```

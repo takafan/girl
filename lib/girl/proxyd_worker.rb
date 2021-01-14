@@ -756,6 +756,27 @@ module Girl
           domain_port = @custom.decode( enc_domain_port )
           # puts "debug1 a new source #{ src_id } #{ domain_port }"
           resolve_domain( proxy, src_id, domain_port )
+        when RESOLV then
+          next if ctlmsg.size <= 17
+
+          src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
+          enc_domain = ctlmsg[ 17..-1 ]
+          domain = @custom.decode( enc_domain )
+
+          Thread.new do
+            begin
+              ip_info = Addrinfo.ip( domain )
+            rescue Exception => e
+              puts "p#{ Process.pid } #{ Time.new } resolv #{ domain.inspect } #{ e.class }"
+            end
+
+            if ip_info then
+              ip = ip_info.ip_address
+              puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip }"
+              data2 = [ [ 0, RESOLVED, src_id ].pack( 'Q>CQ>' ), @custom.encode( ip ) ].join
+              add_ctlmsg( proxy, data2 )
+            end
+          end
         when TUN_FIN then
           puts "p#{ Process.pid } #{ Time.new } got tun fin"
           close_proxy( proxy )

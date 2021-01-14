@@ -15,13 +15,8 @@ require 'socket'
 
 # ctlmsg结构
 
-proxy-proxyd:
-
-Q>: 0 ctlmsg -> C: 1 hello -> hello
-
-proxyd-proxy:
-
-Q>: 0 ctlmsg -> C: 1 tund port       -> n: tund port
+Q>: 0 ctlmsg -> C: 1 hello           -> hello
+                   1 tund port       -> n: tund port
                    2 heartbeat       NOT USE
                    3 a new source    -> Q>: src id -> encoded destination address
                    4 paired          -> Q>: src id -> n: dst id
@@ -40,6 +35,8 @@ Q>: 0 ctlmsg -> C: 1 tund port       -> n: tund port
                   17 continue        NOT USE
                   18 is resend ready NOT USE
                   19 resend ready    NOT USE
+                  20 resolv          -> Q>: src id -> encoded domain
+                  21 resolved        -> Q>: src id -> encoded ip
 
 local-infod:
 
@@ -66,8 +63,9 @@ module Girl
       #     "proxyd_host": "1.2.3.4",             // 远端服务器
       #     "proxyd_port": 6060,                  // 远端端口
       #     "direct_path": "girl.direct.txt",     // 直连ip段
-      #     "remote_path": "girl.remote.txt",     // 交给远端解析的域名列表
+      #     "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
       #     "im": "girl",                         // 标识，用来识别近端
+      #     "use_remote_resolv": false,           // 域名列表之外的域名交给远端解析
       #     "worker_count": 1                     // 子进程数，默认取cpu个数
       # }
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
@@ -77,6 +75,7 @@ module Girl
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
       im = conf[ :im ]
+      use_remote_resolv = conf[ :use_remote_resolv ]
       worker_count = conf[ :worker_count ]
 
       unless redir_port then
@@ -107,6 +106,10 @@ module Girl
         im = 'girl'
       end
 
+      unless use_remote_resolv then
+        use_remote_resolv = false
+      end
+
       nprocessors = Etc.nprocessors
 
       if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
@@ -121,6 +124,7 @@ module Girl
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
       puts "im #{ im }"
+      puts "use_remote_resolv #{ use_remote_resolv }"
       puts "worker count #{ worker_count }"
 
       Girl::Custom.constants.each do | name |
@@ -140,7 +144,7 @@ module Girl
         worker_count.times do | i |
           workers << fork do
             $0 = 'girl proxy worker'
-            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
+            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im, use_remote_resolv )
 
             Signal.trap( :TERM ) do
               puts "w#{ i } exit"
@@ -164,7 +168,7 @@ module Girl
 
         Process.waitall
       else
-        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im ).looping
+        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im, use_remote_resolv ).looping
       end
     end
 

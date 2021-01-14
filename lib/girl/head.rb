@@ -29,6 +29,8 @@ module Girl
   CONTINUE              = 17
   IS_RESEND_READY       = 18
   RESEND_READY          = 19
+  RESOLV                = 20
+  RESOLVED              = 21
   TRAFF_INFOS           = 101
   SEPARATE              = "\r\n"
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"

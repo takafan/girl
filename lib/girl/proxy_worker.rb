@@ -4,12 +4,13 @@ module Girl
     ##
     # initialize
     #
-    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
+    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, im, use_remote_resolv )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
+      @use_remote_resolv = use_remote_resolv
       @reads = []
       @writes = []
       @closing_srcs = []
@@ -24,6 +25,7 @@ module Girl
       @dst_infos = ConcurrentHash.new     # dst => {}
       @tun_infos = ConcurrentHash.new     # tun => {}
       @resolv_caches = ConcurrentHash.new # domain => [ ip, created_at ]
+      @srcs = ConcurrentHash.new          # src_id => src
       @ip_address_list = Socket.ip_address_list
 
       dotr, dotw = IO.pipe
@@ -486,11 +488,8 @@ module Girl
     #
     def del_src_info( src )
       src_info = @src_infos.delete( src )
+      @srcs.delete( src_info[ :id ] )
       @proxy_info[ :pending_sources ].delete( src )
-
-      if src_info[ :proxy_type ] == :tunnel then
-        @proxy_info[ :srcs ].delete( src_info[ :id ] )
-      end
 
       src_info
     end
@@ -518,6 +517,10 @@ module Girl
             if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
               puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :destination_domain ] }"
               add_closing_src( src )
+
+              unless src_info[ :rbuff ].empty? then
+                puts "p#{ Process.pid } #{ Time.new } lost rbuff #{ src_info[ :rbuff ].inspect }"
+              end
             end
           end
         end
@@ -654,7 +657,6 @@ module Girl
       proxy_info = {
         pending_sources: [],      # 还没配到tund，暂存的src
         ctlmsgs: [],              # ctlmsg
-        srcs: ConcurrentHash.new, # src_id => src
         tund_addr: nil,           # tund地址
         created_at: Time.new,     # 创建时间
         closing: false            # 是否准备关闭
@@ -703,7 +705,7 @@ module Girl
     # new a tun
     #
     def new_a_tun( src_id, dst_id )
-      src = @proxy_info[ :srcs ][ src_id ]
+      src = @srcs[ src_id ]
       return if src.nil? || src.closed?
 
       src_info = @src_infos[ src ]
@@ -787,11 +789,17 @@ module Girl
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :checking
 
+      if @use_remote_resolv then
+        data = [ [ 0, RESOLV, src_info[ :id ] ].pack( 'Q>CQ>' ), @custom.encode( domain ) ].join
+        add_ctlmsg( data )
+        return
+      end
+
       Thread.new do
         begin
           ip_info = Addrinfo.ip( domain )
         rescue Exception => e
-          puts "p#{ Process.pid } #{ Time.new } resolv #{ domain } #{ e.class }"
+          puts "p#{ Process.pid } #{ Time.new } resolv #{ domain.inspect } #{ e.class }"
         end
 
         if ip_info then
@@ -824,7 +832,6 @@ module Girl
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :tunnel
       src_id = src_info[ :id ]
-      @proxy_info[ :srcs ][ src_id ] = src
 
       if @proxy_info[ :tund_addr ] then
         add_a_new_source( src )
@@ -935,6 +942,7 @@ module Girl
       src_id = rand( ( 2 ** 64 ) - 2 ) + 1
       # puts "debug1 accept a src #{ addrinfo.ip_unpack.inspect } #{ src_id }"
 
+      @srcs[ src_id ] = src
       @src_infos[ src ] = {
         id: src_id,              # id
         proxy_proto: :uncheck,   # :uncheck / :http / :socks5
@@ -1005,6 +1013,19 @@ module Girl
           src_id, dst_id = data[ 9, 10 ].unpack( 'Q>n' )
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
           new_a_tun( src_id, dst_id )
+        when RESOLVED then
+          next if ctlmsg.size <= 17
+
+          src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
+          src = @srcs[ src_id ]
+          return if src.nil? || src.closed?
+
+          src_info = @src_infos[ src ]
+          enc_ip = ctlmsg[ 17..-1 ]
+          ip = @custom.decode( enc_ip )
+          puts "p#{ Process.pid } #{ Time.new } remote resolved #{ src_info[ :destination_domain ] } #{ ip }"
+          ip_info = Addrinfo.ip( ip )
+          deal_with_destination_ip( src, ip_info )
         when TUND_FIN then
           puts "p#{ Process.pid } #{ Time.new } got tund fin"
           close_proxy( proxy )
