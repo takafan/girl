@@ -210,20 +210,20 @@ end
 例如：
 
 ```ruby
-ALT = { '.' => '^', '^' => '.', 'g' => 'o', 'o' => 'g' }
+ALT = { '.' => '^', '^' => '.', 's' => 'o', 'o' => 's' }
 
 def encode( data )
-  data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
+  data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
 end
 
 def decode( data )
-  data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
+  data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
 end
 ```
 
 把点转了，等于混淆了所有域名。域名是https唯一的漏洞。
 
-chrome后台程序会产生明文http流量。对换g和o就够了。
+再混淆ssh，chrome。
 
 完整例子：
 
@@ -235,7 +235,7 @@ require 'girl/proxyd'
 
 module Girl
   module Custom
-    ALT = { '.' => '^', '^' => '.', 'g' => 'o', 'o' => 'g' }
+    ALT = { '.' => '^', '^' => '.', 's' => 'o', 'o' => 's' }
 
     def encode( data )
       confuse( data )
@@ -246,7 +246,7 @@ module Girl
     end
 
     def confuse( data )
-      data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
+      data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
     end
   end
 end
@@ -262,7 +262,7 @@ require 'girl/proxy'
 
 module Girl
   module Custom
-    ALT = { '.' => '^', '^' => '.', 'g' => 'o', 'o' => 'g' }
+    ALT = { '.' => '^', '^' => '.', 's' => 'o', 'o' => 's' }
 
     def encode( data )
       confuse( data )
@@ -273,7 +273,7 @@ module Girl
     end
 
     def confuse( data )
-      data.gsub( /\.|\^|g|o/ ){ | c | ALT[ c ] }
+      data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
     end
   end
 end
