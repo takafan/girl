@@ -11,41 +11,31 @@ require 'socket'
 ##
 # Girl::Proxy - 近端
 #
+#
 =begin
-
-# ctlmsg结构
-
-Q>: 0 ctlmsg -> C: 1 hello           -> hello
-                   1 tund port       -> n: tund port
-                   2 heartbeat       NOT USE
-                   3 a new source    -> Q>: src id -> encoded destination address
-                   4 paired          -> Q>: src id -> n: dst id
-                   5 dest status     NOT USE
-                   6 source status   NOT USE
-                   7 miss            NOT USE
-                   8 fin1            NOT USE
-                   9 confirm fin1    NOT USE
-                  10 fin2            NOT USE
-                  11 confirm fin2    NOT USE
-                  12 tund fin
-                  13 tun fin
-                  14 tun ip changed  NOT USE
-                  15 single miss     NOT USE
-                  16 range miss      NOT USE
-                  17 continue        NOT USE
-                  18 is resend ready NOT USE
-                  19 resend ready    NOT USE
-                  20 resolv          -> Q>: src id -> encoded domain
-                  21 resolved        -> Q>: src id -> encoded ip
-
-local-infod:
-
-C: 101 traff infos
-
-infod-local:
-
-C: 101 traff infos -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
-
+C:  1 hello           -> hello
+    2 tund port       -> n: tund port
+    3 a new source    -> Q>: src id -> encoded destination address
+    4 paired          -> Q>: src id -> n: dst id
+    5 dest status     NOT USE
+    6 source status   NOT USE
+    7 miss            NOT USE
+    8 fin1            NOT USE
+    9 confirm fin1    NOT USE
+   10 fin2            NOT USE
+   11 confirm fin2    NOT USE
+   12 tund fin
+   13 tun fin
+   14 tun ip changed  NOT USE
+   15 single miss     NOT USE
+   16 range miss      NOT USE
+   17 continue        NOT USE
+   18 is resend ready NOT USE
+   19 resend ready    NOT USE
+   20 resolv          -> Q>: src id -> encoded domain
+   21 resolved        -> Q>: src id -> encoded ip
+  101 traff infos
+  101 traff infos -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
 =end
 
 module Girl

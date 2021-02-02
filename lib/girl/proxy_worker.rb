@@ -86,7 +86,7 @@ module Girl
     def quit!
       if @proxy && !@proxy.closed? then
         # puts "debug1 send tun fin"
-        data = "#{ [ 0, TUN_FIN ].pack( 'Q>C' ) }#{ SEPARATE }"
+        data = [ TUN_FIN ].pack( 'C' )
         @proxy.write( data )
       end
 
@@ -104,7 +104,7 @@ module Girl
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
-      data = [ [ 0, A_NEW_SOURCE, src_info[ :id ] ].pack( 'Q>CQ>' ), @custom.encode( domain_port ) ].join
+      data = "#{ [ A_NEW_SOURCE, src_info[ :id ] ].pack( 'CQ>' ) }#{ @custom.encode( domain_port ) }"
       add_ctlmsg( data )
     end
 
@@ -123,7 +123,7 @@ module Girl
     def add_ctlmsg( data )
       return if @proxy.nil? || @proxy.closed?
 
-      @proxy_info[ :ctlmsgs ] << "#{ data }#{ SEPARATE }"
+      @proxy_info[ :ctlmsgs ] << data
       add_write( @proxy )
     end
 
@@ -677,7 +677,7 @@ module Girl
       add_read( proxy, :proxy )
       hello = @custom.hello
       puts "p#{ Process.pid } #{ Time.new } tunnel #{ hello.inspect }"
-      data = [ [ 0, HELLO ].pack( 'Q>C' ), hello ].join
+      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
       add_ctlmsg( data )
     end
 
@@ -790,7 +790,7 @@ module Girl
       src_info[ :proxy_type ] = :checking
 
       if @use_remote_resolv then
-        data = [ [ 0, RESOLV, src_info[ :id ] ].pack( 'Q>CQ>' ), @custom.encode( domain ) ].join
+        data = "#{ [ RESOLV, src_info[ :id ] ].pack( 'CQ>' ) }#{ @custom.encode( domain ) }"
         add_ctlmsg( data )
         return
       end
@@ -990,15 +990,15 @@ module Girl
       end
 
       data.split( SEPARATE ).each do | ctlmsg |
-        next unless ctlmsg[ 8 ]
+        next unless ctlmsg[ 0 ]
 
-        ctl_num = ctlmsg[ 8 ].unpack( 'C' ).first
+        ctl_num = ctlmsg[ 0 ].unpack( 'C' ).first
 
         case ctl_num
         when TUND_PORT then
-          next if @proxy_info[ :tund_addr ] || ( ctlmsg.size != 11 )
+          next if @proxy_info[ :tund_addr ] || ( ctlmsg.size != 3 )
 
-          tund_port = data[ 9, 2 ].unpack( 'n' ).first
+          tund_port = data[ 1, 2 ].unpack( 'n' ).first
           puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
           @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
 
@@ -1008,20 +1008,20 @@ module Girl
             @proxy_info[ :pending_sources ].clear
           end
         when PAIRED then
-          next if ctlmsg.size != 19
+          next if ctlmsg.size != 11
 
-          src_id, dst_id = data[ 9, 10 ].unpack( 'Q>n' )
+          src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
           new_a_tun( src_id, dst_id )
         when RESOLVED then
-          next if ctlmsg.size <= 17
+          next if ctlmsg.size <= 9
 
-          src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
+          src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
           src = @srcs[ src_id ]
           return if src.nil? || src.closed?
 
           src_info = @src_infos[ src ]
-          enc_ip = ctlmsg[ 17..-1 ]
+          enc_ip = ctlmsg[ 9..-1 ]
           ip = @custom.decode( enc_ip )
           puts "p#{ Process.pid } #{ Time.new } remote resolved #{ src_info[ :destination_domain ] } #{ ip }"
           ip_info = Addrinfo.ip( ip )
@@ -1282,7 +1282,7 @@ module Girl
       end
 
       if @proxy_info[ :ctlmsgs ].any? then
-        data = @proxy_info[ :ctlmsgs ].join
+        data = @proxy_info[ :ctlmsgs ].join( SEPARATE )
 
         # 写入
         begin

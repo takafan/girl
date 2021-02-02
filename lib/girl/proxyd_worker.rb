@@ -84,7 +84,7 @@ module Girl
     def quit!
       @proxy_infos.keys.each do | proxy |
         # puts "debug1 send tund fin"
-        data = "#{ [ 0, TUND_FIN ].pack( 'Q>C' ) }#{ SEPARATE }"
+        data = [ TUND_FIN ].pack( 'C' )
         proxy.write( data )
       end
 
@@ -100,7 +100,7 @@ module Girl
     def add_ctlmsg( proxy, data )
       return if proxy.closed? || @closing_proxys.include?( proxy )
       proxy_info = @proxy_infos[ proxy ]
-      proxy_info[ :ctlmsgs ] << "#{ data }#{ SEPARATE }"
+      proxy_info[ :ctlmsgs ] << data
       add_write( proxy )
     end
 
@@ -389,7 +389,7 @@ module Girl
       proxy_info[ :dst_ids ][ src_id ] = dst_id
       proxy_info[ :dsts ][ dst_id ] = dst
 
-      data = [ 0, PAIRED, src_id, dst_id ].pack( 'Q>CQ>n' )
+      data = [ PAIRED, src_id, dst_id ].pack( 'CQ>n' )
       # puts "debug1 add ctlmsg paired #{ src_id } #{ dst_id }"
       add_ctlmsg( proxy, data )
     end
@@ -705,15 +705,15 @@ module Girl
       proxy_info = @proxy_infos[ proxy ]
 
       data.split( SEPARATE ).each do | ctlmsg |
-        next unless ctlmsg[ 8 ]
+        next unless ctlmsg[ 0 ]
 
-        ctl_num = ctlmsg[ 8 ].unpack( 'C' ).first
+        ctl_num = ctlmsg[ 0 ].unpack( 'C' ).first
 
         case ctl_num
         when HELLO then
-          next if proxy_info[ :tund_port ] || ctlmsg.size <= 9
+          next if proxy_info[ :tund_port ] || ctlmsg.size <= 1
 
-          im = ctlmsg[ 9..-1 ]
+          im = ctlmsg[ 1..-1 ]
           addrinfo = proxy_info[ :addrinfo ]
           result = @custom.check( im, addrinfo )
 
@@ -743,24 +743,24 @@ module Girl
           proxy_info[ :tund_port ] = tund_port
 
           puts "p#{ Process.pid } #{ Time.new } tunnel #{ im.inspect } #{ tund_port }"
-          data2 = [ 0, TUND_PORT, tund_port ].pack( 'Q>Cn' )
+          data2 = [ TUND_PORT, tund_port ].pack( 'Cn' )
           add_ctlmsg( proxy, data2 )
         when A_NEW_SOURCE then
-          next if ctlmsg.size <= 17
+          next if ctlmsg.size <= 9
 
-          src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
+          src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
           dst_id = proxy_info[ :dst_ids ][ src_id ]
           next if dst_id
 
-          enc_domain_port = ctlmsg[ 17..-1 ]
+          enc_domain_port = ctlmsg[ 9..-1 ]
           domain_port = @custom.decode( enc_domain_port )
           # puts "debug1 a new source #{ src_id } #{ domain_port }"
           resolve_domain( proxy, src_id, domain_port )
         when RESOLV then
-          next if ctlmsg.size <= 17
+          next if ctlmsg.size <= 9
 
-          src_id = ctlmsg[ 9, 8 ].unpack( 'Q>' ).first
-          enc_domain = ctlmsg[ 17..-1 ]
+          src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
+          enc_domain = ctlmsg[ 9..-1 ]
           domain = @custom.decode( enc_domain )
 
           Thread.new do
@@ -773,7 +773,7 @@ module Girl
             if ip_info then
               ip = ip_info.ip_address
               puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip }"
-              data2 = [ [ 0, RESOLVED, src_id ].pack( 'Q>CQ>' ), @custom.encode( ip ) ].join
+              data2 = "#{ [ RESOLVED, src_id ].pack( 'CQ>' ) }#{ @custom.encode( ip ) }"
               add_ctlmsg( proxy, data2 )
             end
           end
@@ -959,7 +959,7 @@ module Girl
 
       # 发ctlmsg
       while proxy_info[ :ctlmsgs ].any? do
-        data = proxy_info[ :ctlmsgs ].join
+        data = proxy_info[ :ctlmsgs ].join( SEPARATE )
 
         # 写入
         begin
