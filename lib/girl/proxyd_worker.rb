@@ -959,7 +959,7 @@ module Girl
 
       # 发ctlmsg
       while proxy_info[ :ctlmsgs ].any? do
-        data = proxy_info[ :ctlmsgs ].join( SEPARATE )
+        data = proxy_info[ :ctlmsgs ].map{ | ctlmsg | "#{ ctlmsg }#{ SEPARATE }" }.join
 
         # 写入
         begin

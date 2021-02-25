@@ -33,7 +33,6 @@ module Girl
   TRAFF_INFOS           = 101
   SEPARATE              = [ 0 ].pack( 'Q>' )
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
-  # https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
   RESERVED_ROUTE = <<EOF
 0.0.0.0/8
 10.0.0.0/8

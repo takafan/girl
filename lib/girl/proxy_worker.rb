@@ -733,10 +733,10 @@ module Girl
 
       domain = src_info[ :destination_domain ]
       @tun_infos[ tun ] = {
-        src: src,             # 对应src
-        domain: domain,       # 目的地
-        wbuff: data,          # 写前
-        closing_write: false  # 准备关闭写
+        src: src,            # 对应src
+        domain: domain,      # 目的地
+        wbuff: data,         # 写前
+        closing_write: false # 准备关闭写
       }
 
       src_info[ :dst_id ] = dst_id
@@ -1282,7 +1282,7 @@ module Girl
       end
 
       if @proxy_info[ :ctlmsgs ].any? then
-        data = @proxy_info[ :ctlmsgs ].join( SEPARATE )
+        data = @proxy_info[ :ctlmsgs ].map{ | ctlmsg | "#{ ctlmsg }#{ SEPARATE }" }.join
 
         # 写入
         begin
