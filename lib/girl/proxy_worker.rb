@@ -1001,7 +1001,7 @@ module Girl
         when TUND_PORT then
           next if @proxy_info[ :tund_addr ] || ( ctlmsg.size != 3 )
 
-          tund_port = data[ 1, 2 ].unpack( 'n' ).first
+          tund_port = ctlmsg[ 1, 2 ].unpack( 'n' ).first
           puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
           @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
 
@@ -1013,7 +1013,7 @@ module Girl
         when PAIRED then
           next if ctlmsg.size != 11
 
-          src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
+          src_id, dst_id = ctlmsg[ 1, 10 ].unpack( 'Q>n' )
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
           new_a_tun( src_id, dst_id )
         when RESOLVED then
