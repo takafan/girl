@@ -654,8 +654,6 @@ module Girl
         proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       end
 
-      proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1 )
-
       proxy_info = {
         pending_sources: [],      # 还没配到tund，暂存的src
         ctlmsgs: [],              # ctlmsg
@@ -715,7 +713,6 @@ module Girl
 
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
-      tun.setsockopt( Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1 )
 
       begin
         tun.connect_nonblock( @proxy_info[ :tund_addr ] )
