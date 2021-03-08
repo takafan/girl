@@ -204,20 +204,18 @@ end
 例如：
 
 ```ruby
-ALT = { '.' => '^', '^' => '.', 's' => 'o', 'o' => 's' }
+ALT = { '.' => 'o', 'o' => '.' }
 
 def encode( data )
-  data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
+  data.gsub( /\.|o/ ){ | c | ALT[ c ] }
 end
 
 def decode( data )
-  data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
+  data.gsub( /\.|o/ ){ | c | ALT[ c ] }
 end
 ```
 
-把点转了，等于混淆了所有域名。域名是https被邪恶抓到的漏洞。
-
-再混淆ssh，chrome。
+把点转了，等于混淆了所有域名。这就够了。
 
 完整例子：
 
@@ -229,7 +227,7 @@ require 'girl/proxyd'
 
 module Girl
   module Custom
-    ALT = { '.' => '^', '^' => '.', 's' => 'o', 'o' => 's' }
+    ALT = { '.' => 'o', 'o' => '.' }
 
     def encode( data )
       confuse( data )
@@ -240,7 +238,7 @@ module Girl
     end
 
     def confuse( data )
-      data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
+      data.gsub( /\.|o/ ){ | c | ALT[ c ] }
     end
   end
 end
@@ -256,7 +254,7 @@ require 'girl/proxy'
 
 module Girl
   module Custom
-    ALT = { '.' => '^', '^' => '.', 's' => 'o', 'o' => 's' }
+    ALT = { '.' => 'o', 'o' => '.' }
 
     def encode( data )
       confuse( data )
@@ -267,7 +265,7 @@ module Girl
     end
 
     def confuse( data )
-      data.gsub( /\.|\^|s|o/ ){ | c | ALT[ c ] }
+      data.gsub( /\.|o/ ){ | c | ALT[ c ] }
     end
   end
 end
