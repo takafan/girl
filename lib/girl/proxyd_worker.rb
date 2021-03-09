@@ -122,7 +122,6 @@ module Girl
     #
     def add_dst_wbuff( dst, data )
       return if dst.closed? || @closing_dsts.include?( dst )
-
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       dst_info[ :last_recv_at ] = Time.new
@@ -593,10 +592,8 @@ module Girl
     #
     def set_dst_closing_write( dst )
       return if dst.closed? || @closing_dsts.include?( dst )
-
       dst_info = @dst_infos[ dst ]
       return if dst_info[ :closing_write ]
-
       dst_info[ :closing_write ] = true
       add_write( dst )
     end
@@ -606,10 +603,8 @@ module Girl
     #
     def set_tun_closing_write( tun )
       return if tun.closed? || @closing_tuns.include?( tun )
-
       tun_info = @tun_infos[ tun ]
       return if tun_info[ :closing_write ]
-
       tun_info[ :closing_write ] = true
       add_write( tun )
     end
@@ -712,7 +707,6 @@ module Girl
         case ctl_num
         when HELLO then
           next if proxy_info[ :tund_port ] || ctlmsg.size <= 1
-
           im = ctlmsg[ 1..-1 ]
           addrinfo = proxy_info[ :addrinfo ]
           result = @custom.check( im, addrinfo )
@@ -747,18 +741,15 @@ module Girl
           add_ctlmsg( proxy, data2 )
         when A_NEW_SOURCE then
           next if ctlmsg.size <= 9
-
           src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
           dst_id = proxy_info[ :dst_ids ][ src_id ]
           next if dst_id
-
           enc_domain_port = ctlmsg[ 9..-1 ]
           domain_port = @custom.decode( enc_domain_port )
           # puts "debug1 a new source #{ src_id } #{ domain_port }"
           resolve_domain( proxy, src_id, domain_port )
         when RESOLV then
           next if ctlmsg.size <= 9
-
           src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
           enc_domain = ctlmsg[ 9..-1 ]
           domain = @custom.decode( enc_domain )
@@ -942,7 +933,6 @@ module Girl
 
         dst_info[ :tun ] = tun
         data = data[ 2..-1 ]
-
         return if data.empty?
       end
 

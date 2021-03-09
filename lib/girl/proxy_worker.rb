@@ -20,12 +20,13 @@ module Girl
       @resume_srcs = []
       @resume_dsts = []
       @resume_tuns = []
-      @roles = ConcurrentHash.new         # sock => :dotr / :redir / :proxy / :src / :dst / :tun
-      @src_infos = ConcurrentHash.new     # src => {}
-      @dst_infos = ConcurrentHash.new     # dst => {}
-      @tun_infos = ConcurrentHash.new     # tun => {}
-      @resolv_caches = ConcurrentHash.new # domain => [ ip, created_at ]
-      @srcs = ConcurrentHash.new          # src_id => src
+      @roles = ConcurrentHash.new            # sock => :dotr / :redir / :proxy / :src / :dst / :tun
+      @src_infos = ConcurrentHash.new        # src => {}
+      @dst_infos = ConcurrentHash.new        # dst => {}
+      @tun_infos = ConcurrentHash.new        # tun => {}
+      @resolv_caches = ConcurrentHash.new    # domain => [ ip, created_at ]
+      @is_direct_caches = ConcurrentHash.new # ip => true / false
+      @srcs = ConcurrentHash.new             # src_id => src
       @ip_address_list = Socket.ip_address_list
 
       dotr, dotw = IO.pipe
@@ -122,7 +123,6 @@ module Girl
     #
     def add_ctlmsg( data )
       return if @proxy.nil? || @proxy.closed?
-
       @proxy_info[ :ctlmsgs ] << data
       add_write( @proxy )
     end
@@ -470,17 +470,30 @@ module Girl
         return
       end
 
-      if ( @directs.any? { | direct | direct.include?( ip_info.ip_address ) } ) \
-        || ( ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) ) then
-        # ip命中直连列表，或者访问远端非80/443端口，直连
-        # puts "debug1 #{ ip_info.inspect } hit directs"
+      if ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) then
+        # 访问远端非80/443端口，直连
+        puts "p#{ Process.pid } #{ Time.new } direct #{ ip_info.ip_address } #{ src_info[ :destination_port ] }"
         new_a_dst( src, ip_info )
         return
       end
 
-      # 走远端
-      # puts "debug1 #{ ip_info.inspect } go tunnel"
-      set_proxy_type_tunnel( src )
+      if @is_direct_caches.include?( ip_info.ip_address ) then
+        is_direct = @is_direct_caches[ ip_info.ip_address ]
+      else
+        is_direct = @directs.any? { | direct | direct.include?( ip_info.ip_address ) }
+        # 判断直连耗时较长（树莓派 0.27秒），这里可能切去主线程，回来src可能已关闭
+        puts "p#{ Process.pid } #{ Time.new } cache is direct #{ ip_info.ip_address } #{ is_direct }"
+        @is_direct_caches[ ip_info.ip_address ] = is_direct
+      end
+
+      if is_direct then
+        # puts "debug1 #{ ip_info.inspect } hit directs"
+        new_a_dst( src, ip_info )
+      else
+        # 走远端
+        # puts "debug1 #{ ip_info.inspect } go tunnel"
+        set_proxy_type_tunnel( src )
+      end
     end
 
     ##
@@ -598,6 +611,7 @@ module Girl
     # new a dst
     #
     def new_a_dst( src, ip_info )
+      return if src.closed?
       src_info = @src_infos[ src ]
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
@@ -707,10 +721,8 @@ module Girl
     def new_a_tun( src_id, dst_id )
       src = @srcs[ src_id ]
       return if src.nil? || src.closed?
-
       src_info = @src_infos[ src ]
       return if src_info[ :dst_id ]
-
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
 
@@ -817,10 +829,8 @@ module Girl
     #
     def set_dst_closing_write( dst )
       return if dst.closed?
-
       dst_info = @dst_infos[ dst ]
       return if dst_info[ :closing_write ]
-
       dst_info[ :closing_write ] = true
       add_write( dst )
     end
@@ -829,6 +839,7 @@ module Girl
     # set proxy type tunnel
     #
     def set_proxy_type_tunnel( src )
+      return if src.closed?
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :tunnel
       src_id = src_info[ :id ]
@@ -845,10 +856,8 @@ module Girl
     #
     def set_src_closing_write( src )
       return if src.closed? || @closing_srcs.include?( src )
-
       src_info = @src_infos[ src ]
       return if src_info[ :closing_write ]
-
       src_info[ :closing_write ] = true
       add_write( src )
     end
@@ -858,10 +867,8 @@ module Girl
     #
     def set_tun_closing_write( tun )
       return if tun.closed?
-
       tun_info = @tun_infos[ tun ]
       return if tun_info[ :closing_write ]
-
       tun_info[ :closing_write ] = true
       add_write( tun )
     end
@@ -997,7 +1004,6 @@ module Girl
         case ctl_num
         when TUND_PORT then
           next if @proxy_info[ :tund_addr ] || ( ctlmsg.size != 3 )
-
           tund_port = ctlmsg[ 1, 2 ].unpack( 'n' ).first
           puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
           @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
@@ -1009,17 +1015,14 @@ module Girl
           end
         when PAIRED then
           next if ctlmsg.size != 11
-
           src_id, dst_id = ctlmsg[ 1, 10 ].unpack( 'Q>n' )
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
           new_a_tun( src_id, dst_id )
         when RESOLVED then
           next if ctlmsg.size <= 9
-
           src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
           src = @srcs[ src_id ]
-          return if src.nil? || src.closed?
-
+          next if src.nil? || src.closed?
           src_info = @src_infos[ src ]
           enc_ip = ctlmsg[ 9..-1 ]
           ip = @custom.decode( enc_ip )
