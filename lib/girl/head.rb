@@ -31,7 +31,7 @@ module Girl
   RESOLV                = 20
   RESOLVED              = 21
   TRAFF_INFOS           = 101
-  SEPARATE              = [ 0 ].pack( 'Q>' )
+  SEPARATE              = "\r\n\r\n"
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   RESERVED_ROUTE = <<EOF
 0.0.0.0/8
