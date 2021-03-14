@@ -698,6 +698,7 @@ module Girl
       end
 
       proxy_info = @proxy_infos[ proxy ]
+      proxy_info[ :last_recv_at ] = Time.new
 
       data.split( SEPARATE ).each do | ctlmsg |
         next unless ctlmsg[ 0 ]
@@ -772,9 +773,11 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } got tun fin"
           close_proxy( proxy )
           return
+        when HEARTBEAT
+          # puts "debug1 #{ Time.new } got heartbeat"
+          data2 = [ HEARTBEAT ].pack( 'C' )
+          add_ctlmsg( proxy, data2 )
         end
-
-        proxy_info[ :last_recv_at ] = Time.new
       end
     end
 

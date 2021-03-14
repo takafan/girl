@@ -516,10 +516,24 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          if @proxy && !@proxy.closed? && @proxy_info[ :tund_addr ].nil? && ( now - @proxy_info[ :created_at ] >= EXPIRE_NEW ) then
-            puts "p#{ Process.pid } #{ Time.new } expire proxy"
-            @proxy_info[ :closing ] = true
-            next_tick
+          if @proxy && !@proxy.closed? then
+            if @proxy_info[ :last_recv_at ] then
+              last_recv_at = @proxy_info[ :last_recv_at ]
+              expire_after = EXPIRE_AFTER
+            else
+              last_recv_at = @proxy_info[ :created_at ]
+              expire_after = EXPIRE_NEW
+            end
+
+            if now - last_recv_at >= expire_after then
+              puts "p#{ Process.pid } #{ Time.new } expire proxy"
+              @proxy_info[ :closing ] = true
+              next_tick
+            else
+              # puts "debug1 #{ Time.new } send heartbeat"
+              data = [ HEARTBEAT ].pack( 'C' )
+              add_ctlmsg( data )
+            end
           end
 
           @src_infos.each do | src, src_info |
@@ -673,6 +687,7 @@ module Girl
         ctlmsgs: [],              # ctlmsg
         tund_addr: nil,           # tund地址
         created_at: Time.new,     # 创建时间
+        last_recv_at: nil,        # 上一次收到流量的时间
         closing: false            # 是否准备关闭
       }
 
@@ -996,6 +1011,8 @@ module Girl
         return
       end
 
+      @proxy_info[ :last_recv_at ] = Time.new
+
       data.split( SEPARATE ).each do | ctlmsg |
         next unless ctlmsg[ 0 ]
 
@@ -1033,6 +1050,8 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } got tund fin"
           close_proxy( proxy )
           return
+        when HEARTBEAT
+          # puts "debug1 #{ Time.new } got heartbeat"
         end
       end
     end

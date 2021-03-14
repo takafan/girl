@@ -30,6 +30,7 @@ module Girl
   RESEND_READY          = 19
   RESOLV                = 20
   RESOLVED              = 21
+  HEARTBEAT             = 22
   TRAFF_INFOS           = 101
   SEPARATE              = "\r\n\r\n"
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
