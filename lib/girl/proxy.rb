@@ -114,7 +114,7 @@ module Girl
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
       puts "im #{ im }"
-      puts "use_remote_resolv #{ use_remote_resolv }"
+      puts "use remote resolv #{ use_remote_resolv }"
       puts "worker count #{ worker_count }"
 
       Girl::Custom.constants.each do | name |
