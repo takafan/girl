@@ -18,6 +18,7 @@ Gem::Specification.new do |spec|
 girl.gemspec
 lib/girl.rb
 lib/girl/concurrent_hash.rb
+lib/girl/custom_dns_query.rb
 lib/girl/custom.rb
 lib/girl/head.rb
 lib/girl/proxy_custom.rb
@@ -26,6 +27,11 @@ lib/girl/proxy.rb
 lib/girl/proxyd_custom.rb
 lib/girl/proxyd_worker.rb
 lib/girl/proxyd.rb
+lib/girl/relay_worker.rb
+lib/girl/relay.rb
+lib/girl/resolv_custom.rb
+lib/girl/resolvd_worker.rb
+lib/girl/resolvd.rb
 lib/girl/ssl_worker.rb
 lib/girl/ssl.rb
 lib/girl/version.rb

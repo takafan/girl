@@ -106,7 +106,11 @@ girl.conf.json的格式：
     "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
     "im": "girl",                         // 标识，用来识别近端
     "use_remote_resolv": false,           // 域名列表之外的域名交给远端解析
-    "worker_count": 1                     // 子进程数，默认取cpu个数
+    "worker_count": 1,                    // 子进程数，默认取cpu个数
+    "resolv_port": 1053,                  // 透明中转，近端接收dns查询流量的端口
+    "nameserver": "114.114.114.114",      // 透明中转，域名列表之外的域名就近查询，国内的dns服务器
+    "resolvd_port": 5353,                 // 透明中转，远端dns查询中继端口
+    "relay_port": 1066                    // 透明中转，近端接收tcp流量的端口
 }
 ```
 
@@ -330,3 +334,86 @@ linux:
 echo -e 'net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1' > /etc/sysctl.d/59-disable-ipv6.conf
 sysctl --system
 ```
+
+## 代理之外
+
+代理设在那里，但应用程序可以选择不走。例如switch版的youtube。
+
+妹子支持透明中转，可以借助iptables把dns查询和全部tcp流量引给妹子。
+
+远端，多启一个dns查询中继：
+
+```ruby
+# resolvd.rb
+require 'girl/resolvd'
+
+module Girl
+  module CustomDnsQuery
+    def encode( data )
+      data.reverse
+    end
+
+    def decode( data )
+      data.reverse
+    end
+  end
+end
+
+Girl::Resolvd.new '/etc/girl.conf.json'
+```
+
+```bash
+ruby resolvd.rb
+```
+
+近端：
+
+```ruby
+# relay.rb
+require 'girl/relay'
+
+module Girl
+  module Custom
+    ALT = { '.' => 'o', 'o' => '.' }
+
+    def encode( data )
+      confuse( data )
+    end
+
+    def decode( data )
+      confuse( data )
+    end
+
+    def confuse( data )
+      data.gsub( /\.|o/ ){ | c | ALT[ c ] }
+    end
+  end
+end
+
+module Girl
+  module CustomDnsQuery
+    def encode( data )
+      data.reverse
+    end
+
+    def decode( data )
+      data.reverse
+    end
+  end
+end
+
+Girl::Relay.new '/boot/girl.conf.json'
+```
+
+```bash
+ruby relay.rb
+```
+
+iptables配置：
+
+```bash
+iptables -t nat -A PREROUTING -i wlan0 -p tcp -j REDIRECT --to-ports 1066
+iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053
+```
+
+连近端wifi，打开youtube。
