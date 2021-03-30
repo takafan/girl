@@ -6,6 +6,7 @@ require 'girl/relay_worker'
 require 'girl/resolv_custom'
 require 'girl/version'
 require 'json'
+require 'openssl'
 require 'socket'
 
 ##
@@ -79,24 +80,17 @@ module Girl
         worker_count = nprocessors
       end
 
-      title = "girl relay #{ Girl::VERSION }"
-      puts title
-      puts "resolv port #{ resolv_port }"
-      puts "nameserver #{ nameserver }"
-      puts "resolvd port #{ resolvd_port }"
-      puts "redir port #{ redir_port }"
-      puts "proxyd host #{ proxyd_host }"
-      puts "proxyd port #{ proxyd_port }"
-      puts "#{ direct_path } #{ directs.size } directs"
-      puts "#{ remote_path } #{ remotes.size } remotes"
-      puts "im #{ im }"
-      puts "worker count #{ worker_count }"
-
       len = CONSTS.map{ | name | name.size }.max
 
       CONSTS.each do | name |
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
+
+      title = "girl relay #{ Girl::VERSION }"
+      puts title
+      puts "resolv port #{ resolv_port } nameserver #{ nameserver } resolvd port #{ resolvd_port } redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im } worker count #{ worker_count }"
+      puts "#{ direct_path } #{ directs.size } directs"
+      puts "#{ remote_path } #{ remotes.size } remotes"
 
       $0 = title
       workers = []

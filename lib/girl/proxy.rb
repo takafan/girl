@@ -6,6 +6,7 @@ require 'girl/proxy_worker'
 require 'girl/version'
 require 'ipaddr'
 require 'json'
+require 'openssl'
 require 'socket'
 
 ##
@@ -48,16 +49,6 @@ module Girl
 
       raise "missing config file #{ config_path }" unless File.exist?( config_path )
 
-      # {
-      #     "redir_port": 6666,                   // 近端（本地）端口
-      #     "proxyd_host": "1.2.3.4",             // 远端服务器
-      #     "proxyd_port": 6060,                  // 远端端口
-      #     "direct_path": "girl.direct.txt",     // 直连ip段
-      #     "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
-      #     "im": "girl",                         // 标识，用来识别近端
-      #     "use_remote_resolv": false,           // 域名列表之外的域名交给远端解析
-      #     "worker_count": 1                     // 子进程数，默认取cpu个数
-      # }
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
       redir_port = conf[ :redir_port ]
       proxyd_host = conf[ :proxyd_host ]
@@ -106,26 +97,17 @@ module Girl
         worker_count = nprocessors
       end
 
-      title = "girl proxy #{ Girl::VERSION }"
-      puts title
-      puts "redir port #{ redir_port }"
-      puts "proxyd host #{ proxyd_host }"
-      puts "proxyd port #{ proxyd_port }"
-      puts "#{ direct_path } #{ directs.size } directs"
-      puts "#{ remote_path } #{ remotes.size } remotes"
-      puts "im #{ im }"
-      puts "use remote resolv #{ use_remote_resolv }"
-      puts "worker count #{ worker_count }"
-
-      Girl::Custom.constants.each do | name |
-        puts "#{ name } #{ Girl::Custom.const_get( name ).inspect }"
-      end
-
       len = CONSTS.map{ | name | name.size }.max
 
       CONSTS.each do | name |
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
+
+      title = "girl proxy #{ Girl::VERSION }"
+      puts title
+      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im } use remote resolv #{ use_remote_resolv } worker count #{ worker_count }"
+      puts "#{ direct_path } #{ directs.size } directs"
+      puts "#{ remote_path } #{ remotes.size } remotes"
 
       if RUBY_PLATFORM.include?( 'linux' ) then
         $0 = title

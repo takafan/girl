@@ -114,7 +114,7 @@ module Girl
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
-      data = "#{ [ A_NEW_SOURCE, src_info[ :id ] ].pack( 'CQ>' ) }#{ @custom.encode( domain_port ) }"
+      data = "#{ [ A_NEW_SOURCE, src_info[ :id ] ].pack( 'CQ>' ) }#{ domain_port }"
       add_ctlmsg( data )
     end
 
@@ -362,16 +362,15 @@ module Girl
     def close_read_tun( tun )
       return if tun.closed?
       # puts "debug1 close read tun"
-      tun.close_read
-      @reads.delete( tun )
+      tun_info = @tun_infos[ tun ]
+      tun_info[ :close_read ] = true
 
-      if tun.closed? then
-        # puts "debug1 delete tun info"
-        @writes.delete( tun )
-        @roles.delete( tun )
+      if tun_info[ :close_write ] then
+        # puts "debug1 close tun"
+        close_sock( tun )
         tun_info = @tun_infos.delete( tun )
       else
-        tun_info = @tun_infos[ tun ]
+        @reads.delete( tun )
       end
 
       tun_info
@@ -469,16 +468,15 @@ module Girl
     def close_write_tun( tun )
       return if tun.closed?
       # puts "debug1 close write tun"
-      tun.close_write
-      @writes.delete( tun )
+      tun_info = @tun_infos[ tun ]
+      tun_info[ :close_write ] = true
 
-      if tun.closed? then
-        # puts "debug1 delete tun info"
-        @reads.delete( tun )
-        @roles.delete( tun )
+      if tun_info[ :close_read ] then
+        # puts "debug1 close tun"
+        close_sock( tun )
         tun_info = @tun_infos.delete( tun )
       else
-        tun_info = @tun_infos[ tun ]
+        @writes.delete( tun )
       end
 
       tun_info
@@ -666,7 +664,7 @@ module Girl
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
       dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
-      dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         dst.connect_nonblock( destination_addr )
@@ -705,34 +703,38 @@ module Girl
     def new_a_proxy
       proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      end
-
-      proxy_info = {
-        pending_sources: [],      # 还没配到tund，暂存的src
-        ctlmsgs: [],              # ctlmsg
-        tund_addr: nil,           # tund地址
-        created_at: Time.new,     # 创建时间
-        last_recv_at: nil,        # 上一次收到流量的时间
-        closing: false            # 是否准备关闭
-      }
+      proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
-        proxy.connect_nonblock( @proxyd_addr )
-      rescue IO::WaitWritable
-        # connect nonblock 必抛 wait writable
+        proxy.connect( @proxyd_addr )
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } connect proxyd #{ e.class }, close proxy"
         proxy.close
         return
       end
 
-      @proxy = proxy
-      @proxy_info = proxy_info
-      add_read( proxy, :proxy )
+      ssl_proxy = OpenSSL::SSL::SSLSocket.new proxy
+      ssl_proxy.sync_close = true
+
+      begin
+        ssl_proxy.connect
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } ssl proxy connect #{ e.class }, close ssl proxy"
+        ssl_proxy.close
+        return
+      end
+
+      @proxy = ssl_proxy
+      @proxy_info = {
+        pending_sources: [],  # 还没配到tund，暂存的src
+        ctlmsgs: [],          # ctlmsg
+        tund_addr: nil,       # tund地址
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil,    # 上一次收到流量的时间
+        closing: false        # 是否准备关闭
+      }
+      add_read( ssl_proxy, :proxy )
       hello = @custom.hello
       puts "p#{ Process.pid } #{ Time.new } tunnel #{ hello.inspect }"
       data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
@@ -745,12 +747,8 @@ module Girl
     def new_a_redir( redir_port )
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      end
-
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
       redir.listen( 127 )
       puts "p#{ Process.pid } #{ Time.new } redir listen on #{ redir_port }"
@@ -806,14 +804,24 @@ module Girl
       src_info = @src_infos[ src ]
       return if src_info[ :dst_id ]
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
-        tun.connect_nonblock( @proxy_info[ :tund_addr ] )
-      rescue IO::WaitWritable
+        tun.connect( @proxy_info[ :tund_addr ] )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect tund #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } connect tund #{ e.class }, close tun"
         tun.close
+        return
+      end
+
+      ssl_tun = OpenSSL::SSL::SSLSocket.new tun
+      ssl_tun.sync_close = true
+
+      begin
+        ssl_tun.connect
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } ssl tun connect #{ e.class }, close ssl tun"
+        ssl_tun.close
         return
       end
 
@@ -821,22 +829,24 @@ module Girl
       data = [ dst_id ].pack( 'n' )
 
       unless src_info[ :rbuff ].empty? then
-        # puts "debug1 encode and move src.rbuff to tun.wbuff"
-        data << @custom.encode( src_info[ :rbuff ] )
+        # puts "debug1 move src.rbuff to tun.wbuff"
+        data << src_info[ :rbuff ]
       end
 
       domain = src_info[ :destination_domain ]
-      @tun_infos[ tun ] = {
-        src: src,            # 对应src
-        domain: domain,      # 目的地
-        wbuff: data,         # 写前
-        closing_write: false # 准备关闭写
+      @tun_infos[ ssl_tun ] = {
+        src: src,             # 对应src
+        domain: domain,       # 目的地
+        wbuff: data,          # 写前
+        closing_write: false, # 准备关闭写
+        close_read: false,    # 已经关闭读
+        close_write: false    # 已经关闭写
       }
 
       src_info[ :dst_id ] = dst_id
-      src_info[ :tun ] = tun
-      add_read( tun, :tun )
-      add_write( tun )
+      src_info[ :tun ] = ssl_tun
+      add_read( ssl_tun, :tun )
+      add_write( ssl_tun )
     end
 
     ##
@@ -1065,8 +1075,10 @@ module Girl
 
       begin
         data = proxy.read_nonblock( READ_SIZE )
-      rescue IO::WaitReadable, Errno::EINTR
-        print 'r'
+      rescue IO::WaitReadable
+        return
+      rescue Errno::EINTR
+        puts e.class
         return
       rescue Exception => e
         # puts "debug1 read proxy #{ e.class }"
@@ -1149,8 +1161,7 @@ module Girl
 
         if tun then
           unless tun.closed? then
-            data = @custom.encode( data )
-            # puts "debug2 add tun.wbuff encoded #{ data.bytesize }"
+            # puts "debug2 add tun.wbuff #{ data.bytesize }"
             add_tun_wbuff( tun, data )
           end
         else
@@ -1210,8 +1221,10 @@ module Girl
 
       begin
         data = tun.read_nonblock( READ_SIZE )
-      rescue IO::WaitReadable, Errno::EINTR
-        print 'r'
+      rescue IO::WaitReadable
+        return
+      rescue Errno::EINTR
+        puts e.class
         return
       rescue Exception => e
         # puts "debug1 read tun #{ e.class }"
@@ -1223,8 +1236,7 @@ module Girl
 
       tun_info = @tun_infos[ tun ]
       src = tun_info[ :src ]
-      data = @custom.decode( data )
-      # puts "debug2 add src.wbuff decoded #{ data.bytesize }"
+      # puts "debug2 add src.wbuff #{ data.bytesize }"
       add_src_wbuff( src, data )
     end
 

@@ -5,6 +5,7 @@ require 'girl/proxyd_custom'
 require 'girl/proxyd_worker'
 require 'girl/version'
 require 'json'
+require 'openssl'
 require 'socket'
 
 ##
@@ -19,6 +20,8 @@ module Girl
         conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
         proxyd_port = conf[ :proxyd_port ]
         infod_port = conf[ :infod_port ]
+        cert_path = conf[ :cert_path ]
+        key_path = conf[ :key_path ]
         worker_count = conf[ :worker_count ]
       end
 
@@ -30,20 +33,22 @@ module Girl
         infod_port = 6070
       end
 
+      unless cert_path then
+        cert_path = '/root/.pem/cert.pem'
+      end
+
+      raise "not found cert file #{ cert_path }" unless File.exist?( cert_path )
+
+      unless key_path then
+        key_path = '/root/.pem/key.pem'
+      end
+
+      raise "not found key file #{ key_path }" unless File.exist?( key_path )
+
       nprocessors = Etc.nprocessors
 
       if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
         worker_count = nprocessors
-      end
-
-      title = "girl proxyd #{ Girl::VERSION }"
-      puts title
-      puts "proxyd port #{ proxyd_port }"
-      puts "infod port #{ infod_port }"
-      puts "worker count #{ worker_count }"
-
-      Girl::Custom.constants.each do | name |
-        puts "#{ name } #{ Girl::Custom.const_get( name ).inspect }"
       end
 
       len = CONSTS.map{ | name | name.size }.max
@@ -52,13 +57,19 @@ module Girl
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
 
+      title = "girl proxyd #{ Girl::VERSION }"
+      puts title
+      puts "proxyd port #{ proxyd_port } infod port #{ infod_port } worker count #{ worker_count }"
+      puts "cert path #{ cert_path }"
+      puts "key path #{ key_path }"
+
       $0 = title
       workers = []
 
       worker_count.times do | i |
         workers << fork do
           $0 = 'girl proxyd worker'
-          worker = Girl::ProxydWorker.new( proxyd_port, infod_port )
+          worker = Girl::ProxydWorker.new( proxyd_port, infod_port, cert_path, key_path )
 
           Signal.trap( :TERM ) do
             puts "w#{ i } exit"

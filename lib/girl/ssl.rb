@@ -34,9 +34,13 @@ module Girl
         cert_path = '/root/.pem/cert.pem'
       end
 
+      raise "not found cert file #{ cert_path }" unless File.exist?( cert_path )
+
       unless key_path then
         key_path = '/root/.pem/key.pem'
       end
+
+      raise "not found key file #{ key_path }" unless File.exist?( key_path )
 
       nprocessors = Etc.nprocessors
 
@@ -44,18 +48,17 @@ module Girl
         worker_count = nprocessors
       end
 
-      title = "girl ssl #{ Girl::VERSION }"
-      puts title
-      puts "redir port #{ redir_port }"
-      puts "cert path #{ cert_path }"
-      puts "key path #{ key_path }"
-      puts "worker count #{ worker_count }"
-
       len = CONSTS.map{ | name | name.size }.max
 
       CONSTS.each do | name |
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
+
+      title = "girl ssl #{ Girl::VERSION }"
+      puts title
+      puts "redir port #{ redir_port } worker count #{ worker_count }"
+      puts "cert path #{ cert_path }"
+      puts "key path #{ key_path }"
 
       $0 = title
       workers = []

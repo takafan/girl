@@ -230,14 +230,13 @@ module Girl
       # puts "debug1 close read src"
       src_info = @src_infos[ src ]
       src_info[ :close_read ] = true
-      @reads.delete( src )
 
-      if src_info[ :close_read ] && src_info[ :close_write ] then
-        src.close
+      if src_info[ :close_write ] then
         # puts "debug1 delete src info"
-        @writes.delete( src )
-        @roles.delete( src )
+        close_sock( src )
         src_info = @src_infos.delete( src )
+      else
+        @reads.delete( src )
       end
 
       src_info
@@ -298,14 +297,13 @@ module Girl
       # puts "debug1 close write src"
       src_info = @src_infos[ src ]
       src_info[ :close_write ] = true
-      @writes.delete( src )
-
-      if src_info[ :close_read ] && src_info[ :close_write ] then
-        src.close
+      
+      if src_info[ :close_read ] then
         # puts "debug1 delete src info"
-        @reads.delete( src )
-        @roles.delete( src )
+        close_sock( src )
         src_info = @src_infos.delete( src )
+      else
+        @writes.delete( src )
       end
 
       src_info

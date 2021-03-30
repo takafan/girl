@@ -102,10 +102,12 @@ girl.conf.json的格式：
     "proxyd_host": "1.2.3.4",             // 远端服务器
     "proxyd_port": 6060,                  // 远端端口
     "infod_port": 6070,                   // 查询服务，供远端本机调用
+    "cert_path": "cert.pem",              // 证书路径
+    "key_path": "key.pem",                // 私钥路径
     "direct_path": "girl.direct.txt",     // 直连ip段
     "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
     "im": "girl",                         // 标识，用来识别近端
-    "use_remote_resolv": false,           // 域名列表之外的域名交给远端解析
+    "use_remote_resolv": false,           // 域名一律交给远端解析
     "worker_count": 1,                    // 子进程数，默认取cpu个数
     "resolv_port": 1053,                  // 透明中转，近端接收dns查询流量的端口
     "nameserver": "114.114.114.114",      // 透明中转，域名列表之外的域名就近查询，国内的dns服务器
@@ -182,100 +184,7 @@ CONNECT google.com HTTP/1.1\r\n\r\n
 
 另一种症状是被短暂拦断，ping不通vps，3分钟后恢复。可以由vps回来的明文http流量引起。
 
-常规的办法是ssl加密传输，但是稍慢。
-
-我的办法是对换单字节，可以说是最快的加密。
-
-加解密是开放式的。覆盖下面两个方法即可：
-
-```ruby
-def encode( data )
-  # overwrite me, you'll be free
-  data
-end
-
-def decode( data )
-  data
-end
-```
-
-例如：
-
-```ruby
-ALT = { '.' => 'o', 'o' => '.' }
-
-def encode( data )
-  data.gsub( /\.|o/ ){ | c | ALT[ c ] }
-end
-
-def decode( data )
-  data.gsub( /\.|o/ ){ | c | ALT[ c ] }
-end
-```
-
-把点转了，等于混淆了所有域名。
-
-完整例子：
-
-远端：
-
-```ruby
-# proxyd.rb
-require 'girl/proxyd'
-
-module Girl
-  module Custom
-    ALT = { '.' => 'o', 'o' => '.' }
-
-    def encode( data )
-      confuse( data )
-    end
-
-    def decode( data )
-      confuse( data )
-    end
-
-    def confuse( data )
-      data.gsub( /\.|o/ ){ | c | ALT[ c ] }
-    end
-  end
-end
-
-Girl::Proxyd.new '/etc/girl.conf.json'
-```
-
-近端：
-
-```ruby
-# proxy.rb
-require 'girl/proxy'
-
-module Girl
-  module Custom
-    ALT = { '.' => 'o', 'o' => '.' }
-
-    def encode( data )
-      confuse( data )
-    end
-
-    def decode( data )
-      confuse( data )
-    end
-
-    def confuse( data )
-      data.gsub( /\.|o/ ){ | c | ALT[ c ] }
-    end
-  end
-end
-
-Girl::Proxy.new '/boot/girl.conf.json'
-```
-
-测试一下：
-
-```bash
-curl -x http://127.0.0.1:6666 https://www.google.com/
-```
+因此妹子采用ssl加密传输。
 
 另外，tcp也存在被200K限速。但仅是我遇到的个例：电信被限，移动正常，一台服务器被限，隔壁机房正常，几个月后恢复。
 
@@ -371,36 +280,6 @@ ruby resolvd.rb
 ```ruby
 # relay.rb
 require 'girl/relay'
-
-module Girl
-  module Custom
-    ALT = { '.' => 'o', 'o' => '.' }
-
-    def encode( data )
-      confuse( data )
-    end
-
-    def decode( data )
-      confuse( data )
-    end
-
-    def confuse( data )
-      data.gsub( /\.|o/ ){ | c | ALT[ c ] }
-    end
-  end
-end
-
-module Girl
-  module CustomDnsQuery
-    def encode( data )
-      data.reverse
-    end
-
-    def decode( data )
-      data.reverse
-    end
-  end
-end
 
 Girl::Relay.new '/boot/girl.conf.json'
 ```
