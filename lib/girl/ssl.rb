@@ -22,25 +22,11 @@ module Girl
 
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
       redir_port = conf[ :ssl_port ]
-      cert_path = conf[ :cert_path ]
-      key_path = conf[ :key_path ]
       worker_count = conf[ :worker_count ]
 
       unless redir_port then
         redir_port = 1080
       end
-
-      unless cert_path then
-        cert_path = '/root/.pem/cert.pem'
-      end
-
-      raise "not found cert file #{ cert_path }" unless File.exist?( cert_path )
-
-      unless key_path then
-        key_path = '/root/.pem/key.pem'
-      end
-
-      raise "not found key file #{ key_path }" unless File.exist?( key_path )
 
       nprocessors = Etc.nprocessors
 
@@ -57,8 +43,19 @@ module Girl
       title = "girl ssl #{ Girl::VERSION }"
       puts title
       puts "redir port #{ redir_port } worker count #{ worker_count }"
-      puts "cert path #{ cert_path }"
-      puts "key path #{ key_path }"
+
+      now = Time.new
+      name = OpenSSL::X509::Name.new
+      key = OpenSSL::PKey::RSA.new 2048
+      cert = OpenSSL::X509::Certificate.new
+      cert.version = 2
+      cert.serial = 0
+      cert.not_before = now
+      cert.not_after = now + 365 * 24 * 60 * 60
+      cert.public_key = key.public_key
+      cert.subject = name
+      cert.issuer = name
+      cert.sign key, OpenSSL::Digest.new('SHA1')
 
       $0 = title
       workers = []
@@ -66,7 +63,7 @@ module Girl
       worker_count.times do | i |
         workers << fork do
           $0 = 'girl ssl worker'
-          worker = Girl::SslWorker.new( redir_port, cert_path, key_path )
+          worker = Girl::SslWorker.new( redir_port, cert, key )
 
           Signal.trap( :TERM ) do
             puts "w#{ i } exit"

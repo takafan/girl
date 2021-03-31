@@ -104,8 +104,6 @@ girl.conf.json的格式：
     "proxyd_host": "1.2.3.4",             // 远端服务器
     "proxyd_port": 6060,                  // 远端端口
     "infod_port": 6070,                   // 查询服务，供远端本机调用
-    "cert_path": "cert.pem",              // 证书路径
-    "key_path": "key.pem",                // 私钥路径
     "direct_path": "girl.direct.txt",     // 直连ip段
     "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
     "im": "girl",                         // 标识，用来识别近端
@@ -186,7 +184,7 @@ CONNECT google.com HTTP/1.1\r\n\r\n
 
 另一种症状是被短暂拦断，ping不通vps，3分钟后恢复。可以由vps回来的明文http流量引起。
 
-因此妹子采用ssl传输。
+因此妹子包一层ssl。
 
 另外，tcp也存在被200K限速。但仅是我遇到的个例：电信被限，移动正常，一台服务器被限，隔壁机房正常，几个月后恢复。
 

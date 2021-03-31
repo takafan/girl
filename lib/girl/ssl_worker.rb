@@ -4,7 +4,7 @@ module Girl
     ##
     # initialize
     #
-    def initialize( redir_port, cert_path, key_path )
+    def initialize( redir_port, cert, key )
       @reads = []
       @writes = []
       @closing_srcs = []
@@ -20,7 +20,7 @@ module Girl
       dotr, dotw = IO.pipe
       @dotw = dotw
       add_read( dotr, :dotr )
-      new_a_redir( redir_port, cert_path, key_path )
+      new_a_redir( redir_port, cert, key )
     end
 
     ##
@@ -297,7 +297,7 @@ module Girl
       # puts "debug1 close write src"
       src_info = @src_infos[ src ]
       src_info[ :close_write ] = true
-      
+
       if src_info[ :close_read ] then
         # puts "debug1 delete src info"
         close_sock( src )
@@ -420,7 +420,7 @@ module Girl
     ##
     # new a redir
     #
-    def new_a_redir( redir_port, cert_path, key_path )
+    def new_a_redir( redir_port, cert, key )
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
@@ -429,9 +429,6 @@ module Girl
       redir.listen( 127 )
 
       @redir_local_address = redir.local_address
-
-      cert = OpenSSL::X509::Certificate.new File.read( cert_path )
-      key = OpenSSL::PKey::RSA.new File.read( key_path )
       context = OpenSSL::SSL::SSLContext.new
       context.add_certificate( cert, key )
       redir = OpenSSL::SSL::SSLServer.new redir, context

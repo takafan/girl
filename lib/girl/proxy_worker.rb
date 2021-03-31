@@ -14,16 +14,19 @@ module Girl
       @reads = []
       @writes = []
       @closing_srcs = []
+      @closing_pre_tuns = []
       @paused_srcs = []
       @paused_dsts = []
       @paused_tuns = []
       @resume_srcs = []
       @resume_dsts = []
       @resume_tuns = []
-      @roles = ConcurrentHash.new            # sock => :dotr / :redir / :proxy / :src / :dst / :tun
+      @pending_sources = []                  # 还没配到tund，暂存的src
+      @roles = ConcurrentHash.new            # sock => :dotr / :redir / :proxy / :src / :dst / :tun / :pre_proxy / :pre_tun
       @src_infos = ConcurrentHash.new        # src => {}
       @dst_infos = ConcurrentHash.new        # dst => {}
       @tun_infos = ConcurrentHash.new        # tun => {}
+      @pre_tun_infos = ConcurrentHash.new    # pre_tun => {}
       @resolv_caches = ConcurrentHash.new    # domain => [ ip, created_at ]
       @is_direct_caches = ConcurrentHash.new # ip => true / false
       @srcs = ConcurrentHash.new             # src_id => src
@@ -73,6 +76,10 @@ module Girl
             write_dst( sock )
           when :tun then
             write_tun( sock )
+          when :pre_proxy then
+            write_pre_proxy( sock )
+          when :pre_tun then
+            write_pre_tun( sock )
           end
         end
       end
@@ -107,6 +114,15 @@ module Girl
       domain_port = [ destination_domain, destination_port ].join( ':' )
       data = "#{ [ A_NEW_SOURCE, src_info[ :id ] ].pack( 'CQ>' ) }#{ domain_port }"
       add_ctlmsg( data )
+    end
+
+    ##
+    # add closing pre tun
+    #
+    def add_closing_pre_tun( pre_tun )
+      return if pre_tun.closed? || @closing_pre_tuns.include?( pre_tun )
+      @closing_pre_tuns << pre_tun
+      next_tick
     end
 
     ##
@@ -285,6 +301,16 @@ module Girl
       return if sock.closed? || @writes.include?( sock )
       @writes << sock
       next_tick
+    end
+
+    ##
+    # close pre tun
+    #
+    def close_pre_tun( pre_tun )
+      return if pre_tun.closed?
+      # puts "debug1 close pre tun"
+      close_sock( pre_tun )
+      @pre_tun_infos.delete( pre_tun )
     end
 
     ##
@@ -500,7 +526,7 @@ module Girl
     def del_src_info( src )
       src_info = @src_infos.delete( src )
       @srcs.delete( src_info[ :id ] )
-      @proxy_info[ :pending_sources ].delete( src )
+      @pending_sources.delete( src )
 
       src_info
     end
@@ -546,6 +572,13 @@ module Girl
               unless src_info[ :rbuff ].empty? then
                 puts "p#{ Process.pid } #{ Time.new } lost rbuff #{ src_info[ :rbuff ].inspect }"
               end
+            end
+          end
+
+          @pre_tun_infos.each do | pre_tun, pre_tun_info |
+            if now - pre_tun_info[ :created_at ] >= EXPIRE_NEW then
+              puts "p#{ Process.pid } #{ Time.new } expire pre tun #{ pre_tun_info[ :destination_domain ] }"
+              add_closing_pre_tun( pre_tun )
             end
           end
         end
@@ -669,50 +702,60 @@ module Girl
     end
 
     ##
-    # new a proxy
+    # new a pre proxy
     #
-    def new_a_proxy
-      proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+    def new_a_pre_proxy
+      pre_proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      pre_proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
 
       if RUBY_PLATFORM.include?( 'linux' ) then
-        proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+        pre_proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        pre_proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       end
 
       begin
-        proxy.connect( @proxyd_addr )
+        pre_proxy.connect_nonblock( @proxyd_addr )
+      rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect proxyd #{ e.class }, close proxy"
-        proxy.close
+        puts "p#{ Process.pid } #{ Time.new } connect proxyd #{ e.class }, close pre proxy"
+        pre_proxy.close
         return
       end
 
-      ssl_proxy = OpenSSL::SSL::SSLSocket.new proxy
-      ssl_proxy.sync_close = true
+      @pre_proxy = pre_proxy
+      @roles[ pre_proxy ] = :pre_proxy
+      add_write( pre_proxy )
+    end
+
+    ##
+    # new a pre tun
+    #
+    def new_a_pre_tun( src_id, dst_id )
+      src = @srcs[ src_id ]
+      return if src.nil? || src.closed?
+      src_info = @src_infos[ src ]
+      return if src_info[ :dst_id ]
+
+      pre_tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      pre_tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
 
       begin
-        ssl_proxy.connect
+        pre_tun.connect_nonblock( @proxy_info[ :tund_addr ] )
+      rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } ssl proxy connect #{ e.class }, close ssl proxy"
-        ssl_proxy.close
+        puts "p#{ Process.pid } #{ Time.new } connect tund #{ e.class }, close pre tun"
+        pre_tun.close
         return
       end
 
-      @proxy = ssl_proxy
-      @proxy_info = {
-        pending_sources: [],  # 还没配到tund，暂存的src
-        ctlmsgs: [],          # ctlmsg
-        tund_addr: nil,       # tund地址
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量的时间
-        closing: false        # 是否准备关闭
+      src_info[ :dst_id ] = dst_id
+      @pre_tun_infos[ pre_tun ] = {
+        src: src,
+        destination_domain: src_info[ :destination_domain ],
+        created_at: Time.new
       }
-      add_read( ssl_proxy, :proxy )
-      hello = @custom.hello
-      puts "p#{ Process.pid } #{ Time.new } tunnel #{ hello.inspect }"
-      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
-      add_ctlmsg( data )
+      @roles[ pre_tun ] = :pre_tun
+      add_write( pre_tun )
     end
 
     ##
@@ -733,69 +776,6 @@ module Girl
       add_read( redir, :redir )
       @redir_port = redir_port
       @redir_local_address = redir.local_address
-    end
-
-    ##
-    # new a tun
-    #
-    def new_a_tun( src_id, dst_id )
-      src = @srcs[ src_id ]
-      return if src.nil? || src.closed?
-      src_info = @src_infos[ src ]
-      return if src_info[ :dst_id ]
-      tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
-
-      begin
-        tun.connect( @proxy_info[ :tund_addr ] )
-      rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect tund #{ e.class }, close tun"
-        tun.close
-        return
-      end
-
-      ssl_tun = OpenSSL::SSL::SSLSocket.new tun
-      ssl_tun.sync_close = true
-
-      begin
-        ssl_tun.connect
-      rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } ssl tun connect #{ e.class }, close ssl tun"
-        ssl_tun.close
-        return
-      end
-
-      # puts "debug1 set tun.wbuff #{ dst_id }"
-      data = [ dst_id ].pack( 'n' )
-
-      unless src_info[ :rbuff ].empty? then
-        # puts "debug1  move src.rbuff to tun.wbuff"
-        data << src_info[ :rbuff ]
-      end
-
-      domain = src_info[ :destination_domain ]
-      @tun_infos[ ssl_tun ] = {
-        src: src,             # 对应src
-        domain: domain,       # 目的地
-        wbuff: data,          # 写前
-        closing_write: false, # 准备关闭写
-        close_read: false,    # 已经关闭读
-        close_write: false    # 已经关闭写
-      }
-
-      src_info[ :dst_id ] = dst_id
-      src_info[ :tun ] = ssl_tun
-      add_read( ssl_tun, :tun )
-      add_write( ssl_tun )
-
-      if src_info[ :proxy_proto ] == :http then
-        if src_info[ :is_connect ] then
-          # puts "debug1 add src.wbuff http ok"
-          add_src_wbuff( src, HTTP_OK )
-        end
-      elsif src_info[ :proxy_proto ] == :socks5 then
-        add_socks5_conn_reply( src )
-      end
     end
 
     ##
@@ -876,10 +856,10 @@ module Girl
       src_info[ :proxy_type ] = :tunnel
       src_id = src_info[ :id ]
 
-      if @proxy_info[ :tund_addr ] then
+      if @proxy && @proxy_info[ :tund_addr ] then
         add_a_new_source( src )
       else
-        @proxy_info[ :pending_sources ] << src
+        @pending_sources << src
       end
     end
 
@@ -937,6 +917,11 @@ module Girl
       if @closing_srcs.any? then
         @closing_srcs.each { | src | close_src( src ) }
         @closing_srcs.clear
+      end
+
+      if @closing_pre_tuns.any? then
+        @closing_pre_tuns.each { | pre_tun | close_pre_tun( pre_tun ) }
+        @closing_pre_tuns.clear
       end
 
       if @resume_srcs.any? then
@@ -1003,8 +988,8 @@ module Girl
       add_read( src, :src )
 
       # 避免多线程重复建proxy，在accept到src时就建。
-      if @proxy.nil? || @proxy.closed? then
-        new_a_proxy
+      if @pre_proxy.nil? || @pre_proxy.closed? then
+        new_a_pre_proxy
       end
     end
 
@@ -1044,16 +1029,16 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
           @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
 
-          if @proxy_info[ :pending_sources ].any? then
+          if @pending_sources.any? then
             puts "p#{ Process.pid } #{ Time.new } send pending sources"
-            @proxy_info[ :pending_sources ].each { | src | add_a_new_source( src ) }
-            @proxy_info[ :pending_sources ].clear
+            @pending_sources.each { | src | add_a_new_source( src ) }
+            @pending_sources.clear
           end
         when PAIRED then
           next if ctlmsg.size != 11
           src_id, dst_id = ctlmsg[ 1, 10 ].unpack( 'Q>n' )
           # puts "debug1 got paired #{ src_id } #{ dst_id }"
-          new_a_tun( src_id, dst_id )
+          new_a_pre_tun( src_id, dst_id )
         when RESOLVED then
           next if ctlmsg.size <= 9
           src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
@@ -1464,6 +1449,9 @@ module Girl
       # 写入
       begin
         written = tun.write_nonblock( data )
+      rescue IO::WaitReadable
+        # OpenSSL::SSL::SSLErrorWaitReadable
+        return
       rescue IO::WaitWritable, Errno::EINTR
         print 'w'
         return
@@ -1482,6 +1470,114 @@ module Girl
         src_info = @src_infos[ src ]
         src_info[ :last_sent_at ] = Time.new
       end
+    end
+
+    ##
+    # write pre proxy
+    #
+    def write_pre_proxy( pre_proxy )
+      if pre_proxy.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write pre proxy but pre proxy closed?"
+        return
+      end
+
+      proxy = OpenSSL::SSL::SSLSocket.new pre_proxy
+      proxy.sync_close = true
+
+      begin
+        proxy.connect_nonblock
+      rescue IO::WaitReadable
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } proxy connect #{ e.class }, close proxy"
+        proxy.close
+        return
+      end
+
+      @proxy = proxy
+      @proxy_info = {
+        ctlmsgs: [],          # ctlmsg
+        tund_addr: nil,       # tund地址
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil,    # 上一次收到流量的时间
+        closing: false        # 是否准备关闭
+      }
+      add_read( proxy, :proxy )
+      hello = @custom.hello
+      puts "p#{ Process.pid } #{ Time.new } tunnel #{ hello.inspect }"
+      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
+      add_ctlmsg( data )
+
+      @roles.delete( pre_proxy )
+      @writes.delete( pre_proxy )
+    end
+
+    ##
+    # write pre tun
+    #
+    def write_pre_tun( pre_tun )
+      if pre_tun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write pre tun but pre tun closed?"
+        return
+      end
+
+      pre_tun_info = @pre_tun_infos[ pre_tun ]
+      src = pre_tun_info[ :src ]
+
+      if src.closed? then
+        puts "p#{ Process.pid } #{ Time.new } new a tun but src closed?"
+        return
+      end
+
+      tun = OpenSSL::SSL::SSLSocket.new pre_tun
+      tun.sync_close = true
+
+      begin
+        tun.connect_nonblock
+      rescue IO::WaitReadable
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } tun connect #{ e.class }, close tun"
+        tun.close
+        return
+      end
+
+      src_info = @src_infos[ src ]
+      dst_id = src_info[ :dst_id ]
+      # puts "debug1 set tun.wbuff #{ dst_id }"
+      data = [ dst_id ].pack( 'n' )
+
+      unless src_info[ :rbuff ].empty? then
+        # puts "debug1  move src.rbuff to tun.wbuff"
+        data << src_info[ :rbuff ]
+      end
+
+      domain = src_info[ :destination_domain ]
+      @tun_infos[ tun ] = {
+        src: src,             # 对应src
+        domain: domain,       # 目的地
+        wbuff: data,          # 写前
+        closing_write: false, # 准备关闭写
+        close_read: false,    # 已经关闭读
+        close_write: false    # 已经关闭写
+      }
+
+      src_info[ :tun ] = tun
+      add_read( tun, :tun )
+      add_write( tun )
+
+      if src_info[ :proxy_proto ] == :http then
+        if src_info[ :is_connect ] then
+          # puts "debug1 add src.wbuff http ok"
+          add_src_wbuff( src, HTTP_OK )
+        end
+      elsif src_info[ :proxy_proto ] == :socks5 then
+        add_socks5_conn_reply( src )
+      end
+
+      @pre_tun_infos.delete( pre_tun )
+      @roles.delete( pre_tun )
+      @writes.delete( pre_tun )
     end
 
   end

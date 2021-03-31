@@ -4,7 +4,7 @@ module Girl
     ##
     # initialize
     #
-    def initialize( proxyd_port, infod_port, cert_path, key_path )
+    def initialize( proxyd_port, infod_port, cert, key )
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
@@ -24,8 +24,6 @@ module Girl
       @traff_ins = ConcurrentHash.new     # im => 0
       @traff_outs = ConcurrentHash.new    # im => 0
 
-      cert = OpenSSL::X509::Certificate.new File.read( cert_path )
-      key = OpenSSL::PKey::RSA.new File.read( key_path )
       context = OpenSSL::SSL::SSLContext.new
       context.add_certificate( cert, key )
       @context = context
