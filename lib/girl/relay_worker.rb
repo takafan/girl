@@ -435,16 +435,16 @@ module Girl
         close_sock( dst )
         @dst_infos.delete( dst )
       else
-        pre_tun = src_info[ :pre_tun ]
-
-        if pre_tun then
-          close_pre_tun( pre_tun )
-        end
-
         tun = src_info[ :tun ]
 
         if tun then
           close_tun( tun )
+        else
+          pre_tun = src_info[ :pre_tun ]
+
+          if pre_tun then
+            close_pre_tun( pre_tun )
+          end
         end
       end
     end
@@ -456,7 +456,8 @@ module Girl
       return if tun.closed?
       # puts "debug1 close tun"
       close_sock( tun )
-      @tun_infos.delete( tun )
+      tun_info = @tun_infos.delete( tun )
+      close_pre_tun( tun_info[ :pre_tun ] )
     end
 
     ##
@@ -1510,6 +1511,7 @@ module Girl
 
       domain = src_info[ :destination_domain ]
       @tun_infos[ tun ] = {
+        pre_tun: pre_tun,     # 对应pre tun
         src: src,             # 对应src
         domain: domain,       # 目的地
         wbuff: data,          # 写前
