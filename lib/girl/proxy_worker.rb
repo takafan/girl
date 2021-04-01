@@ -319,6 +319,7 @@ module Girl
       return if proxy.closed?
       # puts "debug1 close proxy"
       close_sock( proxy )
+      close_pre_proxy( @pre_proxy )
     end
 
     ##
