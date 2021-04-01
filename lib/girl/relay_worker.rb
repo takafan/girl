@@ -18,14 +18,13 @@ module Girl
       @writes = []
       @closing_rsvs = []
       @closing_srcs = []
-      @closing_pre_tuns = []
       @paused_srcs = []
       @paused_dsts = []
       @paused_tuns = []
       @resume_srcs = []
       @resume_dsts = []
       @resume_tuns = []
-      @pending_sources = []                  # 还没配到tund，暂存的src
+      @pending_srcs = []                     # 还没配到tund，暂存的src
       @roles = ConcurrentHash.new            # sock => :dotr / :resolv / :rsv / :redir / :proxy / :src / :dst / :tun / :pre_proxy / :pre_tun
       @rsv_infos = ConcurrentHash.new        # rsv => {}
       @src_infos = ConcurrentHash.new        # src => {}
@@ -123,15 +122,6 @@ module Girl
       domain_port = [ destination_domain, destination_port ].join( ':' )
       data = "#{ [ A_NEW_SOURCE, src_info[ :id ] ].pack( 'CQ>' ) }#{ domain_port }"
       add_ctlmsg( data )
-    end
-
-    ##
-    # add closing pre tun
-    #
-    def add_closing_pre_tun( pre_tun )
-      return if pre_tun.closed? || @closing_pre_tuns.include?( pre_tun )
-      @closing_pre_tuns << pre_tun
-      next_tick
     end
 
     ##
@@ -322,6 +312,15 @@ module Girl
     end
 
     ##
+    # close pre proxy
+    #
+    def close_pre_proxy( pre_proxy )
+      return if pre_proxy.closed?
+      # puts "debug1 close pre proxy"
+      close_sock( pre_proxy )
+    end
+
+    ##
     # close pre tun
     #
     def close_pre_tun( pre_tun )
@@ -393,8 +392,7 @@ module Girl
 
       if tun_info[ :close_write ] then
         # puts "debug1 close tun"
-        close_sock( tun )
-        tun_info = @tun_infos.delete( tun )
+        close_tun( tun )
       else
         @reads.delete( tun )
       end
@@ -437,13 +435,28 @@ module Girl
         close_sock( dst )
         @dst_infos.delete( dst )
       else
+        pre_tun = src_info[ :pre_tun ]
+
+        if pre_tun then
+          close_pre_tun( pre_tun )
+        end
+
         tun = src_info[ :tun ]
 
         if tun then
-          close_sock( tun )
-          @tun_infos.delete( tun )
+          close_tun( tun )
         end
       end
+    end
+
+    ##
+    # close tun
+    #
+    def close_tun( tun )
+      return if tun.closed?
+      # puts "debug1 close tun"
+      close_sock( tun )
+      @tun_infos.delete( tun )
     end
 
     ##
@@ -499,8 +512,7 @@ module Girl
 
       if tun_info[ :close_read ] then
         # puts "debug1 close tun"
-        close_sock( tun )
-        tun_info = @tun_infos.delete( tun )
+        close_tun( tun )
       else
         @writes.delete( tun )
       end
@@ -555,7 +567,7 @@ module Girl
     def del_src_info( src )
       src_info = @src_infos.delete( src )
       @srcs.delete( src_info[ :id ] )
-      @pending_sources.delete( src )
+      @pending_srcs.delete( src )
 
       src_info
     end
@@ -569,24 +581,30 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          if @proxy && !@proxy.closed? then
-            if @proxy_info[ :last_recv_at ] then
-              last_recv_at = @proxy_info[ :last_recv_at ]
-              expire_after = EXPIRE_AFTER
-            else
-              last_recv_at = @proxy_info[ :created_at ]
-              expire_after = EXPIRE_NEW
-            end
+          if @proxy then
+            unless @proxy.closed? then
+              if @proxy_info[ :last_recv_at ] then
+                last_recv_at = @proxy_info[ :last_recv_at ]
+                expire_after = EXPIRE_AFTER
+              else
+                last_recv_at = @proxy_info[ :created_at ]
+                expire_after = EXPIRE_NEW
+              end
 
-            if now - last_recv_at >= expire_after then
-              puts "p#{ Process.pid } #{ Time.new } expire proxy"
-              @proxy_info[ :closing ] = true
-              next_tick
-            else
-              # puts "debug1 #{ Time.new } send heartbeat"
-              data = [ HEARTBEAT ].pack( 'C' )
-              add_ctlmsg( data )
+              if now - last_recv_at >= expire_after then
+                puts "p#{ Process.pid } #{ Time.new } expire proxy"
+                @proxy_info[ :closing ] = true
+                next_tick
+              else
+                # puts "debug1 #{ Time.new } send heartbeat"
+                data = [ HEARTBEAT ].pack( 'C' )
+                add_ctlmsg( data )
+              end
             end
+          elsif @pre_proxy && !@pre_proxy.closed? && ( now - @pre_proxy_info[ :created_at ] > EXPIRE_NEW ) then
+            puts "p#{ Process.pid } #{ Time.new } expire pre proxy"
+            @pre_proxy_info[ :closing ] = true
+            next_tick
           end
 
           @rsv_infos.each do | rsv, rsv_info |
@@ -608,13 +626,6 @@ module Girl
               unless src_info[ :rbuff ].empty? then
                 puts "p#{ Process.pid } #{ Time.new } lost rbuff #{ src_info[ :rbuff ].inspect }"
               end
-            end
-          end
-
-          @pre_tun_infos.each do | pre_tun, pre_tun_info |
-            if now - pre_tun_info[ :created_at ] >= EXPIRE_NEW then
-              puts "p#{ Process.pid } #{ Time.new } expire pre tun #{ pre_tun_info[ :destination_domain ] }"
-              add_closing_pre_tun( pre_tun )
             end
           end
         end
@@ -753,6 +764,10 @@ module Girl
 
       @pre_proxy = pre_proxy
       @roles[ pre_proxy ] = :pre_proxy
+      @pre_proxy_info = {
+        closing: false,
+        created_at: Time.new
+      }
       add_write( pre_proxy )
     end
 
@@ -777,6 +792,7 @@ module Girl
         return
       end
 
+      src_info[ :pre_tun ] = pre_tun
       src_info[ :dst_id ] = dst_id
       @pre_tun_infos[ pre_tun ] = {
         src: src,
@@ -884,7 +900,7 @@ module Girl
       if @proxy && @proxy_info[ :tund_addr ] then
         add_a_new_source( src )
       else
-        @pending_sources << src
+        @pending_srcs << src
       end
     end
 
@@ -935,8 +951,12 @@ module Girl
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
 
-      if @proxy && !@proxy.closed? && @proxy_info[ :closing ] then
-        close_proxy( @proxy )
+      if @proxy then
+        if !@proxy.closed? && @proxy_info[ :closing ] then
+          close_proxy( @proxy )
+        end
+      elsif @pre_proxy && !@pre_proxy.closed? && @pre_proxy_info[ :closing ] then
+        close_pre_proxy( @pre_proxy )
       end
 
       if @closing_rsvs.any? then
@@ -947,11 +967,6 @@ module Girl
       if @closing_srcs.any? then
         @closing_srcs.each { | src | close_src( src ) }
         @closing_srcs.clear
-      end
-
-      if @closing_pre_tuns.any? then
-        @closing_pre_tuns.each { | pre_tun | close_pre_tun( pre_tun ) }
-        @closing_pre_tuns.clear
       end
 
       if @resume_srcs.any? then
@@ -1042,6 +1057,7 @@ module Girl
         destination_port: dest_port, # 目的地端口
         rbuff: '',                   # 读到的流量
         dst: nil,                    # :direct的场合，对应的dst
+        pre_tun: nil,                # :tunnel的场合，对应的pre tun
         tun: nil,                    # :tunnel的场合，对应的tun
         dst_id: nil,                 # 远端dst id
         wbuff: '',                   # 从dst/tun读到的流量
@@ -1097,10 +1113,10 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
           @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
 
-          if @pending_sources.any? then
+          if @pending_srcs.any? then
             puts "p#{ Process.pid } #{ Time.new } send pending sources"
-            @pending_sources.each { | src | add_a_new_source( src ) }
-            @pending_sources.clear
+            @pending_srcs.each { | src | add_a_new_source( src ) }
+            @pending_srcs.clear
           end
         when PAIRED then
           next if ctlmsg.size != 11
@@ -1422,7 +1438,6 @@ module Girl
       end
 
       proxy = OpenSSL::SSL::SSLSocket.new pre_proxy
-      proxy.sync_close = true
 
       begin
         proxy.connect_nonblock
@@ -1431,6 +1446,7 @@ module Girl
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } proxy connect #{ e.class }, close proxy"
         proxy.close
+        close_pre_proxy( pre_proxy )
         return
       end
 
@@ -1470,7 +1486,6 @@ module Girl
       end
 
       tun = OpenSSL::SSL::SSLSocket.new pre_tun
-      tun.sync_close = true
 
       begin
         tun.connect_nonblock
@@ -1479,6 +1494,7 @@ module Girl
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } tun connect #{ e.class }, close tun"
         tun.close
+        close_pre_tun( pre_tun )
         return
       end
 
