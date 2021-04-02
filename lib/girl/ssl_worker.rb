@@ -540,7 +540,10 @@ module Girl
     #
     def read_redir( redir )
       begin
-        src = redir.accept
+        src = redir.accept_nonblock
+      rescue IO::WaitReadable, Errno::EINTR
+        print 'r'
+        return
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } redir accept #{ e.class }"
         return

@@ -657,7 +657,10 @@ module Girl
     #
     def read_proxyd( proxyd )
       begin
-        proxy = proxyd.accept
+        proxy = proxyd.accept_nonblock
+      rescue IO::WaitReadable, Errno::EINTR
+        print 'r'
+        return
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } proxyd accept #{ e.class }"
         return
@@ -860,7 +863,10 @@ module Girl
       end
 
       begin
-        tun = tund.accept
+        tun = tund.accept_nonblock
+      rescue IO::WaitReadable, Errno::EINTR
+        print 'r'
+        return
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } tund accept #{ e.class }"
         return
