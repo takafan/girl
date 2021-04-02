@@ -423,7 +423,7 @@ module Girl
           @proxy_infos.each do | proxy, proxy_info |
             last_recv_at = proxy_info[ :last_recv_at ] || proxy_info[ :created_at ]
 
-            if proxy_info[ :dsts ].empty? && ( now - last_recv_at >= EXPIRE_AFTER ) then
+            if now - last_recv_at >= EXPIRE_AFTER then
               puts "p#{ Process.pid } #{ Time.new } expire proxy #{ proxy_info[ :addrinfo ].inspect }"
 
               unless @closing_proxys.include?( proxy ) then
@@ -515,15 +515,16 @@ module Girl
     # new a proxyd
     #
     def new_a_proxyd( proxyd_port )
-      proxyd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      proxyd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      proxyd.bind( Socket.sockaddr_in( proxyd_port, '0.0.0.0' ) )
+      pre_proxyd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      pre_proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      pre_proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      pre_proxyd.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      pre_proxyd.bind( Socket.sockaddr_in( proxyd_port, '0.0.0.0' ) )
+      
+      proxyd = OpenSSL::SSL::SSLServer.new pre_proxyd, @context
       proxyd.listen( 127 )
-      puts "p#{ Process.pid } #{ Time.new } proxyd bind on #{ proxyd_port }"
-      ssl_proxyd = OpenSSL::SSL::SSLServer.new proxyd, @context
-      add_read( ssl_proxyd, :proxyd )
+      puts "p#{ Process.pid } #{ Time.new } proxyd listen on #{ proxyd_port }"
+      add_read( proxyd, :proxyd )
     end
 
     ##
@@ -657,7 +658,7 @@ module Girl
     #
     def read_proxyd( proxyd )
       begin
-        proxy = proxyd.accept_nonblock
+        proxy = proxyd.accept
       rescue IO::WaitReadable, Errno::EINTR
         print 'r'
         return
@@ -729,23 +730,24 @@ module Girl
             @traff_outs[ im ] = 0
           end
 
-          tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-          tund.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-          tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
-          tund_port = tund.local_address.ip_port
-          tund.listen( 127 )
-          puts "p#{ Process.pid } #{ Time.new } tund #{ im.inspect } bind on #{ tund_port }"
-          ssl_tund = OpenSSL::SSL::SSLServer.new tund, @context
-          add_read( ssl_tund, :tund )
+          pre_tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+          pre_tund.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+          pre_tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
-          @tund_infos[ ssl_tund ] = {
+          tund_port = pre_tund.local_address.ip_port
+          tund = OpenSSL::SSL::SSLServer.new pre_tund, @context
+          tund.listen( 127 )
+          puts "p#{ Process.pid } #{ Time.new } tund #{ im.inspect } listen on #{ tund_port }"
+          add_read( tund, :tund )
+
+          @tund_infos[ tund ] = {
             proxy: proxy,
             close_read: false,
             close_write: false
           }
 
           proxy_info[ :im ] = im
-          proxy_info[ :tund ] = ssl_tund
+          proxy_info[ :tund ] = tund
           proxy_info[ :tund_port ] = tund_port
           data2 = [ TUND_PORT, tund_port ].pack( 'Cn' )
           add_ctlmsg( proxy, data2 )
@@ -863,7 +865,7 @@ module Girl
       end
 
       begin
-        tun = tund.accept_nonblock
+        tun = tund.accept
       rescue IO::WaitReadable, Errno::EINTR
         print 'r'
         return

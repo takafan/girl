@@ -421,18 +421,17 @@ module Girl
     # new a redir
     #
     def new_a_redir( redir_port, cert, key )
-      redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
-      redir.listen( 127 )
+      pre_redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      pre_redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      pre_redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      pre_redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+      pre_redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
 
-      @redir_local_address = redir.local_address
+      @redir_local_address = pre_redir.local_address
       context = OpenSSL::SSL::SSLContext.new
       context.add_certificate( cert, key )
-      redir = OpenSSL::SSL::SSLServer.new redir, context
-
+      redir = OpenSSL::SSL::SSLServer.new pre_redir, context
+      redir.listen( 127 )
       puts "p#{ Process.pid } #{ Time.new } redir listen on #{ redir_port }"
       add_read( redir, :redir )
     end
@@ -540,7 +539,7 @@ module Girl
     #
     def read_redir( redir )
       begin
-        src = redir.accept_nonblock
+        src = redir.accept
       rescue IO::WaitReadable, Errno::EINTR
         print 'r'
         return
