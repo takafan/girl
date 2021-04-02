@@ -583,25 +583,23 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          if @proxy then
-            unless @proxy.closed? then
-              if @proxy_info[ :last_recv_at ] then
-                last_recv_at = @proxy_info[ :last_recv_at ]
-                expire_after = EXPIRE_AFTER
-              else
-                last_recv_at = @proxy_info[ :created_at ]
-                expire_after = EXPIRE_NEW
-              end
+          if @proxy && !@proxy.closed? then
+            if @proxy_info[ :last_recv_at ] then
+              last_recv_at = @proxy_info[ :last_recv_at ]
+              expire_after = EXPIRE_AFTER
+            else
+              last_recv_at = @proxy_info[ :created_at ]
+              expire_after = EXPIRE_NEW
+            end
 
-              if now - last_recv_at >= expire_after then
-                puts "p#{ Process.pid } #{ Time.new } expire proxy"
-                @proxy_info[ :closing ] = true
-                next_tick
-              else
-                # puts "debug1 #{ Time.new } send heartbeat"
-                data = [ HEARTBEAT ].pack( 'C' )
-                add_ctlmsg( data )
-              end
+            if now - last_recv_at >= expire_after then
+              puts "p#{ Process.pid } #{ Time.new } expire proxy"
+              @proxy_info[ :closing ] = true
+              next_tick
+            else
+              # puts "debug1 #{ Time.new } send heartbeat"
+              data = [ HEARTBEAT ].pack( 'C' )
+              add_ctlmsg( data )
             end
           elsif @pre_proxy && !@pre_proxy.closed? && ( now - @pre_proxy_info[ :created_at ] > EXPIRE_NEW ) then
             puts "p#{ Process.pid } #{ Time.new } expire pre proxy"
@@ -899,7 +897,7 @@ module Girl
       src_info[ :proxy_type ] = :tunnel
       src_id = src_info[ :id ]
 
-      if @proxy && @proxy_info[ :tund_addr ] then
+      if @proxy && !@proxy.closed? && @proxy_info[ :tund_addr ] then
         add_a_new_source( src )
       else
         @pending_srcs << src
@@ -953,8 +951,8 @@ module Girl
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
 
-      if @proxy then
-        if !@proxy.closed? && @proxy_info[ :closing ] then
+      if @proxy && !@proxy.closed? then
+        if @proxy_info[ :closing ] then
           close_proxy( @proxy )
         end
       elsif @pre_proxy && !@pre_proxy.closed? && @pre_proxy_info[ :closing ] then
