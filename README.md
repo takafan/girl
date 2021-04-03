@@ -46,21 +46,7 @@
                                                                                            `- not hit -----> 远端 -> 目的地
 ```
 
-## udp怎么办
-
-中转使tcp变快，也能使udp变快吗？
-
-udp的快，主要指低延迟，从家到代理服务器的ping值，加上代理服务器到目的地的ping值，小于直连，代理才有意义。udp很需要区分国内外，目的地在国外，可以给它找条更短的线路，目的地在国内，直连就是最快的。
-
-但udp不能区分国内外，因为p2p的存在。要是把国内ip段设为直连，采用p2p联机的游戏会怎么样：游戏匹配服务器在海外，匹配到国内玩家，他从他洞里出来穿你（映射到远端的）洞，通。你却不走打好的洞突然直连穿他，不通。
-
-并且现实中，udp代理可以说不存在。ios，android，ps4，switch，自带http代理，http代理不支持udp。windows和macos可设socks5，但走不走代理，还是由应用程序实现，实现socks5，有，实现socks5中的UDP ASSOCIATE部分，没见过。因此，socks5支持udp，但形同虚设。
-
-只剩下vpn能使得与国外玩家联机变快，但要是匹配到国内玩家，反而变慢了。
-
-想保证p2p联机质量，要靠厂商开多个匹配服务器，亚洲玩家全去同一个服务器，直连。
-
-## 使用篇
+## 使用
 
 分别在两端装：
 
@@ -255,18 +241,6 @@ sysctl --system
 ```ruby
 # resolvd.rb
 require 'girl/resolvd'
-
-module Girl
-  module CustomDnsQuery
-    def encode( data )
-      data.reverse
-    end
-
-    def decode( data )
-      data.reverse
-    end
-  end
-end
 
 Girl::Resolvd.new '/etc/girl.conf.json'
 ```
