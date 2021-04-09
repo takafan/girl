@@ -946,7 +946,9 @@ module Girl
       begin
         data = btun.read_nonblock( READ_SIZE )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } read btun #{ btun_info[ :im ] } #{ e.class }"
+        # puts "debug read btun #{ btun_info[ :im ] } #{ e.class }"
+        close_btun( btun )
+        return
       end
 
       if data.bytesize != 2 then

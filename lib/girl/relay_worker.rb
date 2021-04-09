@@ -780,9 +780,12 @@ module Girl
       domain = src_info[ :destination_domain ]
       atun_wbuff = [ dst_id ].pack( 'n' )
 
-      unless src_info[ :rbuff ].empty? then
-        # puts "debug move src.rbuff to atun.wbuff"
-        atun_wbuff << src_info[ :rbuff ]
+      until src_info[ :rbuff ].empty? do
+        data = src_info[ :rbuff ][ 0, 65535 ]
+        data_size = data.bytesize
+        # puts "debug move src.rbuff #{ data_size } to atun.wbuff"
+        atun_wbuff << pack_a_chunk( data )
+        src_info[ :rbuff ] = src_info[ :rbuff ][ data_size..-1 ]
       end
 
       @atun_infos[ atun ] = {
@@ -816,6 +819,15 @@ module Girl
     #
     def next_tick
       @dotw.write( '.' )
+    end
+
+    ##
+    # pack a chunk
+    #
+    def pack_a_chunk( data )
+      # puts "debug pack a chunk"
+      data = @custom.encode( data )
+      "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
     end
 
     ##
@@ -1104,7 +1116,7 @@ module Girl
         return
       rescue Exception => e
         # puts "debug read src #{ e.class }"
-        src_info = close_read_src( src )
+        close_read_src( src )
         dst = src_info[ :dst ]
 
         if dst then
@@ -1129,12 +1141,8 @@ module Girl
       when :tunnel then
         atun = src_info[ :atun ]
 
-        # puts "debug read src #{ data.bytesize }, encode"
-        data = @custom.encode( data )
-        data = "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
-
         if atun then
-          add_atun_wbuff( atun, data )
+          add_atun_wbuff( atun, pack_a_chunk( data ) )
         else
           # puts "debug add src.rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
