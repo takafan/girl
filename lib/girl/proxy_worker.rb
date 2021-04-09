@@ -45,7 +45,6 @@ module Girl
       loop_check_resume
 
       loop do
-        # puts "debug select"
         rs, ws = IO.select( @reads, @writes )
 
         rs.each do | sock |
@@ -295,7 +294,11 @@ module Girl
       return if atun.closed?
       # puts "debug close atun"
       close_sock( atun )
-      @atun_infos.delete( atun )
+      atun_info = @atun_infos.delete( atun )
+
+      if atun_info[ :src ] then
+        @paused_srcs.delete( src )
+      end
     end
 
     ##
@@ -305,9 +308,7 @@ module Girl
       return if btun.closed?
       # puts "debug close btun"
       close_sock( btun )
-      @btun_infos.delete( btun )
-      @paused_btuns.delete( btun )
-      @resume_btuns.delete( btun )
+      del_btun_info( btun )
     end
 
     ##
@@ -378,11 +379,13 @@ module Girl
         btun = src_info[ :btun ]
 
         if atun then
-          close_atun( atun )
+          close_sock( atun )
+          @atun_infos.delete( atun )
         end
 
         if btun then
-          close_btun( btun )
+          close_sock( btun )
+          del_btun_info( btun )
         end
       end
     end
@@ -461,6 +464,15 @@ module Girl
     end
 
     ##
+    # del btun info
+    #
+    def del_btun_info( btun )
+      @btun_infos.delete( btun )
+      @paused_btuns.delete( btun )
+      @resume_btuns.delete( btun )
+    end
+
+    ##
     # del dst info
     #
     def del_dst_info( dst )
@@ -534,19 +546,24 @@ module Girl
             dst = src_info[ :dst ]
 
             if dst then
-              dst_info = @dst_infos[ dst ]
+              if !dst.closed? then
+                dst_info = @dst_infos[ dst ]
 
-              if dst_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
-                add_resume_src( src )
+                if dst_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
+                  add_resume_src( src )
+                end
               end
             else
-              btun = src_info[ :btun ]
-              btun_info = @btun_infos[ btun ]
+              atun = src_info[ :atun ]
 
-              if btun_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
-                add_resume_src( src )
+              if atun && !atun.closed? then
+                atun_info = @atun_infos[ atun ]
+
+                if atun_info[ :wbuff ].size < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
+                  add_resume_src( src )
+                end
               end
             end
           end
@@ -554,22 +571,28 @@ module Girl
           @paused_dsts.each do | dst |
             dst_info = @dst_infos[ dst ]
             src = dst_info[ :src ]
-            src_info = @src_infos[ src ]
 
-            if src_info[ :wbuff ].size < RESUME_BELOW then
-              puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
-              add_resume_dst( dst )
+            if src && !src.closed? then
+              src_info = @src_infos[ src ]
+
+              if src_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
+                add_resume_dst( dst )
+              end
             end
           end
 
           @paused_btuns.each do | btun |
             btun_info = @btun_infos[ btun ]
             src = btun_info[ :src ]
-            src_info = @src_infos[ src ]
 
-            if src_info[ :wbuff ].size < RESUME_BELOW then
-              puts "p#{ Process.pid } #{ Time.new } resume btun #{ btun_info[ :domain ] }"
-              add_resume_btun( btun )
+            if src && !src.closed? then
+              src_info = @src_infos[ src ]
+
+              if src_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume btun #{ btun_info[ :domain ] }"
+                add_resume_btun( btun )
+              end
             end
           end
         end

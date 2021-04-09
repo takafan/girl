@@ -42,7 +42,6 @@ module Girl
       loop_check_traff
 
       loop do
-        # puts "debug select"
         rs, ws = IO.select( @reads, @writes )
 
         rs.each do | sock |
@@ -200,9 +199,7 @@ module Girl
       return if atun.closed?
       # puts "debug close atun"
       close_sock( atun )
-      @atun_infos.delete( atun )
-      @paused_atuns.delete( atun )
-      @resume_atuns.delete( atun )
+      del_atun_info( atun )
     end
 
     ##
@@ -222,7 +219,11 @@ module Girl
       return if btun.closed?
       # puts "debug close btun"
       close_sock( btun )
-      @btun_infos.delete( btun )
+      btun_info = @btun_infos.delete( btun )
+
+      if btun_info[ :dst ] then
+        @paused_dsts.delete( dst )
+      end
     end
 
     ##
@@ -247,11 +248,13 @@ module Girl
       btun = dst_info[ :btun ]
 
       if atun then
-        close_atun( atun )
+        close_sock( atun )
+        del_atun_info( atun )
       end
 
       if btun then
-        close_btun( btun )
+        close_sock( btun )
+        @btun_infos.delete( btun )
       end
     end
 
@@ -342,6 +345,15 @@ module Girl
     end
 
     ##
+    # del atun info
+    #
+    def del_atun_info( atun )
+      @atun_infos.delete( atun )
+      @paused_atuns.delete( atun )
+      @resume_atuns.delete( atun )
+    end
+
+    ##
     # del ctl info
     #
     def del_ctl_info( ctl_addr )
@@ -419,22 +431,28 @@ module Girl
           @paused_dsts.each do | dst |
             dst_info = @dst_infos[ dst ]
             btun = dst_info[ :btun ]
-            btun_info = @btun_infos[ btun ]
 
-            if btun_info[ :wbuff ].size < RESUME_BELOW then
-              puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
-              add_resume_dst( dst )
+            if btun && !btun.closed? then
+              btun_info = @btun_infos[ btun ]
+
+              if btun_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
+                add_resume_dst( dst )
+              end
             end
           end
 
           @paused_atuns.each do | atun |
             atun_info = @atun_infos[ atun ]
             dst = atun_info[ :dst ]
-            dst_info = @dst_infos[ dst ]
 
-            if dst_info[ :wbuff ].size < RESUME_BELOW then
-              puts "p#{ Process.pid } #{ Time.new } resume atun #{ atun_info[ :domain_port ] }"
-              add_resume_atun( atun )
+            if dst && !dst.closed? then
+              dst_info = @dst_infos[ dst ]
+
+              if dst_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume atun #{ atun_info[ :domain_port ] }"
+                add_resume_atun( atun )
+              end
             end
           end
         end
