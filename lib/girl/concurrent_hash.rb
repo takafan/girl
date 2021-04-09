@@ -19,4 +19,8 @@ class ConcurrentHash < Hash
   def each( *args )
     @mutex.synchronize { super }
   end
+
+  def clear( *args )
+    @mutex.synchronize { super }
+  end
 end

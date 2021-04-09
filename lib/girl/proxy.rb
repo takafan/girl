@@ -6,7 +6,6 @@ require 'girl/proxy_worker'
 require 'girl/version'
 require 'ipaddr'
 require 'json'
-require 'openssl'
 require 'socket'
 
 ##
@@ -14,29 +13,34 @@ require 'socket'
 #
 #
 =begin
-C:  1 hello           -> hello
-    2 tund port       -> n: tund port
-    3 a new source    -> Q>: src id -> encoded destination address
-    4 paired          -> Q>: src id -> n: dst id
-    5 dest status     NOT USE
-    6 source status   NOT USE
-    7 miss            NOT USE
-    8 fin1            NOT USE
-    9 confirm fin1    NOT USE
-   10 fin2            NOT USE
-   11 confirm fin2    NOT USE
-   12 tund fin
-   13 tun fin
-   14 tun ip changed  NOT USE
-   15 single miss     NOT USE
-   16 range miss      NOT USE
-   17 continue        NOT USE
-   18 is resend ready NOT USE
-   19 resend ready    NOT USE
-   20 resolv          -> Q>: src id -> encoded domain
-   21 resolved        -> Q>: src id -> encoded ip
+C:  1 hello            -> hello
+    2 tund port        -> n: tund port
+    3 a new source     -> Q>: src id -> encoded destination address
+    4 paired           -> Q>: src id -> n: dst id
+    5 dest status      NOT USE
+    6 source status    NOT USE
+    7 miss             NOT USE
+    8 fin1             NOT USE
+    9 confirm fin1     NOT USE
+   10 fin2             NOT USE
+   11 confirm fin2     NOT USE
+   12 tund fin         NOT USE
+   13 tun fin          NOT USE
+   14 tun ip changed   NOT USE
+   15 single miss      NOT USE
+   16 range miss       NOT USE
+   17 continue         NOT USE
+   18 is resend ready  NOT USE
+   19 resend ready     NOT USE
+   20 resolv           -> Q>: src id -> encoded domain
+   21 resolved         -> Q>: src id -> encoded ip
+   22 heartbeat        NOT USE
+   23 unknown ctl addr
+   24 ctl fin
+   25 source eof       -> Q>: dst id
+   26 dest eof         -> Q>: src id
   101 traff infos
-  101 traff infos -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
+  101 traff infos      -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
 =end
 
 module Girl
@@ -56,7 +60,6 @@ module Girl
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
       im = conf[ :im ]
-      use_remote_resolv = conf[ :use_remote_resolv ]
       worker_count = conf[ :worker_count ]
 
       unless redir_port then
@@ -87,10 +90,6 @@ module Girl
         im = 'girl'
       end
 
-      unless use_remote_resolv then
-        use_remote_resolv = false
-      end
-
       nprocessors = Etc.nprocessors
 
       if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
@@ -105,7 +104,7 @@ module Girl
 
       title = "girl proxy #{ Girl::VERSION }"
       puts title
-      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im } use remote resolv #{ use_remote_resolv } worker count #{ worker_count }"
+      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im } worker count #{ worker_count }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
@@ -116,7 +115,7 @@ module Girl
         worker_count.times do | i |
           workers << fork do
             $0 = 'girl proxy worker'
-            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im, use_remote_resolv )
+            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
 
             Signal.trap( :TERM ) do
               puts "w#{ i } exit"
@@ -140,7 +139,7 @@ module Girl
 
         Process.waitall
       else
-        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im, use_remote_resolv ).looping
+        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im ).looping
       end
     end
 

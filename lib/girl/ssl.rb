@@ -44,26 +44,13 @@ module Girl
       puts title
       puts "redir port #{ redir_port } worker count #{ worker_count }"
 
-      now = Time.new
-      name = OpenSSL::X509::Name.new
-      key = OpenSSL::PKey::RSA.new 2048
-      cert = OpenSSL::X509::Certificate.new
-      cert.version = 2
-      cert.serial = 0
-      cert.not_before = now
-      cert.not_after = now + 365 * 24 * 60 * 60
-      cert.public_key = key.public_key
-      cert.subject = name
-      cert.issuer = name
-      cert.sign key, OpenSSL::Digest.new('SHA1')
-
       $0 = title
       workers = []
 
       worker_count.times do | i |
         workers << fork do
           $0 = 'girl ssl worker'
-          worker = Girl::SslWorker.new( redir_port, cert, key )
+          worker = Girl::SslWorker.new( redir_port )
 
           Signal.trap( :TERM ) do
             puts "w#{ i } exit"

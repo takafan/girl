@@ -6,7 +6,6 @@ require 'girl/relay_worker'
 require 'girl/resolv_custom'
 require 'girl/version'
 require 'json'
-require 'openssl'
 require 'socket'
 
 ##

@@ -4,7 +4,8 @@ module Girl
     ##
     # initialize
     #
-    def initialize( redir_port, cert, key )
+    def initialize( redir_port )
+      @redir_port = redir_port
       @reads = []
       @writes = []
       @closing_srcs = []
@@ -12,15 +13,15 @@ module Girl
       @paused_dsts = []
       @resume_srcs = []
       @resume_dsts = []
-      @roles = ConcurrentHash.new            # sock => :dotr / :redir / :src / :dst
-      @src_infos = ConcurrentHash.new        # src => {}
-      @dst_infos = ConcurrentHash.new        # dst => {}
-      @resolv_caches = ConcurrentHash.new    # domain => [ ip, created_at ]
+      @roles = ConcurrentHash.new         # sock => :dotr / :redir / :src / :dst
+      @src_infos = ConcurrentHash.new     # src => {}
+      @dst_infos = ConcurrentHash.new     # dst => {}
+      @resolv_caches = ConcurrentHash.new # domain => [ ip, created_at ]
 
       dotr, dotw = IO.pipe
       @dotw = dotw
       add_read( dotr, :dotr )
-      new_a_redir( redir_port, cert, key )
+      new_a_redir
     end
 
     ##
@@ -65,7 +66,7 @@ module Girl
     # quit!
     #
     def quit!
-      # puts "debug1 exit"
+      # puts "debug exit"
       exit
     end
 
@@ -84,6 +85,7 @@ module Girl
     # add dst wbuff
     #
     def add_dst_wbuff( dst, data )
+      return if dst.closed?
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       add_write( dst )
@@ -155,7 +157,7 @@ module Girl
       # +----+-----+-------+------+----------+----------+
       redir_ip, redir_port = @redir_local_address.ip_unpack
       data = [ [ 5, 0, 0, 1 ].pack( 'C4' ), IPAddr.new( redir_ip ).hton, [ redir_port ].pack( 'n' ) ].join
-      # puts "debug1 add src.wbuff socks5 conn reply #{ data.inspect }"
+      # puts "debug add src.wbuff socks5 conn reply #{ data.inspect }"
       add_src_wbuff( src, data )
     end
 
@@ -167,7 +169,7 @@ module Girl
       src_info[ :rbuff ] << data
 
       if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-        # puts "debug1 src.rbuff full"
+        # puts "debug src.rbuff full"
         add_closing_src( src )
       end
     end
@@ -206,20 +208,15 @@ module Girl
     #
     def close_read_dst( dst )
       return if dst.closed?
-      # puts "debug1 close read dst"
+      # puts "debug close read dst"
       dst.close_read
       @reads.delete( dst )
 
       if dst.closed? then
-        # puts "debug1 delete dst info"
         @writes.delete( dst )
         @roles.delete( dst )
-        dst_info = @dst_infos.delete( dst )
-      else
-        dst_info = @dst_infos[ dst ]
+        del_dst_info( dst )
       end
-
-      dst_info
     end
 
     ##
@@ -227,19 +224,16 @@ module Girl
     #
     def close_read_src( src )
       return if src.closed?
-      # puts "debug1 close read src"
+      # puts "debug close read src"
       src_info = @src_infos[ src ]
       src_info[ :close_read ] = true
 
       if src_info[ :close_write ] then
-        # puts "debug1 delete src info"
         close_sock( src )
-        src_info = @src_infos.delete( src )
+        del_src_info( src )
       else
         @reads.delete( src )
       end
-
-      src_info
     end
 
     ##
@@ -257,14 +251,14 @@ module Girl
     #
     def close_src( src )
       return if src.closed?
-      # puts "debug1 close src"
+      # puts "debug close src"
       close_sock( src )
-      src_info = @src_infos.delete( src )
+      src_info = del_src_info( src )
       dst = src_info[ :dst ]
 
       if dst then
         close_sock( dst )
-        @dst_infos.delete( dst )
+        del_dst_info( dst )
       end
     end
 
@@ -273,20 +267,15 @@ module Girl
     #
     def close_write_dst( dst )
       return if dst.closed?
-      # puts "debug1 close write dst"
+      # puts "debug close write dst"
       dst.close_write
       @writes.delete( dst )
 
       if dst.closed? then
-        # puts "debug1 delete dst info"
         @reads.delete( dst )
         @roles.delete( dst )
-        dst_info = @dst_infos.delete( dst )
-      else
-        dst_info = @dst_infos[ dst ]
+        del_dst_info( dst )
       end
-
-      dst_info
     end
 
     ##
@@ -294,18 +283,37 @@ module Girl
     #
     def close_write_src( src )
       return if src.closed?
-      # puts "debug1 close write src"
+      # puts "debug close write src"
       src_info = @src_infos[ src ]
       src_info[ :close_write ] = true
 
       if src_info[ :close_read ] then
-        # puts "debug1 delete src info"
         close_sock( src )
-        src_info = @src_infos.delete( src )
+        del_src_info( src )
       else
         @writes.delete( src )
       end
+    end
 
+    ##
+    # del dst info
+    #
+    def del_dst_info( dst )
+      # puts "debug delete dst info"
+      dst_info = @dst_infos.delete( dst )
+      @paused_dsts.delete( dst )
+      @resume_dsts.delete( dst )
+      dst_info
+    end
+
+    ##
+    # del src info
+    #
+    def del_src_info( src )
+      # puts "debug delete src info"
+      src_info = @src_infos.delete( src )
+      @paused_srcs.delete( src )
+      @resume_srcs.delete( src )
       src_info
     end
 
@@ -324,7 +332,7 @@ module Girl
             expire_after = src_info[ :dst ] ? EXPIRE_AFTER : EXPIRE_NEW
 
             if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
-              puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :destination_domain ] }"
+              puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
               add_closing_src( src )
 
               unless src_info[ :rbuff ].empty? then
@@ -345,35 +353,27 @@ module Girl
           sleep CHECK_RESUME_INTERVAL
 
           @paused_srcs.each do | src |
-            if src.closed? then
-              add_resume_src( src )
-            else
-              src_info = @src_infos[ src ]
-              dst = src_info[ :dst ]
+            src_info = @src_infos[ src ]
+            dst = src_info[ :dst ]
 
-              if dst then
-                dst_info = @dst_infos[ dst ]
+            if dst then
+              dst_info = @dst_infos[ dst ]
 
-                if dst_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
-                  add_resume_src( src )
-                end
+              if dst_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
+                add_resume_src( src )
               end
             end
           end
 
           @paused_dsts.each do | dst |
-            if dst.closed? then
-              add_resume_dst( dst )
-            else
-              dst_info = @dst_infos[ dst ]
-              src = dst_info[ :src ]
-              src_info = @src_infos[ src ]
+            dst_info = @dst_infos[ dst ]
+            src = dst_info[ :src ]
+            src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
-                add_resume_dst( dst )
-              end
+            if src_info[ :wbuff ].size < RESUME_BELOW then
+              puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
+              add_resume_dst( dst )
             end
           end
         end
@@ -389,7 +389,6 @@ module Girl
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
       dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
-      dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         dst.connect_nonblock( destination_addr )
@@ -402,7 +401,7 @@ module Girl
         return
       end
 
-      # puts "debug1 a new dst #{ dst.local_address.inspect }"
+      # puts "debug a new dst #{ dst.local_address.inspect }"
       dst_info = {
         src: src,            # 对应src
         domain: domain,      # 目的地
@@ -420,19 +419,32 @@ module Girl
     ##
     # new a redir
     #
-    def new_a_redir( redir_port, cert, key )
-      pre_redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      pre_redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-      pre_redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      pre_redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
-      pre_redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
+    def new_a_redir
+      pre = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      pre.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      pre.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      pre.bind( Socket.sockaddr_in( @redir_port, '0.0.0.0' ) )
+      @redir_local_address = pre.local_address
+      puts "p#{ Process.pid } #{ Time.new } pre bind on #{ @redir_port } local address #{ pre.local_address.inspect }"
 
-      @redir_local_address = pre_redir.local_address
+      now = Time.new
+      name = OpenSSL::X509::Name.new
+      key = OpenSSL::PKey::RSA.new 1024
+      cert = OpenSSL::X509::Certificate.new
+      cert.version = 2
+      cert.serial = 0
+      cert.not_before = now
+      cert.not_after = now + 365 * 24 * 60 * 60
+      cert.public_key = key.public_key
+      cert.subject = name
+      cert.issuer = name
+      cert.sign key, OpenSSL::Digest.new('SHA1')
       context = OpenSSL::SSL::SSLContext.new
+      context.security_level = 1
       context.add_certificate( cert, key )
-      redir = OpenSSL::SSL::SSLServer.new pre_redir, context
+      redir = OpenSSL::SSL::SSLServer.new pre, context
       redir.listen( 127 )
-      puts "p#{ Process.pid } #{ Time.new } redir listen on #{ redir_port }"
+      puts "p#{ Process.pid } #{ Time.new } redir listening"
       add_read( redir, :redir )
     end
 
@@ -453,12 +465,12 @@ module Girl
         ip_info, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug1 #{ domain } hit resolv cache #{ ip_info.inspect }"
+          # puts "debug #{ domain } hit resolv cache #{ ip_info.inspect }"
           new_a_dst( src, ip_info )
           return
         end
 
-        # puts "debug1 expire #{ domain } resolv cache"
+        # puts "debug expire #{ domain } resolv cache"
         @resolv_caches.delete( domain )
       end
 
@@ -508,7 +520,7 @@ module Girl
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read_nonblock( READ_SIZE )
+      dotr.read_nonblock( 65535 )
 
       if @closing_srcs.any? then
         @closing_srcs.each { | src | close_src( src ) }
@@ -538,17 +550,30 @@ module Girl
     # read redir
     #
     def read_redir( redir )
+      accepted = false
+
+      Thread.new do
+        sleep 1
+
+        unless accepted then
+          puts "p#{ Process.pid } #{ Time.new } accept timeout"
+          redir.close
+          @roles.delete( redir )
+          @reads.delete( redir )
+          new_a_redir
+        end
+      end
+
       begin
         src = redir.accept
-      rescue IO::WaitReadable, Errno::EINTR
-        print 'r'
-        return
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } redir accept #{ e.class }"
+        puts e.full_message
         return
       end
 
-      # puts "debug1 accept a src"
+      accepted = true
+      # puts "debug accept a src"
 
       @src_infos[ src ] = {
         proxy_proto: :uncheck,   # :uncheck / :socks5
@@ -579,17 +604,19 @@ module Girl
         return
       end
 
+      src_info = @src_infos[ src ]
+
       begin
-        data = src.read_nonblock( READ_SIZE )
+        data = src.read_nonblock( 65535 )
       rescue IO::WaitReadable
         return
       rescue Errno::EINTR => e
         puts e.class
         return
       rescue Exception => e
-        # puts "debug1 read src #{ e.class }"
-        src_info = close_read_src( src )
+        # puts "debug read src #{ e.class }"
         dst = src_info[ :dst ]
+        close_read_src( src )
 
         if dst then
           set_dst_closing_write( dst )
@@ -607,7 +634,7 @@ module Girl
           "p#{ Process.pid } #{ Time.new } unknown data #{ data.inspect }"
         end
 
-        # puts "debug1 socks5 #{ data.inspect }"
+        # puts "debug socks5 #{ data.inspect }"
 
         # https://tools.ietf.org/html/rfc1928
         #
@@ -635,7 +662,7 @@ module Girl
         src_info[ :proxy_proto ] = :socks5
         src_info[ :proxy_type ] = :negotiation
       when :checking then
-        # puts "debug1 add src rbuff before resolved #{ data.inspect }"
+        # puts "debug add src rbuff before resolved #{ data.inspect }"
         src_info[ :rbuff ] << data
       when :negotiation then
         # +----+-----+-------+------+----------+----------+
@@ -643,11 +670,11 @@ module Girl
         # +----+-----+-------+------+----------+----------+
         # | 1  |  1  | X'00' |  1   | Variable |    2     |
         # +----+-----+-------+------+----------+----------+
-        # puts "debug1 negotiation #{ data.inspect }"
+        # puts "debug negotiation #{ data.inspect }"
         ver, cmd, rsv, atyp = data[ 0, 4 ].unpack( 'C4' )
 
         if cmd == 1 then
-          # puts "debug1 socks5 CONNECT"
+          # puts "debug socks5 CONNECT"
 
           if atyp == 1 then
             destination_host, destination_port = data[ 4, 6 ].unpack( 'Nn' )
@@ -656,7 +683,7 @@ module Girl
             destination_ip = destination_addrinfo.ip_address
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
-            # puts "debug1 IP V4 address #{ destination_addrinfo.ip_unpack.inspect }"
+            # puts "debug IP V4 address #{ destination_addrinfo.ip_unpack.inspect }"
             new_a_dst( src, destination_addrinfo )
           elsif atyp == 3 then
             domain_len = data[ 4 ].unpack( 'C' ).first
@@ -666,7 +693,7 @@ module Girl
               port = data[ ( 5 + domain_len ), 2 ].unpack( 'n' ).first
               src_info[ :destination_domain ] = domain
               src_info[ :destination_port ] = port
-              # puts "debug1 DOMAINNAME #{ domain } #{ port }"
+              # puts "debug DOMAINNAME #{ domain } #{ port }"
               resolve_domain( src, domain )
             end
           end
@@ -677,12 +704,9 @@ module Girl
         dst = src_info[ :dst ]
 
         if dst then
-          unless dst.closed? then
-            # puts "debug2 add dst.wbuff #{ data.bytesize }"
-            add_dst_wbuff( dst, data )
-          end
+          add_dst_wbuff( dst, data )
         else
-          # puts "debug1 dst not ready, save data to src.rbuff"
+          # puts "debug add src.rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
         end
       end
@@ -697,21 +721,22 @@ module Girl
         return
       end
 
+      dst_info = @dst_infos[ dst ]
+      src = dst_info[ :src ]
+
       begin
-        data = dst.read_nonblock( READ_SIZE )
+        data = dst.read_nonblock( 65535 )
       rescue IO::WaitReadable, Errno::EINTR
         print 'r'
         return
       rescue Exception => e
-        # puts "debug1 read dst #{ e.class }"
-        dst_info = close_read_dst( dst )
-        src = dst_info[ :src ]
+        # puts "debug read dst #{ e.class }"
+        close_read_dst( dst )
         set_src_closing_write( src )
         return
       end
 
-      dst_info = @dst_infos[ dst ]
-      src = dst_info[ :src ]
+      # puts "debug read dst #{ data.bytesize }"
       add_src_wbuff( src, data )
     end
 
@@ -746,7 +771,7 @@ module Girl
         print 'w'
         return
       rescue Exception => e
-        # puts "debug1 write src #{ e.class }"
+        # puts "debug write src #{ e.class }"
         close_write_src( src )
 
         if dst then
@@ -756,7 +781,6 @@ module Girl
         return
       end
 
-      # puts "debug2 written src #{ written }"
       data = data[ written..-1 ]
       src_info[ :wbuff ] = data
     end
@@ -792,7 +816,7 @@ module Girl
         print 'w'
         return
       rescue Exception => e
-        # puts "debug1 write dst #{ e.class }"
+        # puts "debug write dst #{ e.class }"
         close_write_dst( dst )
         close_read_src( src )
         return

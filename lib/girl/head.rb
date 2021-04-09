@@ -1,14 +1,17 @@
 module Girl
-  READ_SIZE             = 1024 * 1024      # 一次读多少
+  READ_SIZE             = 1024 * 1024      # atun, btun一次读多少
   WBUFF_LIMIT           = 50 * 1024 * 1024 # 写前上限，超过上限暂停读
   RESUME_BELOW          = WBUFF_LIMIT / 2  # 降到多少以下恢复读
   EXPIRE_NEW            = 5                # 多久没有建立通道，过期
   EXPIRE_AFTER          = 300              # 多久没有新流量，过期
+  EXPIRE_CTL            = 86400            # 多久没有ctlmsg来，过期
   RESET_TRAFF_DAY       = 1                # 流量计数重置日，0为不重置
   CHECK_TRAFF_INTERVAL  = 86400            # 检查今天是否是流量计数重置日间隔
   CHECK_EXPIRE_INTERVAL = 5                # 检查过期间隔
   CHECK_RESUME_INTERVAL = 1                # 检查恢复读间隔
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
+  RESEND_LIMIT          = 5                # ctlmsg重传次数
+  RESEND_INTERVAL       = 1                # ctlmsg重传间隔
   HELLO                 = 1
   TUND_PORT             = 2
   A_NEW_SOURCE          = 3
@@ -31,6 +34,8 @@ module Girl
   RESOLV                = 20
   RESOLVED              = 21
   HEARTBEAT             = 22
+  UNKNOWN_CTL_ADDR      = 23
+  CTL_FIN               = 24
   TRAFF_INFOS           = 101
   SEPARATE              = "\r\n\r\n"
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
@@ -49,8 +54,13 @@ EOF
     RESUME_BELOW
     EXPIRE_NEW
     EXPIRE_AFTER
+    EXPIRE_CTL
+    RESET_TRAFF_DAY
+    CHECK_TRAFF_INTERVAL
     CHECK_EXPIRE_INTERVAL
     CHECK_RESUME_INTERVAL
     RESOLV_CACHE_EXPIRE
+    RESEND_LIMIT
+    RESEND_INTERVAL
   ]
 end

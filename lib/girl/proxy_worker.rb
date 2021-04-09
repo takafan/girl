@@ -4,28 +4,27 @@ module Girl
     ##
     # initialize
     #
-    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, im, use_remote_resolv )
+    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
-      @use_remote_resolv = use_remote_resolv
       @reads = []
       @writes = []
       @closing_srcs = []
       @paused_srcs = []
       @paused_dsts = []
-      @paused_tuns = []
+      @paused_btuns = []
       @resume_srcs = []
       @resume_dsts = []
-      @resume_tuns = []
+      @resume_btuns = []
       @pending_srcs = []                     # 还没配到tund，暂存的src
-      @roles = ConcurrentHash.new            # sock => :dotr / :redir / :proxy / :src / :dst / :tun / :pre_proxy / :pre_tun
+      @roles = ConcurrentHash.new            # sock => :dotr / :redir / :ctl / :src / :dst / :atun / :btun
       @src_infos = ConcurrentHash.new        # src => {}
       @dst_infos = ConcurrentHash.new        # dst => {}
-      @tun_infos = ConcurrentHash.new        # tun => {}
-      @pre_tun_infos = ConcurrentHash.new    # pre_tun => {}
+      @atun_infos = ConcurrentHash.new       # atun => {}
+      @btun_infos = ConcurrentHash.new       # btun => {}
       @resolv_caches = ConcurrentHash.new    # domain => [ ip, created_at ]
       @is_direct_caches = ConcurrentHash.new # ip => true / false
       @srcs = ConcurrentHash.new             # src_id => src
@@ -46,6 +45,7 @@ module Girl
       loop_check_resume
 
       loop do
+        # puts "debug select"
         rs, ws = IO.select( @reads, @writes )
 
         rs.each do | sock |
@@ -54,31 +54,27 @@ module Girl
             read_dotr( sock )
           when :redir then
             read_redir( sock )
-          when :proxy then
-            read_proxy( sock )
+          when :ctl then
+            read_ctl( sock )
           when :src then
             read_src( sock )
           when :dst then
             read_dst( sock )
-          when :tun then
-            read_tun( sock )
+          when :btun then
+            read_btun( sock )
           end
         end
 
         ws.each do | sock |
           case @roles[ sock ]
-          when :proxy then
-            write_proxy( sock )
           when :src then
             write_src( sock )
           when :dst then
             write_dst( sock )
-          when :tun then
-            write_tun( sock )
-          when :pre_proxy then
-            write_pre_proxy( sock )
-          when :pre_tun then
-            write_pre_tun( sock )
+          when :atun then
+            write_atun( sock )
+          when :btun then
+            write_btun( sock )
           end
         end
       end
@@ -91,13 +87,8 @@ module Girl
     # quit!
     #
     def quit!
-      if @proxy && !@proxy.closed? then
-        # puts "debug1 send tun fin"
-        data = [ TUN_FIN ].pack( 'C' )
-        @proxy.write( data )
-      end
-
-      # puts "debug1 exit"
+      # puts "debug exit"
+      send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
       exit
     end
 
@@ -111,8 +102,24 @@ module Girl
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
-      data = "#{ [ A_NEW_SOURCE, src_info[ :id ] ].pack( 'CQ>' ) }#{ domain_port }"
-      add_ctlmsg( data )
+      # puts "debug add a new source #{ src_info[ :id ] } #{ domain_port }"
+      key = [ A_NEW_SOURCE, src_info[ :id ] ].pack( 'CQ>' )
+      add_ctlmsg( key, domain_port )
+    end
+
+    ##
+    # add atun wbuff
+    #
+    def add_atun_wbuff( atun, data )
+      return if atun.closed?
+      atun_info = @atun_infos[ atun ]
+      atun_info[ :wbuff ] << data
+      add_write( atun )
+
+      if atun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ atun_info[ :domain ] }"
+        add_paused_src( atun_info[ :src ] )
+      end
     end
 
     ##
@@ -127,16 +134,18 @@ module Girl
     ##
     # add ctlmsg
     #
-    def add_ctlmsg( data )
-      return if @proxy.nil? || @proxy.closed?
-      @proxy_info[ :ctlmsgs ] << data
-      add_write( @proxy )
+    def add_ctlmsg( key, data )
+      ctlmsg = "#{ key }#{ data }"
+      send_ctlmsg( ctlmsg )
+      @ctl_info[ :resends ][ key ] = 0
+      loop_resend_ctlmsg( key, ctlmsg )
     end
 
     ##
     # add dst wbuff
     #
     def add_dst_wbuff( dst, data )
+      return if dst.closed?
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       add_write( dst )
@@ -145,6 +154,15 @@ module Girl
         puts "p#{ Process.pid } #{ Time.new } pause direct src #{ dst_info[ :domain ] }"
         add_paused_src( dst_info[ :src ] )
       end
+    end
+
+    ##
+    # add paused btun
+    #
+    def add_paused_btun( btun )
+      return if btun.closed? || @paused_btuns.include?( btun )
+      @reads.delete( btun )
+      @paused_btuns << btun
     end
 
     ##
@@ -166,15 +184,6 @@ module Girl
     end
 
     ##
-    # add paused tun
-    #
-    def add_paused_tun( tun )
-      return if tun.closed? || @paused_tuns.include?( tun )
-      @reads.delete( tun )
-      @paused_tuns << tun
-    end
-
-    ##
     # add read
     #
     def add_read( sock, role = nil )
@@ -185,6 +194,15 @@ module Girl
         @roles[ sock ] = role
       end
 
+      next_tick
+    end
+
+    ##
+    # add resume btun
+    #
+    def add_resume_btun( btun )
+      return if @resume_btuns.include?( btun )
+      @resume_btuns << btun
       next_tick
     end
 
@@ -207,15 +225,6 @@ module Girl
     end
 
     ##
-    # add resume tun
-    #
-    def add_resume_tun( tun )
-      return if @resume_tuns.include?( tun )
-      @resume_tuns << tun
-      next_tick
-    end
-
-    ##
     # add socks5 conn reply
     #
     def add_socks5_conn_reply( src )
@@ -226,7 +235,7 @@ module Girl
       # +----+-----+-------+------+----------+----------+
       redir_ip, redir_port = @redir_local_address.ip_unpack
       data = [ [ 5, 0, 0, 1 ].pack( 'C4' ), IPAddr.new( redir_ip ).hton, [ redir_port ].pack( 'n' ) ].join
-      # puts "debug1 add src.wbuff socks5 conn reply #{ data.inspect }"
+      # puts "debug add src.wbuff socks5 conn reply #{ data.inspect }"
       add_src_wbuff( src, data )
     end
 
@@ -238,7 +247,7 @@ module Girl
       src_info[ :rbuff ] << data
 
       if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-        # puts "debug1 src.rbuff full"
+        # puts "debug src.rbuff full"
         add_closing_src( src )
       end
     end
@@ -260,27 +269,13 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } pause dst #{ src_info[ :destination_domain ] }"
           add_paused_dst( dst )
         else
-          tun = src_info[ :tun ]
+          btun = src_info[ :btun ]
 
-          if tun then
-            puts "p#{ Process.pid } #{ Time.new } pause tun #{ src_info[ :destination_domain ] }"
-            add_paused_tun( tun )
+          if btun then
+            puts "p#{ Process.pid } #{ Time.new } pause btun #{ src_info[ :destination_domain ] }"
+            add_paused_btun( btun )
           end
         end
-      end
-    end
-
-    ##
-    # add tun wbuff
-    #
-    def add_tun_wbuff( tun, data )
-      tun_info = @tun_infos[ tun ]
-      tun_info[ :wbuff ] << data
-      add_write( tun )
-
-      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ tun_info[ :domain ] }"
-        add_paused_src( tun_info[ :src ] )
       end
     end
 
@@ -294,32 +289,33 @@ module Girl
     end
 
     ##
-    # close pre proxy
+    # close atun
     #
-    def close_pre_proxy( pre_proxy )
-      return if pre_proxy.closed?
-      # puts "debug1 close pre proxy"
-      close_sock( pre_proxy )
+    def close_atun( atun )
+      return if atun.closed?
+      # puts "debug close atun"
+      close_sock( atun )
+      @atun_infos.delete( atun )
     end
 
     ##
-    # close pre tun
+    # close btun
     #
-    def close_pre_tun( pre_tun )
-      return if pre_tun.closed?
-      # puts "debug1 close pre tun"
-      close_sock( pre_tun )
-      @pre_tun_infos.delete( pre_tun )
+    def close_btun( btun )
+      return if btun.closed?
+      # puts "debug close btun"
+      close_sock( btun )
+      @btun_infos.delete( btun )
+      @paused_btuns.delete( btun )
+      @resume_btuns.delete( btun )
     end
 
     ##
-    # close proxy
+    # close ctl
     #
-    def close_proxy( proxy )
-      return if proxy.closed?
-      # puts "debug1 close proxy"
-      close_sock( proxy )
-      close_pre_proxy( @pre_proxy )
+    def close_ctl( ctl )
+      close_sock( ctl )
+      @ctl_info[ :resends ].clear
     end
 
     ##
@@ -327,20 +323,15 @@ module Girl
     #
     def close_read_dst( dst )
       return if dst.closed?
-      # puts "debug1 close read dst"
+      # puts "debug close read dst"
       dst.close_read
       @reads.delete( dst )
 
       if dst.closed? then
-        # puts "debug1 delete dst info"
         @writes.delete( dst )
         @roles.delete( dst )
-        dst_info = @dst_infos.delete( dst )
-      else
-        dst_info = @dst_infos[ dst ]
+        del_dst_info( dst )
       end
-
-      dst_info
     end
 
     ##
@@ -348,39 +339,15 @@ module Girl
     #
     def close_read_src( src )
       return if src.closed?
-      # puts "debug1 close read src"
+      # puts "debug close read src"
       src.close_read
       @reads.delete( src )
 
       if src.closed? then
-        # puts "debug1 delete src info"
         @writes.delete( src )
         @roles.delete( src )
-        src_info = del_src_info( src )
-      else
-        src_info = @src_infos[ src ]
+        del_src_info( src )
       end
-
-      src_info
-    end
-
-    ##
-    # close read tun
-    #
-    def close_read_tun( tun )
-      return if tun.closed?
-      # puts "debug1 close read tun"
-      tun_info = @tun_infos[ tun ]
-      tun_info[ :close_read ] = true
-
-      if tun_info[ :close_write ] then
-        # puts "debug1 close tun"
-        close_tun( tun )
-      else
-        @reads.delete( tun )
-      end
-
-      tun_info
     end
 
     ##
@@ -398,38 +365,26 @@ module Girl
     #
     def close_src( src )
       return if src.closed?
-      # puts "debug1 close src"
+      # puts "debug close src"
       close_sock( src )
       src_info = del_src_info( src )
       dst = src_info[ :dst ]
 
       if dst then
         close_sock( dst )
-        @dst_infos.delete( dst )
+        del_dst_info( dst )
       else
-        tun = src_info[ :tun ]
+        atun = src_info[ :atun ]
+        btun = src_info[ :btun ]
 
-        if tun then
-          close_tun( tun )
-        else
-          pre_tun = src_info[ :pre_tun ]
+        if atun then
+          close_atun( atun )
+        end
 
-          if pre_tun then
-            close_pre_tun( pre_tun )
-          end
+        if btun then
+          close_btun( btun )
         end
       end
-    end
-
-    ##
-    # close tun
-    #
-    def close_tun( tun )
-      return if tun.closed?
-      # puts "debug1 close tun"
-      close_sock( tun )
-      tun_info = @tun_infos.delete( tun )
-      close_pre_tun( tun_info[ :pre_tun ] )
     end
 
     ##
@@ -437,20 +392,15 @@ module Girl
     #
     def close_write_dst( dst )
       return if dst.closed?
-      # puts "debug1 close write dst"
+      # puts "debug close write dst"
       dst.close_write
       @writes.delete( dst )
 
       if dst.closed? then
-        # puts "debug1 delete dst info"
         @reads.delete( dst )
         @roles.delete( dst )
-        dst_info = @dst_infos.delete( dst )
-      else
-        dst_info = @dst_infos[ dst ]
+        del_dst_info( dst )
       end
-
-      dst_info
     end
 
     ##
@@ -458,39 +408,15 @@ module Girl
     #
     def close_write_src( src )
       return if src.closed?
-      # puts "debug1 close write src"
+      # puts "debug close write src"
       src.close_write
       @writes.delete( src )
 
       if src.closed? then
-        # puts "debug1 delete src info"
         @reads.delete( src )
         @roles.delete( src )
-        src_info = del_src_info( src )
-      else
-        src_info = @src_infos[ src ]
+        del_src_info( src )
       end
-
-      src_info
-    end
-
-    ##
-    # close write tun
-    #
-    def close_write_tun( tun )
-      return if tun.closed?
-      # puts "debug1 close write tun"
-      tun_info = @tun_infos[ tun ]
-      tun_info[ :close_write ] = true
-
-      if tun_info[ :close_read ] then
-        # puts "debug1 close tun"
-        close_tun( tun )
-      else
-        @writes.delete( tun )
-      end
-
-      tun_info
     end
 
     ##
@@ -525,23 +451,36 @@ module Girl
       end
 
       if is_direct then
-        # puts "debug1 #{ ip_info.inspect } hit directs"
+        # puts "debug #{ ip_info.inspect } hit directs"
         new_a_dst( src, ip_info )
       else
         # 走远端
-        # puts "debug1 #{ ip_info.inspect } go tunnel"
+        # puts "debug #{ ip_info.inspect } go tunnel"
         set_proxy_type_tunnel( src )
       end
+    end
+
+    ##
+    # del dst info
+    #
+    def del_dst_info( dst )
+      # puts "debug delete dst info"
+      dst_info = @dst_infos.delete( dst )
+      @paused_dsts.delete( dst )
+      @resume_dsts.delete( dst )
+      dst_info
     end
 
     ##
     # del src info
     #
     def del_src_info( src )
+      # puts "debug delete src info"
       src_info = @src_infos.delete( src )
       @srcs.delete( src_info[ :id ] )
       @pending_srcs.delete( src )
-
+      @paused_srcs.delete( src )
+      @resume_srcs.delete( src )
       src_info
     end
 
@@ -554,37 +493,23 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          if @proxy && !@proxy.closed? then
-            if @proxy_info[ :last_recv_at ] then
-              last_recv_at = @proxy_info[ :last_recv_at ]
-              expire_after = EXPIRE_AFTER
-            else
-              last_recv_at = @proxy_info[ :created_at ]
-              expire_after = EXPIRE_NEW
-            end
+          if @ctl && !@ctl.closed? then
+            last_recv_at = @ctl_info[ :last_recv_at ] || @ctl_info[ :created_at ]
 
-            if now - last_recv_at >= expire_after then
-              puts "p#{ Process.pid } #{ Time.new } expire proxy"
-              @proxy_info[ :closing ] = true
-              next_tick
-            else
-              # puts "debug1 #{ Time.new } send heartbeat"
-              data = [ HEARTBEAT ].pack( 'C' )
-              add_ctlmsg( data )
+            if now - last_recv_at >= EXPIRE_AFTER then
+               puts "p#{ Process.pid } #{ Time.new } expire ctl"
+               @ctl_info[ :closing ] = true
+               next_tick
             end
-          elsif @pre_proxy && !@pre_proxy.closed? && ( now - @pre_proxy_info[ :created_at ] > EXPIRE_NEW ) then
-            puts "p#{ Process.pid } #{ Time.new } expire pre proxy"
-            @pre_proxy_info[ :closing ] = true
-            next_tick
           end
 
           @src_infos.each do | src, src_info |
             last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
             last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
-            expire_after = ( src_info[ :dst ] || src_info[ :tun ] ) ? EXPIRE_AFTER : EXPIRE_NEW
+            expire_after = ( src_info[ :dst ] || src_info[ :atun ] ) ? EXPIRE_AFTER : EXPIRE_NEW
 
             if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
-              puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :destination_domain ] }"
+              puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
               add_closing_src( src )
 
               unless src_info[ :rbuff ].empty? then
@@ -605,60 +530,73 @@ module Girl
           sleep CHECK_RESUME_INTERVAL
 
           @paused_srcs.each do | src |
-            if src.closed? then
-              add_resume_src( src )
+            src_info = @src_infos[ src ]
+            dst = src_info[ :dst ]
+
+            if dst then
+              dst_info = @dst_infos[ dst ]
+
+              if dst_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
+                add_resume_src( src )
+              end
             else
-              src_info = @src_infos[ src ]
-              dst = src_info[ :dst ]
+              btun = src_info[ :btun ]
+              btun_info = @btun_infos[ btun ]
 
-              if dst then
-                dst_info = @dst_infos[ dst ]
-
-                if dst_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
-                  add_resume_src( src )
-                end
-              else
-                tun = src_info[ :tun ]
-                tun_info = @tun_infos[ tun ]
-
-                if tun_info[ :wbuff ].size < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
-                  add_resume_src( src )
-                end
+              if btun_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
+                add_resume_src( src )
               end
             end
           end
 
           @paused_dsts.each do | dst |
-            if dst.closed? then
+            dst_info = @dst_infos[ dst ]
+            src = dst_info[ :src ]
+            src_info = @src_infos[ src ]
+
+            if src_info[ :wbuff ].size < RESUME_BELOW then
+              puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
               add_resume_dst( dst )
-            else
-              dst_info = @dst_infos[ dst ]
-              src = dst_info[ :src ]
-              src_info = @src_infos[ src ]
-
-              if src_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
-                add_resume_dst( dst )
-              end
             end
           end
 
-          @paused_tuns.each do | tun |
-            if tun.closed? then
-              add_resume_tun( tun )
-            else
-              tun_info = @tun_infos[ tun ]
-              src = tun_info[ :src ]
-              src_info = @src_infos[ src ]
+          @paused_btuns.each do | btun |
+            btun_info = @btun_infos[ btun ]
+            src = btun_info[ :src ]
+            src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].size < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume tun #{ tun_info[ :domain ] }"
-                add_resume_tun( tun )
-              end
+            if src_info[ :wbuff ].size < RESUME_BELOW then
+              puts "p#{ Process.pid } #{ Time.new } resume btun #{ btun_info[ :domain ] }"
+              add_resume_btun( btun )
             end
           end
+        end
+      end
+    end
+
+    ##
+    # loop resend ctlmsg
+    #
+    def loop_resend_ctlmsg( key, ctlmsg )
+      Thread.new do
+        loop do
+          sleep RESEND_INTERVAL
+
+          resend = @ctl_info[ :resends ][ key ]
+          break unless resend
+
+          puts "p#{ Process.pid } #{ Time.new } resend #{ ctlmsg.inspect }"
+          send_ctlmsg( ctlmsg )
+          resend += 1
+
+          if resend >= RESEND_LIMIT then
+            @ctl_info[ :resends ].delete( key )
+            break
+          end
+
+          @ctl_info[ :resends ][ key ] = resend
         end
       end
     end
@@ -672,7 +610,6 @@ module Girl
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
       dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
-      dst.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
 
       begin
         dst.connect_nonblock( destination_addr )
@@ -685,7 +622,7 @@ module Girl
         return
       end
 
-      # puts "debug1 a new dst #{ dst.local_address.inspect }"
+      # puts "debug a new dst #{ dst.local_address.inspect }"
       dst_info = {
         src: src,            # 对应src
         domain: domain,      # 目的地
@@ -700,10 +637,10 @@ module Girl
 
       if src_info[ :proxy_proto ] == :http then
         if src_info[ :is_connect ] then
-          # puts "debug1 add src.wbuff http ok"
+          # puts "debug add src.wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
         elsif src_info[ :rbuff ] then
-          # puts "debug1 move src.rbuff to dst.wbuff"
+          # puts "debug move src.rbuff to dst.wbuff"
           dst_info[ :wbuff ] << src_info[ :rbuff ]
           add_write( dst )
         end
@@ -713,65 +650,31 @@ module Girl
     end
 
     ##
-    # new a pre proxy
+    # new a ctl
     #
-    def new_a_pre_proxy
-      pre_proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      pre_proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+    def new_a_ctl
+      ctl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       if RUBY_PLATFORM.include?( 'linux' ) then
-        pre_proxy.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        pre_proxy.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
+        ctl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       end
 
-      begin
-        pre_proxy.connect_nonblock( @proxyd_addr )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect proxyd #{ e.class }, close pre proxy"
-        pre_proxy.close
-        return
-      end
+      @ctl = ctl
+      add_read( ctl, :ctl )
 
-      @pre_proxy = pre_proxy
-      @roles[ pre_proxy ] = :pre_proxy
-      @pre_proxy_info = {
-        closing: false,
-        created_at: Time.new
+      @ctl_info = {
+        resends: ConcurrentHash.new, # key => count
+        atund_addr: nil,             # atund地址，src->dst
+        btund_addr: nil,             # btund地址，dst->src
+        closing: false,              # 准备关闭
+        created_at: Time.new,        # 创建时间
+        last_recv_at: nil            # 最近一次收到数据时间
       }
-      add_write( pre_proxy )
-    end
 
-    ##
-    # new a pre tun
-    #
-    def new_a_pre_tun( src_id, dst_id )
-      src = @srcs[ src_id ]
-      return if src.nil? || src.closed?
-      src_info = @src_infos[ src ]
-      return if src_info[ :dst_id ]
-
-      pre_tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      pre_tun.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 ) if RUBY_PLATFORM.include?( 'linux' )
-
-      begin
-        pre_tun.connect_nonblock( @proxy_info[ :tund_addr ] )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect tund #{ e.class }, close pre tun"
-        pre_tun.close
-        return
-      end
-
-      src_info[ :pre_tun ] = pre_tun
-      src_info[ :dst_id ] = dst_id
-      @pre_tun_infos[ pre_tun ] = {
-        src: src,
-        destination_domain: src_info[ :destination_domain ],
-        created_at: Time.new
-      }
-      @roles[ pre_tun ] = :pre_tun
-      add_write( pre_tun )
+      hello = @custom.hello
+      puts "p#{ Process.pid } #{ Time.new } hello i'm #{ hello.inspect }"
+      key = [ HELLO ].pack( 'C' )
+      add_ctlmsg( key, hello )
     end
 
     ##
@@ -783,7 +686,6 @@ module Girl
 
       if RUBY_PLATFORM.include?( 'linux' ) then
         redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        redir.setsockopt( Socket::SOL_TCP, Socket::TCP_NODELAY, 1 )
       end
 
       redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
@@ -795,10 +697,97 @@ module Girl
     end
 
     ##
+    # new tuns
+    #
+    def new_tuns( src_id, dst_id )
+      src = @srcs[ src_id ]
+      return if src.nil? || src.closed?
+      src_info = @src_infos[ src ]
+      return if src_info[ :dst_id ]
+
+      # puts "debug new atun and btun"
+      atun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+
+      begin
+        atun.connect_nonblock( @ctl_info[ :atund_addr ] )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } connect atund #{ e.class }, close atun"
+        atun.close
+        return
+      end
+
+      btun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+
+      begin
+        btun.connect_nonblock( @ctl_info[ :btund_addr ] )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } connect btund #{ e.class }, close btun"
+        btun.close
+        return
+      end
+
+      domain = src_info[ :destination_domain ]
+      atun_wbuff = [ dst_id ].pack( 'n' )
+
+      until src_info[ :rbuff ].empty? do
+        data = src_info[ :rbuff ][ 0, 65535 ]
+        data_size = data.bytesize
+        # puts "debug move src.rbuff #{ data_size } to atun.wbuff"
+        atun_wbuff << pack_a_chunk( data )
+        src_info[ :rbuff ] = src_info[ :rbuff ][ data_size..-1 ]
+      end
+
+      @atun_infos[ atun ] = {
+        src: src,          # 对应src
+        domain: domain,    # 目的地
+        wbuff: atun_wbuff, # 写前
+        closing: false     # 准备关闭
+      }
+
+      btun_wbuff = [ dst_id ].pack( 'n' )
+
+      @btun_infos[ btun ] = {
+        src: src,          # 对应src
+        domain: domain,    # 目的地
+        wbuff: btun_wbuff, # 写前
+        rbuff: '',         # 暂存当前块没收全的流量
+        wait_bytes: 0      # 还差多少字节收全当前块
+      }
+
+      src_info[ :dst_id ] = dst_id
+      src_info[ :atun ] = atun
+      src_info[ :btun ] = btun
+      add_read( atun, :atun )
+      add_read( btun, :btun )
+      add_write( atun )
+      add_write( btun )
+
+      if src_info[ :proxy_proto ] == :http then
+        if src_info[ :is_connect ] then
+          # puts "debug add src.wbuff http ok"
+          add_src_wbuff( src, HTTP_OK )
+        end
+      elsif src_info[ :proxy_proto ] == :socks5 then
+        add_socks5_conn_reply( src )
+      end
+    end
+
+    ##
     # next tick
     #
     def next_tick
       @dotw.write( '.' )
+    end
+
+    ##
+    # pack a chunk
+    #
+    def pack_a_chunk( data )
+      # puts "debug pack a chunk"
+      data = @custom.encode( data )
+      "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
     end
 
     ##
@@ -817,23 +806,17 @@ module Girl
         ip_info, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug1 #{ domain } hit resolv cache #{ ip_info.inspect }"
+          # puts "debug #{ domain } hit resolv cache #{ ip_info.inspect }"
           deal_with_destination_ip( src, ip_info )
           return
         end
 
-        # puts "debug1 expire #{ domain } resolv cache"
+        # puts "debug expire #{ domain } resolv cache"
         @resolv_caches.delete( domain )
       end
 
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :checking
-
-      if @use_remote_resolv then
-        data = "#{ [ RESOLV, src_info[ :id ] ].pack( 'CQ>' ) }#{ domain }"
-        add_ctlmsg( data )
-        return
-      end
 
       Thread.new do
         begin
@@ -853,12 +836,40 @@ module Girl
     end
 
     ##
+    # send ctlmsg
+    #
+    def send_ctlmsg( data )
+      return if @ctl.nil? || @ctl.closed?
+
+      begin
+        @ctl.sendmsg( data, 0, @proxyd_addr )
+        @ctl_info[ :last_sent_at ] = Time.new
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
+        close_ctl( @ctl )
+      end
+    end
+
+    ##
+    # set atun closing
+    #
+    def set_atun_closing( atun )
+      return if atun.closed?
+      atun_info = @atun_infos[ atun ]
+      return if atun_info[ :closing ]
+      # puts "debug set atun closing"
+      atun_info[ :closing ] = true
+      add_write( atun )
+    end
+
+    ##
     # set dst closing write
     #
     def set_dst_closing_write( dst )
       return if dst.closed?
       dst_info = @dst_infos[ dst ]
       return if dst_info[ :closing_write ]
+      # puts "debug set dst closing write"
       dst_info[ :closing_write ] = true
       add_write( dst )
     end
@@ -872,7 +883,7 @@ module Girl
       src_info[ :proxy_type ] = :tunnel
       src_id = src_info[ :id ]
 
-      if @proxy && !@proxy.closed? && @proxy_info[ :tund_addr ] then
+      if @ctl && !@ctl.closed? && @ctl_info[ :atund_addr ] then
         add_a_new_source( src )
       else
         @pending_srcs << src
@@ -891,17 +902,6 @@ module Girl
     end
 
     ##
-    # set tun closing write
-    #
-    def set_tun_closing_write( tun )
-      return if tun.closed?
-      tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing_write ]
-      tun_info[ :closing_write ] = true
-      add_write( tun )
-    end
-
-    ##
     # sub http request
     #
     def sub_http_request( data )
@@ -914,7 +914,7 @@ module Girl
       if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://' then
         domain_port = url.split( '/' )[ 2 ]
         data = data.sub( "http://#{ domain_port }", '' )
-        # puts "debug1 subed #{ data.inspect } #{ domain_port }"
+        # puts "debug subed #{ data.inspect } #{ domain_port }"
       end
 
       [ data, domain_port ]
@@ -924,14 +924,11 @@ module Girl
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read_nonblock( READ_SIZE )
+      dotr.read_nonblock( 65535 )
 
-      if @proxy && !@proxy.closed? then
-        if @proxy_info[ :closing ] then
-          close_proxy( @proxy )
-        end
-      elsif @pre_proxy && !@pre_proxy.closed? && @pre_proxy_info[ :closing ] then
-        close_pre_proxy( @pre_proxy )
+      if @ctl_info && @ctl_info[ :closing ] then
+        send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
+        close_ctl( @ctl )
       end
 
       if @closing_srcs.any? then
@@ -957,13 +954,13 @@ module Girl
         @resume_dsts.clear
       end
 
-      if @resume_tuns.any? then
-        @resume_tuns.each do | tun |
-          add_read( tun )
-          @paused_tuns.delete( tun )
+      if @resume_btuns.any? then
+        @resume_btuns.each do | btun |
+          add_read( btun )
+          @paused_btuns.delete( btun )
         end
 
-        @resume_tuns.clear
+        @resume_btuns.clear
       end
     end
 
@@ -979,7 +976,7 @@ module Girl
       end
 
       src_id = rand( ( 2 ** 64 ) - 2 ) + 1
-      # puts "debug1 accept a src #{ addrinfo.ip_unpack.inspect } #{ src_id }"
+      # puts "debug accept a src #{ src_id } #{ addrinfo.ip_unpack.inspect }"
 
       @srcs[ src_id ] = src
       @src_infos[ src ] = {
@@ -991,10 +988,11 @@ module Girl
         is_connect: true,        # 代理协议是http的场合，是否是CONNECT
         rbuff: '',               # 读到的流量
         dst: nil,                # :direct的场合，对应的dst
-        pre_tun: nil,            # :tunnel的场合，对应的pre tun
-        tun: nil,                # :tunnel的场合，对应的tun
+        ctl: nil,                # :tunnel的场合，对应的ctl
+        atun: nil,               # :tunnel的场合，对应的atun
+        btun: nil,               # :tunnel的场合，对应的btun
         dst_id: nil,             # 远端dst id
-        wbuff: '',               # 从dst/tun读到的流量
+        wbuff: '',               # 从dst/btun读到的流量
         created_at: Time.new,    # 创建时间
         last_recv_at: nil,       # 上一次收到新流量（由dst收到，或者由tun收到）的时间
         last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由tun发出）的时间
@@ -1003,75 +1001,50 @@ module Girl
 
       add_read( src, :src )
 
-      # 避免多线程重复建proxy，在accept到src时就建。
-      if @pre_proxy.nil? || @pre_proxy.closed? then
-        new_a_pre_proxy
+      if @ctl.nil? || @ctl.closed? then
+        new_a_ctl
       end
     end
 
     ##
-    # read proxy
+    # read ctl
     #
-    def read_proxy( proxy )
-      if proxy.closed? then
-        puts "p#{ Process.pid } #{ Time.new } read proxy but proxy closed?"
-        return
-      end
-
+    def read_ctl( ctl )
       begin
-        data = proxy.read_nonblock( READ_SIZE )
-      rescue IO::WaitReadable
-        return
-      rescue Errno::EINTR
-        puts e.class
-        return
+        data, addrinfo, rflags, *controls = ctl.recvmsg
       rescue Exception => e
-        # puts "debug1 read proxy #{ e.class }"
-        close_proxy( proxy )
+        puts "p#{ Process.pid } #{ Time.new } recvmsg #{ e.class }"
+        close_ctl( ctl )
         return
       end
 
-      @proxy_info[ :last_recv_at ] = Time.new
+      ctl_num = data[ 0 ].unpack( 'C' ).first
 
-      data.split( SEPARATE ).each do | ctlmsg |
-        next unless ctlmsg[ 0 ]
+      case ctl_num
+      when TUND_PORT then
+        return if @ctl_info[ :atund_addr ] || data.size != 5
+        atund_port, btund_port = data[ 1, 4 ].unpack( 'nn' )
+        puts "p#{ Process.pid } #{ Time.new } got tund port #{ atund_port } #{ btund_port }"
+        @ctl_info[ :resends ].delete( [ HELLO ].pack( 'C' ) )
+        @ctl_info[ :atund_addr ] = Socket.sockaddr_in( atund_port, @proxyd_host )
+        @ctl_info[ :btund_addr ] = Socket.sockaddr_in( btund_port, @proxyd_host )
+        @ctl_info[ :last_recv_at ] = Time.new
 
-        ctl_num = ctlmsg[ 0 ].unpack( 'C' ).first
-
-        case ctl_num
-        when TUND_PORT then
-          next if @proxy_info[ :tund_addr ] || ( ctlmsg.size != 3 )
-          tund_port = ctlmsg[ 1, 2 ].unpack( 'n' ).first
-          puts "p#{ Process.pid } #{ Time.new } got tund port #{ tund_port }"
-          @proxy_info[ :tund_addr ] = Socket.sockaddr_in( tund_port, @proxyd_host )
-
-          if @pending_srcs.any? then
-            puts "p#{ Process.pid } #{ Time.new } send pending sources"
-            @pending_srcs.each { | src | add_a_new_source( src ) }
-            @pending_srcs.clear
-          end
-        when PAIRED then
-          next if ctlmsg.size != 11
-          src_id, dst_id = ctlmsg[ 1, 10 ].unpack( 'Q>n' )
-          # puts "debug1 got paired #{ src_id } #{ dst_id }"
-          new_a_pre_tun( src_id, dst_id )
-        when RESOLVED then
-          next if ctlmsg.size <= 9
-          src_id = ctlmsg[ 1, 8 ].unpack( 'Q>' ).first
-          src = @srcs[ src_id ]
-          next if src.nil? || src.closed?
-          src_info = @src_infos[ src ]
-          ip = ctlmsg[ 9..-1 ]
-          puts "p#{ Process.pid } #{ Time.new } remote resolved #{ src_info[ :destination_domain ] } #{ ip }"
-          ip_info = Addrinfo.ip( ip )
-          deal_with_destination_ip( src, ip_info )
-        when TUND_FIN then
-          puts "p#{ Process.pid } #{ Time.new } got tund fin"
-          close_proxy( proxy )
-          return
-        when HEARTBEAT
-          # puts "debug1 #{ Time.new } got heartbeat"
+        if @pending_srcs.any? then
+          puts "p#{ Process.pid } #{ Time.new } send pending sources"
+          @pending_srcs.each { | src | add_a_new_source( src ) }
+          @pending_srcs.clear
         end
+      when PAIRED then
+        return if @ctl_info[ :atund_addr ].nil? || @ctl_info[ :btund_addr ].nil? || data.size != 11
+        src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
+        # puts "debug got paired #{ src_id } #{ dst_id }"
+        @ctl_info[ :resends ].delete( [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) )
+        @ctl_info[ :last_recv_at ] = Time.new
+        new_tuns( src_id, dst_id )
+      when UNKNOWN_CTL_ADDR then
+        puts "p#{ Process.pid } #{ Time.new } got unknown ctl addr, close ctl"
+        close_ctl( ctl )
       end
     end
 
@@ -1084,33 +1057,38 @@ module Girl
         return
       end
 
+      src_info = @src_infos[ src ]
+
       begin
-        data = src.read_nonblock( READ_SIZE )
-      rescue IO::WaitReadable, Errno::EINTR
+        data = src.read_nonblock( 65535 )
+      rescue IO::WaitReadable
         print 'r'
         return
       rescue Exception => e
-        # puts "debug1 read src #{ e.class }"
-        src_info = close_read_src( src )
+        # puts "debug read src #{ e.class }"
+        close_read_src( src )
         dst = src_info[ :dst ]
 
         if dst then
           set_dst_closing_write( dst )
         else
-          tun = src_info[ :tun ]
-          set_tun_closing_write( tun ) if tun
+          atun = src_info[ :atun ]
+
+          if atun then
+            set_atun_closing( atun )
+          end
         end
 
         return
       end
 
-      src_info = @src_infos[ src ]
+      # puts "debug read src #{ data.bytesize }"
       proxy_type = src_info[ :proxy_type ]
 
       case proxy_type
       when :uncheck then
         if data[ 0, 7 ] == 'CONNECT' then
-          # puts "debug1 CONNECT"
+          # puts "debug CONNECT"
           domain_port = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
 
           unless domain_port then
@@ -1119,7 +1097,7 @@ module Girl
             return
           end
         elsif data[ 0 ].unpack( 'C' ).first == 5 then
-          # puts "debug1 socks5 #{ data.inspect }"
+          # puts "debug socks5 #{ data.inspect }"
 
           # https://tools.ietf.org/html/rfc1928
           #
@@ -1148,11 +1126,11 @@ module Girl
           src_info[ :proxy_type ] = :negotiation
           return
         else
-          # puts "debug1 not CONNECT #{ data.inspect }"
+          # puts "debug not CONNECT #{ data.inspect }"
           host_line = data.split( "\r\n" ).find { | _line | _line[ 0, 6 ] == 'Host: ' }
 
           unless host_line then
-            # puts "debug1 not found host line"
+            # puts "debug not found host line"
             add_closing_src( src )
             return
           end
@@ -1160,7 +1138,7 @@ module Girl
           data, domain_port = sub_http_request( data )
 
           unless domain_port then
-            # puts "debug1 not HTTP"
+            # puts "debug not HTTP"
             domain_port = host_line.split( ' ' )[ 1 ]
 
             unless domain_port then
@@ -1183,7 +1161,7 @@ module Girl
 
         resolve_domain( src, domain )
       when :checking then
-        # puts "debug1 add src rbuff before resolved #{ data.inspect }"
+        # puts "debug add src rbuff before resolved #{ data.inspect }"
         src_info[ :rbuff ] << data
       when :negotiation then
         # +----+-----+-------+------+----------+----------+
@@ -1191,11 +1169,11 @@ module Girl
         # +----+-----+-------+------+----------+----------+
         # | 1  |  1  | X'00' |  1   | Variable |    2     |
         # +----+-----+-------+------+----------+----------+
-        # puts "debug1 negotiation #{ data.inspect }"
+        # puts "debug negotiation #{ data.inspect }"
         ver, cmd, rsv, atyp = data[ 0, 4 ].unpack( 'C4' )
 
         if cmd == 1 then
-          # puts "debug1 socks5 CONNECT"
+          # puts "debug socks5 CONNECT"
 
           if atyp == 1 then
             destination_host, destination_port = data[ 4, 6 ].unpack( 'Nn' )
@@ -1204,7 +1182,7 @@ module Girl
             destination_ip = destination_addrinfo.ip_address
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
-            # puts "debug1 IP V4 address #{ destination_addrinfo.ip_unpack.inspect }"
+            # puts "debug IP V4 address #{ destination_addrinfo.ip_unpack.inspect }"
             deal_with_destination_ip( src, destination_addrinfo )
           elsif atyp == 3 then
             domain_len = data[ 4 ].unpack( 'C' ).first
@@ -1214,7 +1192,7 @@ module Girl
               port = data[ ( 5 + domain_len ), 2 ].unpack( 'n' ).first
               src_info[ :destination_domain ] = domain
               src_info[ :destination_port ] = port
-              # puts "debug1 DOMAINNAME #{ domain } #{ port }"
+              # puts "debug DOMAINNAME #{ domain } #{ port }"
               resolve_domain( src, domain )
             end
           end
@@ -1222,35 +1200,29 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } socks5 cmd #{ cmd } not implement"
         end
       when :tunnel then
-        tun = src_info[ :tun ]
+        atun = src_info[ :atun ]
 
-        if tun then
-          unless tun.closed? then
-            unless src_info[ :is_connect ] then
-              data, _ = sub_http_request( data )
-            end
+        if atun && !src_info[ :is_connect ] then
+          data, _ = sub_http_request( data )
+        end
 
-            # puts "debug2 add tun.wbuff #{ data.bytesize }"
-            add_tun_wbuff( tun, data )
-          end
+        if atun then
+          add_atun_wbuff( atun, pack_a_chunk( data ) )
         else
-          # puts "debug1 tun not ready, save data to src.rbuff"
+          # puts "debug add src.rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
         end
       when :direct then
         dst = src_info[ :dst ]
 
         if dst then
-          unless dst.closed? then
-            unless src_info[ :is_connect ] then
-              data, _ = sub_http_request( data )
-            end
-
-            # puts "debug2 add dst.wbuff #{ data.bytesize }"
-            add_dst_wbuff( dst, data )
+          unless src_info[ :is_connect ] then
+            data, _ = sub_http_request( data )
           end
+
+          add_dst_wbuff( dst, data )
         else
-          # puts "debug1 dst not ready, save data to src.rbuff"
+          # puts "debug add src.rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
         end
       end
@@ -1265,82 +1237,88 @@ module Girl
         return
       end
 
+      dst_info = @dst_infos[ dst ]
+      src = dst_info[ :src ]
+
       begin
-        data = dst.read_nonblock( READ_SIZE )
-      rescue IO::WaitReadable, Errno::EINTR
+        data = dst.read_nonblock( 65535 )
+      rescue IO::WaitReadable
         print 'r'
         return
       rescue Exception => e
-        # puts "debug1 read dst #{ e.class }"
-        dst_info = close_read_dst( dst )
-        src = dst_info[ :src ]
+        # puts "debug read dst #{ e.class }"
+        close_read_dst( dst )
         set_src_closing_write( src )
         return
       end
 
-      dst_info = @dst_infos[ dst ]
-      src = dst_info[ :src ]
+      # puts "debug read dst #{ data.bytesize }"
       add_src_wbuff( src, data )
     end
 
     ##
-    # read tun
+    # read btun
     #
-    def read_tun( tun )
-      if tun.closed? then
-        puts "p#{ Process.pid } #{ Time.new } read tun but tun closed?"
+    def read_btun( btun )
+      if btun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } read btun but btun closed?"
         return
       end
+
+      btun_info = @btun_infos[ btun ]
+      src = btun_info[ :src ]
 
       begin
-        data = tun.read_nonblock( READ_SIZE )
-      rescue IO::WaitReadable
-        return
-      rescue Errno::EINTR
-        puts e.class
-        return
+        data = btun.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "debug1 read tun #{ e.class }"
-        tun_info = close_read_tun( tun )
-        src = tun_info[ :src ]
-        set_src_closing_write( src )
-        return
-      end
+        # puts "debug read btun #{ btun_info[ :im ] } #{ e.class }"
+        close_btun( btun )
 
-      tun_info = @tun_infos[ tun ]
-      src = tun_info[ :src ]
-      # puts "debug2 add src.wbuff #{ data.bytesize }"
-      add_src_wbuff( src, data )
-    end
-
-    ##
-    # write proxy
-    #
-    def write_proxy( proxy )
-      if proxy.closed? then
-        puts "p#{ Process.pid } #{ Time.new } write proxy but proxy closed?"
-        return
-      end
-
-      if @proxy_info[ :ctlmsgs ].any? then
-        data = @proxy_info[ :ctlmsgs ].map{ | ctlmsg | "#{ ctlmsg }#{ SEPARATE }" }.join
-
-        # 写入
-        begin
-          written = proxy.write( data )
-        rescue IO::WaitWritable, Errno::EINTR
-          print 'w'
-          return
-        rescue Exception => e
-          # puts "debug1 write proxy #{ e.class }"
-          close_proxy( proxy )
-          return
+        if src then
+          set_src_closing_write( src )
         end
 
-        @proxy_info[ :ctlmsgs ].clear
+        return
       end
 
-      @writes.delete( proxy )
+      until data.empty? do
+        rbuff = btun_info[ :rbuff ]
+        wait_bytes = btun_info[ :wait_bytes ]
+
+        if wait_bytes > 0 then
+          len = wait_bytes
+          # puts "debug wait bytes #{ len }"
+        else
+          if data.bytesize <= 2 then
+            # puts "debug unexpect data length #{ data.bytesize }"
+            close_btun( btun )
+            return
+          end
+
+          len = data[ 0, 2 ].unpack( 'n' ).first
+          # puts "debug read len #{ len }"
+          data = data[ 2..-1 ]
+        end
+
+        chunk = data[ 0, len ]
+        chunk_size = chunk.bytesize
+
+        if chunk_size == len then
+          # 取完整了
+          chunk = @custom.decode( "#{ rbuff }#{ chunk }" )
+          # puts "debug decode and add src.wbuff #{ chunk.bytesize }"
+          add_src_wbuff( src, chunk )
+          btun_info[ :rbuff ].clear
+          btun_info[ :wait_bytes ] = 0
+        else
+          # 暂存
+          # puts "debug add btun.rbuff #{ chunk_size } wait bytes #{ len - chunk_size }"
+          btun_info[ :rbuff ] << chunk
+          btun_info[ :wait_bytes ] = len - chunk_size
+        end
+
+        data = data[ chunk_size..-1 ]
+      end
     end
 
     ##
@@ -1370,24 +1348,27 @@ module Girl
       # 写入
       begin
         written = src.write_nonblock( data )
-      rescue IO::WaitWritable, Errno::EINTR
+      rescue IO::WaitWritable
         print 'w'
         return
       rescue Exception => e
-        # puts "debug1 write src #{ e.class }"
+        # puts "debug write src #{ e.class }"
         close_write_src( src )
 
         if dst then
           close_read_dst( dst )
         else
-          tun = src_info[ :tun ]
-          close_read_tun( tun ) if tun
+          btun = src_info[ :btun ]
+
+          if btun then
+            close_btun( btun )
+          end
         end
 
         return
       end
 
-      # puts "debug2 written src #{ written }"
+      # puts "debug write src #{ written }"
       data = data[ written..-1 ]
       src_info[ :wbuff ] = data
     end
@@ -1419,11 +1400,11 @@ module Girl
       # 写入
       begin
         written = dst.write_nonblock( data )
-      rescue IO::WaitWritable, Errno::EINTR
+      rescue IO::WaitWritable
         print 'w'
         return
       rescue Exception => e
-        # puts "debug1 write dst #{ e.class }"
+        # puts "debug write dst #{ e.class }"
         close_write_dst( dst )
         close_read_src( src )
         return
@@ -1439,24 +1420,24 @@ module Girl
     end
 
     ##
-    # write tun
+    # write atun
     #
-    def write_tun( tun )
-      if tun.closed? then
-        puts "p#{ Process.pid } #{ Time.new } write tun but tun closed?"
+    def write_atun( atun )
+      if atun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write atun but atun closed?"
         return
       end
 
-      tun_info = @tun_infos[ tun ]
-      src = tun_info[ :src ]
-      data = tun_info[ :wbuff ]
+      atun_info = @atun_infos[ atun ]
+      src = atun_info[ :src ]
+      data = atun_info[ :wbuff ]
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if tun_info[ :closing_write ] then
-          close_write_tun( tun )
+        if atun_info[ :closing ] then
+          close_atun( atun )
         else
-          @writes.delete( tun )
+          @writes.delete( atun )
         end
 
         return
@@ -1464,23 +1445,20 @@ module Girl
 
       # 写入
       begin
-        written = tun.write_nonblock( data )
-      rescue IO::WaitReadable
-        # OpenSSL::SSL::SSLErrorWaitReadable
-        return
-      rescue IO::WaitWritable, Errno::EINTR
+        written = atun.write_nonblock( data )
+      rescue IO::WaitWritable
         print 'w'
         return
       rescue Exception => e
-        # puts "debug1 write tun #{ e.class }"
-        close_write_tun( tun )
+        # puts "debug write atun #{ e.class }"
+        close_atun( atun )
         close_read_src( src )
         return
       end
 
-      # puts "debug2 written tun #{ written }"
+      # puts "debug write atun #{ written }"
       data = data[ written..-1 ]
-      tun_info[ :wbuff ] = data
+      atun_info[ :wbuff ] = data
 
       unless src.closed? then
         src_info = @src_infos[ src ]
@@ -1489,112 +1467,30 @@ module Girl
     end
 
     ##
-    # write pre proxy
+    # write btun
     #
-    def write_pre_proxy( pre_proxy )
-      if pre_proxy.closed? then
-        puts "p#{ Process.pid } #{ Time.new } write pre proxy but pre proxy closed?"
+    def write_btun( btun )
+      if btun.closed? then
+        puts "p#{ Process.pid } #{ Time.new } write btun but btun closed?"
         return
       end
 
-      proxy = OpenSSL::SSL::SSLSocket.new pre_proxy
+      btun_info = @btun_infos[ btun ]
+      data = btun_info[ :wbuff ]
 
+      # 写入dst id
       begin
-        proxy.connect_nonblock
-      rescue IO::WaitReadable
-      rescue IO::WaitWritable
+        written = btun.write( data )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } proxy connect #{ e.class }, close proxy"
-        proxy.close
-        close_pre_proxy( pre_proxy )
+        # puts "debug write btun #{ e.class }"
+        src = btun_info[ :src ]
+        close_btun( btun )
+        add_closing_src( src )
         return
       end
 
-      @proxy = proxy
-      @proxy_info = {
-        ctlmsgs: [],          # ctlmsg
-        tund_addr: nil,       # tund地址
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量的时间
-        closing: false        # 是否准备关闭
-      }
-      add_read( proxy, :proxy )
-      hello = @custom.hello
-      puts "p#{ Process.pid } #{ Time.new } tunnel #{ hello.inspect }"
-      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
-      add_ctlmsg( data )
-
-      @roles.delete( pre_proxy )
-      @writes.delete( pre_proxy )
-    end
-
-    ##
-    # write pre tun
-    #
-    def write_pre_tun( pre_tun )
-      if pre_tun.closed? then
-        puts "p#{ Process.pid } #{ Time.new } write pre tun but pre tun closed?"
-        return
-      end
-
-      pre_tun_info = @pre_tun_infos[ pre_tun ]
-      src = pre_tun_info[ :src ]
-
-      if src.closed? then
-        puts "p#{ Process.pid } #{ Time.new } new a tun but src closed?"
-        return
-      end
-
-      tun = OpenSSL::SSL::SSLSocket.new pre_tun
-
-      begin
-        tun.connect_nonblock
-      rescue IO::WaitReadable
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } tun connect #{ e.class }, close tun"
-        tun.close
-        close_pre_tun( pre_tun )
-        return
-      end
-
-      src_info = @src_infos[ src ]
-      dst_id = src_info[ :dst_id ]
-      # puts "debug1 set tun.wbuff #{ dst_id }"
-      data = [ dst_id ].pack( 'n' )
-
-      unless src_info[ :rbuff ].empty? then
-        # puts "debug1  move src.rbuff to tun.wbuff"
-        data << src_info[ :rbuff ]
-      end
-
-      domain = src_info[ :destination_domain ]
-      @tun_infos[ tun ] = {
-        pre_tun: pre_tun,     # 对应pre tun
-        src: src,             # 对应src
-        domain: domain,       # 目的地
-        wbuff: data,          # 写前
-        closing_write: false, # 准备关闭写
-        close_read: false,    # 已经关闭读
-        close_write: false    # 已经关闭写
-      }
-
-      src_info[ :tun ] = tun
-      add_read( tun, :tun )
-      add_write( tun )
-
-      if src_info[ :proxy_proto ] == :http then
-        if src_info[ :is_connect ] then
-          # puts "debug1 add src.wbuff http ok"
-          add_src_wbuff( src, HTTP_OK )
-        end
-      elsif src_info[ :proxy_proto ] == :socks5 then
-        add_socks5_conn_reply( src )
-      end
-
-      @pre_tun_infos.delete( pre_tun )
-      @roles.delete( pre_tun )
-      @writes.delete( pre_tun )
+      # puts "debug write btun #{ written }"
+      @writes.delete( btun )
     end
 
   end

@@ -162,7 +162,7 @@ module Girl
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read_nonblock( READ_SIZE )
+      dotr.read_nonblock( 65535 )
 
       if @closing_dsts.any? then
         @closing_dsts.each { | dst | close_dst( dst ) }
