@@ -93,7 +93,6 @@ girl.conf.json的格式：
     "direct_path": "girl.direct.txt",     // 直连ip段
     "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
     "im": "girl",                         // 标识，用来识别近端
-    "use_remote_resolv": false,           // 域名一律交给远端解析
     "worker_count": 1,                    // 子进程数，默认取cpu个数
     "resolv_port": 1053,                  // 透明中转，近端接收dns查询流量的端口
     "nameserver": "114.114.114.114",      // 透明中转，域名列表之外的域名就近查询，国内的dns服务器
