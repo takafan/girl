@@ -220,8 +220,9 @@ module Girl
       # puts "debug close btun"
       close_sock( btun )
       btun_info = @btun_infos.delete( btun )
-
-      if btun_info[ :dst ] then
+      dst = btun_info[ :dst ]
+      
+      if dst then
         @paused_dsts.delete( dst )
       end
     end

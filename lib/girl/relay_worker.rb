@@ -299,8 +299,9 @@ module Girl
       # puts "debug close atun"
       close_sock( atun )
       atun_info = @atun_infos.delete( atun )
+      src = atun_info[ :src ]
 
-      if atun_info[ :src ] then
+      if src then
         @paused_srcs.delete( src )
       end
     end

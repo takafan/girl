@@ -356,7 +356,7 @@ module Girl
             src_info = @src_infos[ src ]
             dst = src_info[ :dst ]
 
-            if dst then
+            if dst && !dst.closed? then
               dst_info = @dst_infos[ dst ]
 
               if dst_info[ :wbuff ].size < RESUME_BELOW then
@@ -369,11 +369,14 @@ module Girl
           @paused_dsts.each do | dst |
             dst_info = @dst_infos[ dst ]
             src = dst_info[ :src ]
-            src_info = @src_infos[ src ]
+            
+            if src && !src.closed? then
+              src_info = @src_infos[ src ]
 
-            if src_info[ :wbuff ].size < RESUME_BELOW then
-              puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
-              add_resume_dst( dst )
+              if src_info[ :wbuff ].size < RESUME_BELOW then
+                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
+                add_resume_dst( dst )
+              end
             end
           end
         end
