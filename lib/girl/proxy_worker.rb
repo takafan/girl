@@ -296,7 +296,7 @@ module Girl
       close_sock( atun )
       atun_info = @atun_infos.delete( atun )
       src = atun_info[ :src ]
-      
+
       if src then
         @paused_srcs.delete( src )
       end
@@ -937,8 +937,6 @@ module Girl
 
       if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://' then
         domain_port = url.split( '/' )[ 2 ]
-        data = data.sub( "http://#{ domain_port }", '' )
-        # puts "debug subed #{ data.inspect } #{ domain_port }"
       end
 
       [ data, domain_port ]

@@ -888,9 +888,7 @@ module Girl
     def send_data( sock, to_addr, data )
       begin
         sock.sendmsg( data, 0, to_addr )
-      rescue IO::WaitWritable, Errno::EINTR
-        print 'w'
-      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+      rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
       end
     end
@@ -931,25 +929,6 @@ module Girl
       return if src_info[ :closing_write ]
       src_info[ :closing_write ] = true
       add_write( src )
-    end
-
-    ##
-    # sub http request
-    #
-    def sub_http_request( data )
-      lines = data.split( "\r\n" )
-
-      return [ data, nil ] if lines.empty?
-
-      method, url, proto = lines.first.split( ' ' )
-
-      if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://' then
-        domain_port = url.split( '/' )[ 2 ]
-        data = data.sub( "http://#{ domain_port }", '' )
-        # puts "debug subed #{ data.inspect } #{ domain_port }"
-      end
-
-      [ data, domain_port ]
     end
 
     ##
