@@ -160,7 +160,7 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 
 用tcp来中转，需要应对：
 
-1. 若流量含有特定域名，且形似http头或者证书，自己会先吃到一个reset。
+1. 若流量含有特定域名，且形似http头或者证书，会吃到一个reset。
 
 例如：
 
