@@ -523,7 +523,6 @@ module Girl
     # pack a chunk
     #
     def pack_a_chunk( data )
-      # puts "debug pack a chunk"
       data = @custom.encode( data )
       "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
     end
@@ -826,7 +825,8 @@ module Girl
         dst: nil,                          # 对应dst
         domain_port: nil,                  # dst的目的地和端口
         rbuff: '',                         # 暂存当前块没收全的流量
-        wait_bytes: 0                      # 还差多少字节收全当前块
+        wait_bytes: 0,                     # 还差多少字节收全当前块
+        lbuff: ''                          # 流量截断在长度前缀处
       }
 
       add_read( atun, :atun )
@@ -922,22 +922,44 @@ module Girl
       end
 
       until data.empty? do
-        rbuff = atun_info[ :rbuff ]
         wait_bytes = atun_info[ :wait_bytes ]
 
         if wait_bytes > 0 then
           len = wait_bytes
           # puts "debug wait bytes #{ len }"
         else
-          if data.bytesize <= 2 then
-            # puts "debug unexpect data length #{ data.bytesize }"
-            close_atun( atun )
-            return
-          end
+          lbuff = atun_info[ :lbuff ]
 
-          len = data[ 0, 2 ].unpack( 'n' ).first
-          # puts "debug read len #{ len }"
-          data = data[ 2..-1 ]
+          if lbuff.empty? then
+            # 长度缓存为空，从读到的流量里取长度
+            # 两个字节以下，记进长度缓存
+            if data.bytesize <= 2 then
+              # puts "debug set atun.lbuff #{ data.inspect }"
+              atun_info[ :lbuff ] = data
+              return
+            end
+
+            len = data[ 0, 2 ].unpack( 'n' ).first
+            data = data[ 2..-1 ]
+          elsif lbuff.bytesize == 1 then
+            # 长度缓存记有一个字节，补一个字节
+            lbuff = "#{ lbuff }#{ data[ 0 ] }"
+
+            if data.bytesize == 1 then
+              # puts "debug add atun.lbuff a byte #{ data.inspect }"
+              atun_info[ :lbuff ] = lbuff
+              return
+            end
+
+            # 使用长度缓存
+            len = lbuff.unpack( 'n' ).first
+            atun_info[ :lbuff ].clear
+            data = data[ 1..-1 ]
+          else
+            # 使用长度缓存
+            len = lbuff.unpack( 'n' ).first
+            atun_info[ :lbuff ].clear
+          end
         end
 
         chunk = data[ 0, len ]
@@ -945,7 +967,7 @@ module Girl
 
         if chunk_size == len then
           # 取完整了
-          chunk = @custom.decode( "#{ rbuff }#{ chunk }" )
+          chunk = @custom.decode( "#{ atun_info[ :rbuff ] }#{ chunk }" )
           # puts "debug decode and add dst.wbuff #{ chunk.bytesize }"
           add_dst_wbuff( dst, chunk )
           atun_info[ :rbuff ].clear
