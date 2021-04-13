@@ -13,7 +13,6 @@ module Girl
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
-      @resolv_custom = Girl::ResolvCustom.new
       @reads = []
       @writes = []
       @closing_rsvs = []
@@ -24,7 +23,7 @@ module Girl
       @resume_srcs = []
       @resume_dsts = []
       @resume_btuns = []
-      @pending_srcs = []                     # 还没配到tund，暂存的src
+      @pending_srcs = []                     # 还没得到atund和btund地址，暂存的src
       @roles = ConcurrentHash.new            # sock => :dotr / :resolv / :rsv / :redir / :proxy / :src / :dst / :atun / :btun
       @rsv_infos = ConcurrentHash.new        # rsv => {}
       @src_infos = ConcurrentHash.new        # src => {}
@@ -445,9 +444,8 @@ module Girl
       return if src.closed?
       src_info = @src_infos[ src ]
 
-      if ip_info.ipv4_loopback? \
-        || ip_info.ipv6_loopback? \
-        || ( ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) ) then
+      if ( ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) ) \
+        || ( ( ip_info.ip_address == @proxyd_host ) && ( src_info[ :destination_port ] == @proxyd_port ) ) then
         puts "p#{ Process.pid } #{ Time.new } ignore #{ ip_info.ip_address }:#{ src_info[ :destination_port ] }"
         add_closing_src( src )
         return
@@ -464,7 +462,6 @@ module Girl
         is_direct = @is_direct_caches[ ip_info.ip_address ]
       else
         is_direct = @directs.any? { | direct | direct.include?( ip_info.ip_address ) }
-        # 判断直连耗时较长（树莓派 0.27秒），这里可能切去主线程，回来src可能已关闭
         puts "p#{ Process.pid } #{ Time.new } cache is direct #{ ip_info.ip_address } #{ is_direct }"
         @is_direct_caches[ ip_info.ip_address ] = is_direct
       end
@@ -473,7 +470,6 @@ module Girl
         # puts "debug #{ ip_info.inspect } hit directs"
         new_a_dst( src, ip_info )
       else
-        # 走远端
         # puts "debug #{ ip_info.inspect } go tunnel"
         set_proxy_type_tunnel( src )
       end
@@ -754,7 +750,7 @@ module Girl
       rsv.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
       if @qnames.any? { | qname | data.include?( qname ) } then
-        data = @resolv_custom.encode( data )
+        data = @custom.encode( data )
         to_addr = @resolvd_addr
       else
         to_addr = @nameserver_addr
@@ -774,6 +770,7 @@ module Girl
     # new tuns
     #
     def new_tuns( src_id, dst_id )
+      return if @ctl_info[ :atund_addr ].nil? || @ctl_info[ :btund_addr ].nil?
       src = @srcs[ src_id ]
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
@@ -860,6 +857,7 @@ module Girl
     #
     def send_ctlmsg( data )
       return if @ctl.nil? || @ctl.closed?
+      data = @custom.encode( data )
 
       begin
         @ctl.sendmsg( data, 0, @proxyd_addr )
@@ -997,7 +995,7 @@ module Girl
       # puts "debug rsv recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
 
       if addrinfo.to_sockaddr == @resolvd_addr then
-        data = @resolv_custom.decode( data )
+        data = @custom.decode( data )
       end
 
       rsv_info = @rsv_infos[ rsv ]
@@ -1072,6 +1070,7 @@ module Girl
         return
       end
 
+      data = @custom.decode( data )
       ctl_num = data[ 0 ].unpack( 'C' ).first
 
       case ctl_num
@@ -1090,7 +1089,7 @@ module Girl
           @pending_srcs.clear
         end
       when PAIRED then
-        return if @ctl_info[ :atund_addr ].nil? || @ctl_info[ :btund_addr ].nil? || data.size != 11
+        return if data.size != 11
         src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
         # puts "debug got paired #{ src_id } #{ dst_id }"
         @ctl_info[ :resends ].delete( [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) )

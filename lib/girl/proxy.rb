@@ -14,8 +14,8 @@ require 'socket'
 #
 =begin
 C:  1 hello            -> hello
-    2 tund port        -> n: tund port
-    3 a new source     -> Q>: src id -> encoded destination address
+    2 tund port        -> n: atund port -> n: btund port
+    3 a new source     -> Q>: src id -> destination
     4 paired           -> Q>: src id -> n: dst id
     5 dest status      NOT USE
     6 source status    NOT USE
@@ -32,13 +32,11 @@ C:  1 hello            -> hello
    17 continue         NOT USE
    18 is resend ready  NOT USE
    19 resend ready     NOT USE
-   20 resolv           -> Q>: src id -> encoded domain
-   21 resolved         -> Q>: src id -> encoded ip
+   20 resolv           NOT USE
+   21 resolved         NOT USE
    22 heartbeat        NOT USE
    23 unknown ctl addr
    24 ctl fin
-   25 source eof       -> Q>: dst id
-   26 dest eof         -> Q>: src id
   101 traff infos
   101 traff infos      -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
 =end

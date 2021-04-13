@@ -1,7 +1,7 @@
-require 'girl/custom_dns_query'
+require 'girl/custom'
 
 module Girl
   class ResolvCustom
-    include CustomDnsQuery
+    include Custom
   end
 end

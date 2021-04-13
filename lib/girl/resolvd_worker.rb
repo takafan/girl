@@ -5,7 +5,7 @@ module Girl
     # initialize
     #
     def initialize( resolvd_port, nameserver )
-      @resolv_custom = Girl::ResolvCustom.new
+      @custom = Girl::ResolvCustom.new
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @roles = ConcurrentHash.new     # :resolvd / :dst
       @reads = []
@@ -176,7 +176,7 @@ module Girl
     def read_resolvd( resolvd )
       data, addrinfo, rflags, *controls = resolvd.recvmsg
       # puts "debug1 resolvd recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
-      data = @resolv_custom.decode( data )
+      data = @custom.decode( data )
       new_a_dst( addrinfo.to_sockaddr, data )
     end
 
@@ -187,7 +187,7 @@ module Girl
       data, addrinfo, rflags, *controls = dst.recvmsg
       # puts "debug1 dst recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       dst_info = @dst_infos[ dst ]
-      data = @resolv_custom.encode( data )
+      data = @custom.encode( data )
       send_data( @resolvd, dst_info[ :src_addr ], data )
       close_dst( dst )
     end

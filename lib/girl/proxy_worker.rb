@@ -6,6 +6,7 @@ module Girl
     #
     def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
       @proxyd_host = proxyd_host
+      @proxyd_port = proxyd_port
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @directs = directs
       @remotes = remotes
@@ -19,7 +20,7 @@ module Girl
       @resume_srcs = []
       @resume_dsts = []
       @resume_btuns = []
-      @pending_srcs = []                     # 还没配到tund，暂存的src
+      @pending_srcs = []                     # 还没得到atund和btund地址，暂存的src
       @roles = ConcurrentHash.new            # sock => :dotr / :redir / :ctl / :src / :dst / :atun / :btun
       @src_infos = ConcurrentHash.new        # src => {}
       @dst_infos = ConcurrentHash.new        # dst => {}
@@ -430,9 +431,8 @@ module Girl
       return if src.closed?
       src_info = @src_infos[ src ]
 
-      if ip_info.ipv4_loopback? \
-        || ip_info.ipv6_loopback? \
-        || ( ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) ) then
+      if ( ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) ) \
+        || ( ( ip_info.ip_address == @proxyd_host ) && ( src_info[ :destination_port ] == @proxyd_port ) ) then
         puts "p#{ Process.pid } #{ Time.new } ignore #{ ip_info.ip_address }:#{ src_info[ :destination_port ] }"
         add_closing_src( src )
         return
@@ -449,7 +449,6 @@ module Girl
         is_direct = @is_direct_caches[ ip_info.ip_address ]
       else
         is_direct = @directs.any? { | direct | direct.include?( ip_info.ip_address ) }
-        # 判断直连耗时较长（树莓派 0.27秒），这里可能切去主线程，回来src可能已关闭
         puts "p#{ Process.pid } #{ Time.new } cache is direct #{ ip_info.ip_address } #{ is_direct }"
         @is_direct_caches[ ip_info.ip_address ] = is_direct
       end
@@ -458,7 +457,6 @@ module Girl
         # puts "debug #{ ip_info.inspect } hit directs"
         new_a_dst( src, ip_info )
       else
-        # 走远端
         # puts "debug #{ ip_info.inspect } go tunnel"
         set_proxy_type_tunnel( src )
       end
@@ -724,6 +722,7 @@ module Girl
     # new tuns
     #
     def new_tuns( src_id, dst_id )
+      return if @ctl_info[ :atund_addr ].nil? || @ctl_info[ :btund_addr ].nil?
       src = @srcs[ src_id ]
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
@@ -864,6 +863,7 @@ module Girl
     #
     def send_ctlmsg( data )
       return if @ctl.nil? || @ctl.closed?
+      data = @custom.encode( data )
 
       begin
         @ctl.sendmsg( data, 0, @proxyd_addr )
@@ -923,23 +923,6 @@ module Girl
       return if src_info[ :closing_write ]
       src_info[ :closing_write ] = true
       add_write( src )
-    end
-
-    ##
-    # sub http request
-    #
-    def sub_http_request( data )
-      lines = data.split( "\r\n" )
-
-      return [ data, nil ] if lines.empty?
-
-      method, url, proto = lines.first.split( ' ' )
-
-      if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://' then
-        domain_port = url.split( '/' )[ 2 ]
-      end
-
-      [ data, domain_port ]
     end
 
     ##
@@ -1040,6 +1023,7 @@ module Girl
         return
       end
 
+      data = @custom.decode( data )
       ctl_num = data[ 0 ].unpack( 'C' ).first
 
       case ctl_num
@@ -1058,7 +1042,7 @@ module Girl
           @pending_srcs.clear
         end
       when PAIRED then
-        return if @ctl_info[ :atund_addr ].nil? || @ctl_info[ :btund_addr ].nil? || data.size != 11
+        return if data.size != 11
         src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
         # puts "debug got paired #{ src_id } #{ dst_id }"
         @ctl_info[ :resends ].delete( [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) )
@@ -1157,7 +1141,16 @@ module Girl
             return
           end
 
-          data, domain_port = sub_http_request( data )
+          lines = data.split( "\r\n" )
+
+          unless lines.empty? then
+            method, url, proto = lines.first.split( ' ' )
+
+            if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://' then
+              domain_port = url.split( '/' )[ 2 ]
+              # puts "debug domain port #{ domain_port }"
+            end
+          end
 
           unless domain_port then
             # puts "debug not HTTP"
@@ -1224,10 +1217,6 @@ module Girl
       when :tunnel then
         atun = src_info[ :atun ]
 
-        if atun && !src_info[ :is_connect ] then
-          data, _ = sub_http_request( data )
-        end
-
         if atun then
           add_atun_wbuff( atun, pack_a_chunk( data ) )
         else
@@ -1238,10 +1227,6 @@ module Girl
         dst = src_info[ :dst ]
 
         if dst then
-          unless src_info[ :is_connect ] then
-            data, _ = sub_http_request( data )
-          end
-
           add_dst_wbuff( dst, data )
         else
           # puts "debug add src.rbuff #{ data.bytesize }"

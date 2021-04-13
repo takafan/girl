@@ -237,6 +237,17 @@ module Girl
     end
 
     ##
+    # close redir
+    #
+    def close_redir( redir )
+      return if redir.closed?
+      redir.close
+      @roles.delete( redir )
+      @reads.delete( redir )
+      @src_infos.each { | src, _ | close_src( src ) }
+    end
+
+    ##
     # close sock
     #
     def close_sock( sock )
@@ -369,7 +380,7 @@ module Girl
           @paused_dsts.each do | dst |
             dst_info = @dst_infos[ dst ]
             src = dst_info[ :src ]
-            
+
             if src && !src.closed? then
               src_info = @src_infos[ src ]
 
@@ -560,15 +571,17 @@ module Girl
 
         unless accepted then
           puts "p#{ Process.pid } #{ Time.new } accept timeout"
-          redir.close
-          @roles.delete( redir )
-          @reads.delete( redir )
+          close_redir( redir )
           new_a_redir
         end
       end
 
       begin
         src = redir.accept
+      rescue SystemExit => e
+        puts "p#{ Process.pid } #{ Time.new } redir accept #{ e.class }"
+        close_redir( redir )
+        return
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } redir accept #{ e.class }"
         puts e.full_message

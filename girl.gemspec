@@ -18,7 +18,6 @@ Gem::Specification.new do |spec|
 girl.gemspec
 lib/girl.rb
 lib/girl/concurrent_hash.rb
-lib/girl/custom_dns_query.rb
 lib/girl/custom.rb
 lib/girl/head.rb
 lib/girl/proxy_custom.rb

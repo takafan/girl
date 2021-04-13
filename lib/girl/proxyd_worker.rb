@@ -221,7 +221,7 @@ module Girl
       close_sock( btun )
       btun_info = @btun_infos.delete( btun )
       dst = btun_info[ :dst ]
-      
+
       if dst then
         @paused_dsts.delete( dst )
       end
@@ -520,6 +520,15 @@ module Girl
     end
 
     ##
+    # pack a chunk
+    #
+    def pack_a_chunk( data )
+      # puts "debug pack a chunk"
+      data = @custom.encode( data )
+      "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
+    end
+
+    ##
     # resolve domain
     #
     def resolve_domain( ctl_addr, src_id, domain_port )
@@ -564,6 +573,8 @@ module Girl
     # send ctlmsg
     #
     def send_ctlmsg( data, to_addr )
+      data = @custom.encode( data )
+
       begin
         @ctld.sendmsg( data, 0, to_addr )
       rescue Exception => e
@@ -635,6 +646,7 @@ module Girl
     #
     def read_ctld( ctld )
       data, addrinfo, rflags, *controls = ctld.recvmsg
+      data = @custom.decode( data )
       ctl_num = data[ 0 ].unpack( 'C' ).first
       ctl_addr = addrinfo.to_sockaddr
       ctl_info = @ctl_infos[ ctl_addr ]
@@ -777,12 +789,10 @@ module Girl
       end
 
       @traff_ins[ dst_info[ :im ] ] += data.bytesize
-      # puts "debug read dst #{ data.bytesize }, encode"
-      data = @custom.encode( data )
-      data = "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
+      # puts "debug read dst #{ data.bytesize }"
 
       if btun then
-        add_btun_wbuff( btun, data )
+        add_btun_wbuff( btun, pack_a_chunk( data ) )
       else
         # puts "debug add dst.rbuff #{ data.bytesize }"
         add_dst_rbuff( dst, data )
@@ -1009,8 +1019,17 @@ module Girl
       btun_info[ :domain_port ] = dst_info[ :domain_port ]
 
       unless dst_info[ :rbuff ].empty? then
-        # puts "debug move dst.rbuff to btun.wbuff"
-        add_btun_wbuff( btun, dst_info[ :rbuff ] )
+        data2 = ''
+
+        until dst_info[ :rbuff ].empty? do
+          _data = dst_info[ :rbuff ][ 0, 65535 ]
+          data_size = _data.bytesize
+          # puts "debug move dst.rbuff to btun.wbuff"
+          data2 << pack_a_chunk( _data )
+          dst_info[ :rbuff ] = dst_info[ :rbuff ][ data_size..-1 ]
+        end
+
+        add_btun_wbuff( btun, data2 )
       end
 
       dst_info[ :btun ] = btun
