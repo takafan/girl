@@ -265,6 +265,8 @@ ruby relay.rb
 iptables配置：
 
 ```bash
+iptables -t nat -A PREROUTING -i wlan0 -p tcp -d 1.2.3.4 --match multiport --dports 80,443 -j REDIRECT --to-ports 1066
+iptables -t nat -A PREROUTING -i wlan0 -p tcp -d 1.2.3.4 -j RETURN
 iptables -t nat -A PREROUTING -i wlan0 -p tcp -j REDIRECT --to-ports 1066
 iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053
 ```
