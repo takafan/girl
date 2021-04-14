@@ -4,6 +4,7 @@ require 'girl/head'
 require 'girl/proxy_custom'
 require 'girl/relay_worker'
 require 'girl/version'
+require 'ipaddr'
 require 'json'
 require 'socket'
 
