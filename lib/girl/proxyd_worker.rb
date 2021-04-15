@@ -324,6 +324,7 @@ module Girl
         ctl_addr: ctl_addr,       # 对应ctl
         im: ctl_info[ :im ],      # 标识
         domain_port: domain_port, # 目的地和端口
+        connected: false,         # 是否已连接
         rbuff: '',                # 对应的tun没准备好，暂存读到的流量
         atun: nil,                # 对应的atun
         btun: nil,                # 对应的btun
@@ -336,6 +337,7 @@ module Girl
       }
 
       add_read( dst, :dst )
+      add_write( dst )
 
       ctl_info[ :dst_ids ][ src_id ] = dst_id
       ctl_info[ :dsts ][ dst_id ] = dst
@@ -404,11 +406,17 @@ module Girl
           end
 
           @dst_infos.each do | dst, dst_info |
-            last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
-            last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
-            expire_after = dst_info[ :btun ] ? EXPIRE_AFTER : EXPIRE_NEW
+            if dst_info[ :connected ] then
+              last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
+              last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
+              expire_after = EXPIRE_AFTER
+              is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+            else
+              expire_after = EXPIRE_CONNECTING
+              is_expire = ( now - dst_info[ :created_at ] >= expire_after )
+            end
 
-            if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
+            if is_expire then
               puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
 
               unless @closing_dsts.include?( dst ) then
@@ -609,7 +617,7 @@ module Girl
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read_nonblock( 65535 )
+      dotr.read_nonblock( READ_SIZE )
 
       if @deleting_ctl_infos.any? then
         @deleting_ctl_infos.each { | ctl_addr | del_ctl_info( ctl_addr ) }
@@ -772,7 +780,7 @@ module Girl
       btun = dst_info[ :btun ]
 
       begin
-        data = dst.read_nonblock( 65535 )
+        data = dst.read_nonblock( CHUNK_SIZE )
       rescue IO::WaitReadable
         print 'r'
         return
@@ -1044,7 +1052,7 @@ module Girl
         data2 = ''
 
         until dst_info[ :rbuff ].empty? do
-          _data = dst_info[ :rbuff ][ 0, 65535 ]
+          _data = dst_info[ :rbuff ][ 0, CHUNK_SIZE ]
           data_size = _data.bytesize
           # puts "debug move dst.rbuff to btun.wbuff"
           data2 << pack_a_chunk( _data )
@@ -1067,6 +1075,7 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
+      dst_info[ :connected ] = true
       atun = dst_info[ :atun ]
       data = dst_info[ :wbuff ]
 

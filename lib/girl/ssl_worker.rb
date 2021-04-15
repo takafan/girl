@@ -534,7 +534,7 @@ module Girl
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read_nonblock( 65535 )
+      dotr.read_nonblock( READ_SIZE )
 
       if @closing_srcs.any? then
         @closing_srcs.each { | src | close_src( src ) }
@@ -623,7 +623,7 @@ module Girl
       src_info = @src_infos[ src ]
 
       begin
-        data = src.read_nonblock( 65535 )
+        data = src.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable
         return
       rescue Errno::EINTR => e
@@ -741,7 +741,7 @@ module Girl
       src = dst_info[ :src ]
 
       begin
-        data = dst.read_nonblock( 65535 )
+        data = dst.read_nonblock( READ_SIZE )
       rescue IO::WaitReadable, Errno::EINTR
         print 'r'
         return

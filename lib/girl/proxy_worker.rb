@@ -517,9 +517,24 @@ module Girl
           @src_infos.each do | src, src_info |
             last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
             last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
-            expire_after = ( src_info[ :dst ] || src_info[ :atun ] ) ? EXPIRE_AFTER : EXPIRE_NEW
 
-            if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
+            if src_info[ :dst ] then
+              if src_info[ :dst_connected ] then
+                expire_after = EXPIRE_AFTER
+                is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+              else
+                expire_after = EXPIRE_CONNECTING
+                is_expire = ( now - src_info[ :dst_created_at ] >= expire_after )
+              end
+            elsif src_info[ :atun ] then
+              expire_after = EXPIRE_AFTER
+              is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+            else
+              expire_after = EXPIRE_NEW
+              is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+            end
+
+            if is_expire then
               puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
               add_closing_src( src )
 
@@ -653,9 +668,9 @@ module Girl
       }
 
       @dst_infos[ dst ] = dst_info
-      add_read( dst, :dst )
       src_info[ :proxy_type ] = :direct
       src_info[ :dst ] = dst
+      src_info[ :dst_created_at ] = Time.new
 
       if src_info[ :proxy_proto ] == :http then
         if src_info[ :is_connect ] then
@@ -664,11 +679,13 @@ module Girl
         elsif src_info[ :rbuff ] then
           # puts "debug move src.rbuff to dst.wbuff"
           dst_info[ :wbuff ] << src_info[ :rbuff ]
-          add_write( dst )
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
         add_socks5_conn_reply( src )
       end
+
+      add_read( dst, :dst )
+      add_write( dst )
     end
 
     ##
@@ -755,7 +772,7 @@ module Girl
       atun_wbuff = [ dst_id ].pack( 'n' )
 
       until src_info[ :rbuff ].empty? do
-        data = src_info[ :rbuff ][ 0, 65535 ]
+        data = src_info[ :rbuff ][ 0, CHUNK_SIZE ]
         data_size = data.bytesize
         # puts "debug move src.rbuff #{ data_size } to atun.wbuff"
         atun_wbuff << pack_a_chunk( data )
@@ -929,7 +946,7 @@ module Girl
     # read dotr
     #
     def read_dotr( dotr )
-      dotr.read_nonblock( 65535 )
+      dotr.read_nonblock( READ_SIZE )
 
       if @ctl_info && @ctl_info[ :closing ] then
         send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
@@ -993,6 +1010,8 @@ module Girl
         is_connect: true,        # 代理协议是http的场合，是否是CONNECT
         rbuff: '',               # 读到的流量
         dst: nil,                # :direct的场合，对应的dst
+        dst_created_at: nil,     # :direct的场合，对应的dst的创建时间
+        dst_connected: false,    # :direct的场合，对应的dst是否已连接
         ctl: nil,                # :tunnel的场合，对应的ctl
         atun: nil,               # :tunnel的场合，对应的atun
         btun: nil,               # :tunnel的场合，对应的btun
@@ -1066,7 +1085,7 @@ module Girl
       src_info = @src_infos[ src ]
 
       begin
-        data = src.read_nonblock( 65535 )
+        data = src.read_nonblock( CHUNK_SIZE )
       rescue IO::WaitReadable
         print 'r'
         return
@@ -1248,7 +1267,7 @@ module Girl
       src = dst_info[ :src ]
 
       begin
-        data = dst.read_nonblock( 65535 )
+        data = dst.read_nonblock( CHUNK_SIZE )
       rescue IO::WaitReadable
         print 'r'
         return
@@ -1413,6 +1432,12 @@ module Girl
 
       dst_info = @dst_infos[ dst ]
       src = dst_info[ :src ]
+      src_info = @src_infos[ src ]
+
+      unless src.closed? then
+        src_info[ :dst_connected ] = true
+      end
+
       data = dst_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1443,7 +1468,6 @@ module Girl
       dst_info[ :wbuff ] = data
 
       unless src.closed? then
-        src_info = @src_infos[ src ]
         src_info[ :last_sent_at ] = Time.new
       end
     end
