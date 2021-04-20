@@ -244,7 +244,7 @@ module Girl
       redir.close
       @roles.delete( redir )
       @reads.delete( redir )
-      @src_infos.each { | src, _ | close_src( src ) }
+      @src_infos.keys.each { | src | close_src( src ) }
     end
 
     ##
