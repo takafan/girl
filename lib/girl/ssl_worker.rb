@@ -340,9 +340,21 @@ module Girl
           @src_infos.each do | src, src_info |
             last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
             last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
-            expire_after = src_info[ :dst ] ? EXPIRE_AFTER : EXPIRE_NEW
 
-            if ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after ) then
+            if src_info[ :dst ] then
+              if src_info[ :dst_connected ] then
+                expire_after = EXPIRE_AFTER
+                is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+              else
+                expire_after = EXPIRE_CONNECTING
+                is_expire = ( now - src_info[ :dst_created_at ] >= expire_after )
+              end
+            else
+              expire_after = EXPIRE_NEW
+              is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+            end
+
+            if is_expire then
               puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
               add_closing_src( src )
 
@@ -370,7 +382,7 @@ module Girl
             if dst && !dst.closed? then
               dst_info = @dst_infos[ dst ]
 
-              if dst_info[ :wbuff ].size < RESUME_BELOW then
+              if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
                 puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
                 add_resume_src( src )
               end
@@ -384,7 +396,7 @@ module Girl
             if src && !src.closed? then
               src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].size < RESUME_BELOW then
+              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
                 puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
                 add_resume_dst( dst )
               end
@@ -403,13 +415,14 @@ module Girl
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
       dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+      dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
         # connect nonblock 必抛 wait writable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }, close src"
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }"
         dst.close
         add_closing_src( src )
         return
@@ -424,10 +437,12 @@ module Girl
       }
 
       @dst_infos[ dst ] = dst_info
-      add_read( dst, :dst )
       src_info[ :proxy_type ] = :direct
       src_info[ :dst ] = dst
+      src_info[ :dst_created_at ] = Time.new
       add_socks5_conn_reply( src )
+      add_read( dst, :dst )
+      add_write( dst )
     end
 
     ##
@@ -435,6 +450,7 @@ module Girl
     #
     def new_a_redir
       pre = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      pre.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       pre.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       pre.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       pre.bind( Socket.sockaddr_in( @redir_port, '0.0.0.0' ) )
@@ -599,6 +615,8 @@ module Girl
         is_connect: true,        # 代理协议是http的场合，是否是CONNECT
         rbuff: '',               # 读到的流量
         dst: nil,                # 对应的dst
+        dst_created_at: nil,     # 对应的dst的创建时间
+        dst_connected: false,    # 对应的dst是否已连接
         wbuff: '',               # 从dst读到的流量
         created_at: Time.new,    # 创建时间
         last_recv_at: nil,       # 上一次收到新流量（由dst收到）的时间
@@ -812,6 +830,12 @@ module Girl
 
       dst_info = @dst_infos[ dst ]
       src = dst_info[ :src ]
+      src_info = @src_infos[ src ]
+
+      unless src.closed? then
+        src_info[ :dst_connected ] = true
+      end
+
       data = dst_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -842,7 +866,6 @@ module Girl
       dst_info[ :wbuff ] = data
 
       unless src.closed? then
-        src_info = @src_infos[ src ]
         src_info[ :last_sent_at ] = Time.new
       end
     end

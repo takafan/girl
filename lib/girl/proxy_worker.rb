@@ -507,8 +507,8 @@ module Girl
           if @ctl && !@ctl.closed? then
             last_recv_at = @ctl_info[ :last_recv_at ] || @ctl_info[ :created_at ]
 
-            if now - last_recv_at >= EXPIRE_AFTER then
-               puts "p#{ Process.pid } #{ Time.new } expire ctl"
+            if now - last_recv_at >= EXPIRE_CTL then
+               puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL }"
                @ctl_info[ :closing ] = true
                next_tick
             end
@@ -563,7 +563,7 @@ module Girl
               if !dst.closed? then
                 dst_info = @dst_infos[ dst ]
 
-                if dst_info[ :wbuff ].size < RESUME_BELOW then
+                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
                   puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
                   add_resume_src( src )
                 end
@@ -574,7 +574,7 @@ module Girl
               if atun && !atun.closed? then
                 atun_info = @atun_infos[ atun ]
 
-                if atun_info[ :wbuff ].size < RESUME_BELOW then
+                if atun_info[ :wbuff ].bytesize < RESUME_BELOW then
                   puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
                   add_resume_src( src )
                 end
@@ -589,7 +589,7 @@ module Girl
             if src && !src.closed? then
               src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].size < RESUME_BELOW then
+              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
                 puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
                 add_resume_dst( dst )
               end
@@ -603,7 +603,7 @@ module Girl
             if src && !src.closed? then
               src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].size < RESUME_BELOW then
+              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
                 puts "p#{ Process.pid } #{ Time.new } resume btun #{ btun_info[ :domain ] }"
                 add_resume_btun( btun )
               end
@@ -647,13 +647,14 @@ module Girl
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
       dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+      dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
         # connect nonblock 必抛 wait writable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }, close src"
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }"
         dst.close
         add_closing_src( src )
         return
@@ -721,6 +722,7 @@ module Girl
     #
     def new_a_redir( redir_port )
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
 
       if RUBY_PLATFORM.include?( 'linux' ) then
@@ -747,23 +749,25 @@ module Girl
 
       # puts "debug new atun and btun"
       atun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      atun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         atun.connect_nonblock( @ctl_info[ :atund_addr ] )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect atund #{ e.class }, close atun"
+        puts "p#{ Process.pid } #{ Time.new } connect atund #{ e.class }"
         atun.close
         return
       end
 
       btun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      btun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         btun.connect_nonblock( @ctl_info[ :btund_addr ] )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect btund #{ e.class }, close btun"
+        puts "p#{ Process.pid } #{ Time.new } connect btund #{ e.class }"
         btun.close
         return
       end
@@ -1047,7 +1051,7 @@ module Girl
 
       case ctl_num
       when TUND_PORT then
-        return if @ctl_info[ :atund_addr ] || data.size != 5
+        return if @ctl_info[ :atund_addr ] || data.bytesize != 5
         atund_port, btund_port = data[ 1, 4 ].unpack( 'nn' )
         puts "p#{ Process.pid } #{ Time.new } got tund port #{ atund_port } #{ btund_port }"
         @ctl_info[ :resends ].delete( [ HELLO ].pack( 'C' ) )
@@ -1061,14 +1065,14 @@ module Girl
           @pending_srcs.clear
         end
       when PAIRED then
-        return if data.size != 11
+        return if data.bytesize != 11
         src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
         # puts "debug got paired #{ src_id } #{ dst_id }"
         @ctl_info[ :resends ].delete( [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) )
         @ctl_info[ :last_recv_at ] = Time.new
         new_tuns( src_id, dst_id )
       when UNKNOWN_CTL_ADDR then
-        puts "p#{ Process.pid } #{ Time.new } got unknown ctl addr, close ctl"
+        puts "p#{ Process.pid } #{ Time.new } got unknown ctl addr"
         close_ctl( ctl )
       end
     end

@@ -5,7 +5,7 @@ module Girl
   CHUNK_SIZE            = 65535            # 按块加解密，块尺寸上限，不超过65535
   EXPIRE_NEW            = 5                # 多久没有建立通道，过期
   EXPIRE_CONNECTING     = 2                # 连接中，多久没连上过期
-  EXPIRE_AFTER          = 300              # 多久没有新流量，过期
+  EXPIRE_AFTER          = 86400            # 多久没有新流量，过期
   EXPIRE_CTL            = 86400            # 多久没有ctlmsg来，过期
   RESET_TRAFF_DAY       = 1                # 流量计数重置日，0为不重置
   CHECK_TRAFF_INTERVAL  = 86400            # 检查今天是否是流量计数重置日间隔

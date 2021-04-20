@@ -306,6 +306,7 @@ module Girl
     #
     def deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
       dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+      dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         dst.connect_nonblock( destination_addr )
@@ -444,7 +445,7 @@ module Girl
             if btun && !btun.closed? then
               btun_info = @btun_infos[ btun ]
 
-              if btun_info[ :wbuff ].size < RESUME_BELOW then
+              if btun_info[ :wbuff ].bytesize < RESUME_BELOW then
                 puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
                 add_resume_dst( dst )
               end
@@ -458,7 +459,7 @@ module Girl
             if dst && !dst.closed? then
               dst_info = @dst_infos[ dst ]
 
-              if dst_info[ :wbuff ].size < RESUME_BELOW then
+              if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
                 puts "p#{ Process.pid } #{ Time.new } resume atun #{ atun_info[ :domain_port ] }"
                 add_resume_atun( atun )
               end
@@ -515,6 +516,7 @@ module Girl
     #
     def new_a_tund
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       tund.listen( 127 )
       tund
@@ -663,7 +665,7 @@ module Girl
         if ctl_info then
           atund_port, btund_port = ctl_info[ :atund_port ], ctl_info[ :btund_port ]
         else
-          return if data.size <= 1
+          return if data.bytesize <= 1
           im = data[ 1..-1 ]
           result = @custom.check( im, addrinfo )
 
@@ -717,7 +719,7 @@ module Girl
           return
         end
 
-        return if data.size <= 9
+        return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         dst_id = ctl_info[ :dst_ids ][ src_id ]
 
