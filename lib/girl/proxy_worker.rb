@@ -7,7 +7,6 @@ module Girl
     def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
       @proxyd_host = proxyd_host
       @proxyd_port = proxyd_port
-      @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
@@ -431,8 +430,7 @@ module Girl
       return if src.closed?
       src_info = @src_infos[ src ]
 
-      if ( ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) ) \
-        || ( ( ip_info.ip_address == @proxyd_host ) && ( src_info[ :destination_port ] == @proxyd_port ) ) then
+      if ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) then
         puts "p#{ Process.pid } #{ Time.new } ignore #{ ip_info.ip_address }:#{ src_info[ :destination_port ] }"
         add_closing_src( src )
         return
@@ -509,8 +507,7 @@ module Girl
 
             if now - last_recv_at >= EXPIRE_CTL then
                puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL }"
-               @ctl_info[ :closing ] = true
-               next_tick
+               set_ctl_closing
             end
           end
 
@@ -630,6 +627,7 @@ module Girl
 
           if resend >= RESEND_LIMIT then
             @ctl_info[ :resends ].delete( key )
+            set_ctl_closing
             break
           end
 
@@ -702,7 +700,10 @@ module Girl
       @ctl = ctl
       add_read( ctl, :ctl )
 
+      ctld_port = @proxyd_port + 5.times.to_a.sample
+      ctld_addr = Socket.sockaddr_in( ctld_port, @proxyd_host )
       @ctl_info = {
+        ctld_addr: ctld_addr,        # ctld地址
         resends: ConcurrentHash.new, # key => count
         atund_addr: nil,             # atund地址，src->dst
         btund_addr: nil,             # btund地址，dst->src
@@ -712,7 +713,7 @@ module Girl
       }
 
       hello = @custom.hello
-      puts "p#{ Process.pid } #{ Time.new } hello i'm #{ hello.inspect }"
+      puts "p#{ Process.pid } #{ Time.new } hello i'm #{ hello.inspect } #{ ctld_port }"
       key = [ HELLO ].pack( 'C' )
       add_ctlmsg( key, hello )
     end
@@ -887,7 +888,7 @@ module Girl
       data = @custom.encode( data )
 
       begin
-        @ctl.sendmsg( data, 0, @proxyd_addr )
+        @ctl.sendmsg( data, 0, @ctl_info[ :ctld_addr ] )
         @ctl_info[ :last_sent_at ] = Time.new
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
@@ -905,6 +906,15 @@ module Girl
       # puts "debug set atun closing"
       atun_info[ :closing ] = true
       add_write( atun )
+    end
+
+    ##
+    # set ctl closing
+    #
+    def set_ctl_closing
+      return if @ctl.closed?
+      @ctl_info[ :closing ] = true
+      next_tick
     end
 
     ##

@@ -28,7 +28,7 @@ module Girl
       dotr, dotw = IO.pipe
       @dotw = dotw
       add_read( dotr, :dotr )
-      new_a_ctld( proxyd_port )
+      new_ctlds( proxyd_port )
       new_a_infod( infod_port )
     end
 
@@ -345,7 +345,7 @@ module Girl
 
       data = [ PAIRED, src_id, dst_id ].pack( 'CQ>n' )
       # puts "debug add ctlmsg paired #{ src_id } #{ dst_id }"
-      send_ctlmsg( data, ctl_addr )
+      send_ctlmsg( ctl_info[ :ctld ], data, ctl_addr )
     end
 
     ##
@@ -489,18 +489,6 @@ module Girl
     end
 
     ##
-    # new a ctld
-    #
-    def new_a_ctld( proxyd_port )
-      ctld = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      ctld.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      ctld.bind( Socket.sockaddr_in( proxyd_port, '0.0.0.0' ) )
-      puts "p#{ Process.pid } #{ Time.new } ctld bind on #{ proxyd_port }"
-      add_read( ctld, :ctld )
-      @ctld = ctld
-    end
-
-    ##
     # new a infod
     #
     def new_a_infod( infod_port )
@@ -520,6 +508,20 @@ module Girl
       tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
       tund.listen( 127 )
       tund
+    end
+
+    ##
+    # new ctlds
+    #
+    def new_ctlds( proxyd_port )
+      5.times do | i |
+        ctld_port = proxyd_port + i
+        ctld = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+        ctld.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        ctld.bind( Socket.sockaddr_in( ctld_port, '0.0.0.0' ) )
+        puts "p#{ Process.pid } #{ Time.new } ctld bind on #{ ctld_port }"
+        add_read( ctld, :ctld )
+      end
     end
 
     ##
@@ -581,11 +583,11 @@ module Girl
     ##
     # send ctlmsg
     #
-    def send_ctlmsg( data, to_addr )
+    def send_ctlmsg( ctld, data, to_addr )
       data = @custom.encode( data )
 
       begin
-        @ctld.sendmsg( data, 0, to_addr )
+        ctld.sendmsg( data, 0, to_addr )
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
       end
@@ -697,6 +699,7 @@ module Girl
           }
 
           @ctl_infos[ ctl_addr ] = {
+            ctld: ctld,                  # 对应的ctld
             addrinfo: addrinfo,          # 地址
             im: im,                      # 标识
             atund: atund,                # 对应atund，src->dst
@@ -712,10 +715,10 @@ module Girl
         end
 
         data2 = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
-        send_ctlmsg( data2, ctl_addr )
+        send_ctlmsg( ctld, data2, ctl_addr )
       when A_NEW_SOURCE then
         unless ctl_info then
-          send_ctlmsg( [ UNKNOWN_CTL_ADDR ].pack( 'C' ), addrinfo )
+          send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), addrinfo )
           return
         end
 
@@ -726,7 +729,7 @@ module Girl
         if dst_id then
           data2 = [ PAIRED, src_id, dst_id ].pack( 'CQ>n' )
           # puts "debug dst id exist, send ctlmsg paired #{ src_id } #{ dst_id }"
-          send_ctlmsg( data2, ctl_addr )
+          send_ctlmsg( ctld, data2, ctl_addr )
           return
         end
 
