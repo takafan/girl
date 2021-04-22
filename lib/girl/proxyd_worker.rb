@@ -514,7 +514,7 @@ module Girl
     # new ctlds
     #
     def new_ctlds( proxyd_port )
-      5.times do | i |
+      10.times do | i |
         ctld_port = proxyd_port + i
         ctld = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         ctld.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )

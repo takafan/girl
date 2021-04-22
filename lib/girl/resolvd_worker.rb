@@ -16,7 +16,7 @@ module Girl
       dotr, dotw = IO.pipe
       @dotw = dotw
       add_read( dotr, :dotr )
-      new_a_resolvd( resolvd_port )
+      new_resolvds( resolvd_port )
     end
 
     ##
@@ -111,13 +111,14 @@ module Girl
     ##
     # new a dst
     #
-    def new_a_dst( src_addr, data )
+    def new_a_dst( resolvd, src_addr, data )
       dst = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       dst.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       dst.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
       puts "p#{ Process.pid } #{ Time.new } new a dst"
       @dst_infos[ dst ] = {
+        resolvd: resolvd,
         src_addr: src_addr,
         created_at: Time.new
       }
@@ -126,16 +127,18 @@ module Girl
     end
 
     ##
-    # new a resolvd
+    # new resolvds
     #
-    def new_a_resolvd( resolvd_port )
-      resolvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      resolvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      resolvd.bind( Socket.sockaddr_in( resolvd_port, '0.0.0.0' ) )
+    def new_resolvds( resolvd_port )
+      10.times do
+        resolvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+        resolvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        resolvd.bind( Socket.sockaddr_in( resolvd_port, '0.0.0.0' ) )
 
-      puts "p#{ Process.pid } #{ Time.new } resolvd bind on #{ resolvd_port }"
-      add_read( resolvd, :resolvd )
-      @resolvd = resolvd
+        puts "p#{ Process.pid } #{ Time.new } resolvd bind on #{ resolvd_port }"
+        add_read( resolvd, :resolvd )
+        resolvd_port += 1
+      end
     end
 
     ##
@@ -177,7 +180,7 @@ module Girl
       data, addrinfo, rflags, *controls = resolvd.recvmsg
       # puts "debug1 resolvd recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       data = @custom.decode( data )
-      new_a_dst( addrinfo.to_sockaddr, data )
+      new_a_dst( resolvd, addrinfo.to_sockaddr, data )
     end
 
     ##
@@ -188,7 +191,7 @@ module Girl
       # puts "debug1 dst recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       dst_info = @dst_infos[ dst ]
       data = @custom.encode( data )
-      send_data( @resolvd, dst_info[ :src_addr ], data )
+      send_data( dst_info[ :resolvd ], dst_info[ :src_addr ], data )
       close_dst( dst )
     end
 

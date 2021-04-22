@@ -700,7 +700,7 @@ module Girl
       @ctl = ctl
       add_read( ctl, :ctl )
 
-      ctld_port = @proxyd_port + 5.times.to_a.sample
+      ctld_port = @proxyd_port + 10.times.to_a.sample
       ctld_addr = Socket.sockaddr_in( ctld_port, @proxyd_host )
       @ctl_info = {
         ctld_addr: ctld_addr,        # ctld地址

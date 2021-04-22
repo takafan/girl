@@ -6,10 +6,10 @@ module Girl
     #
     def initialize( resolv_port, nameserver, resolvd_port, redir_port, proxyd_host, proxyd_port, directs, remotes, im )
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
-      @resolvd_addr = Socket.sockaddr_in( resolvd_port, proxyd_host )
+      @resolvd_ports = 10.times.map { | i | resolvd_port + i }
       @qnames = remotes.map { | dom | dom.split( '.' ).map{ | sub | [ sub.size ].pack( 'C' ) + sub }.join }
       @proxyd_host = proxyd_host
-      @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
+      @proxyd_port = proxyd_port
       @directs = directs
       @remotes = remotes
       @custom = Girl::ProxyCustom.new( im )
@@ -444,8 +444,7 @@ module Girl
       return if src.closed?
       src_info = @src_infos[ src ]
 
-      if ( ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) ) \
-        || ( ( ip_info.ip_address == @proxyd_host ) && ( src_info[ :destination_port ] == @proxyd_port ) ) then
+      if ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) then
         puts "p#{ Process.pid } #{ Time.new } ignore #{ ip_info.ip_address }:#{ src_info[ :destination_port ] }"
         add_closing_src( src )
         return
@@ -522,8 +521,7 @@ module Girl
 
             if now - last_recv_at >= EXPIRE_CTL then
                puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL }"
-               @ctl_info[ :closing ] = true
-               next_tick
+               set_ctl_closing
             end
           end
 
@@ -650,6 +648,7 @@ module Girl
 
           if resend >= RESEND_LIMIT then
             @ctl_info[ :resends ].delete( key )
+            set_ctl_closing
             break
           end
 
@@ -715,7 +714,10 @@ module Girl
       @ctl = ctl
       add_read( ctl, :ctl )
 
+      ctld_port = @proxyd_port + 10.times.to_a.sample
+      ctld_addr = Socket.sockaddr_in( ctld_port, @proxyd_host )
       @ctl_info = {
+        ctld_addr: ctld_addr,        # ctld地址
         resends: ConcurrentHash.new, # key => count
         atund_addr: nil,             # atund地址，src->dst
         btund_addr: nil,             # btund地址，dst->src
@@ -725,7 +727,7 @@ module Girl
       }
 
       hello = @custom.hello
-      puts "p#{ Process.pid } #{ Time.new } hello i'm #{ hello.inspect }"
+      puts "p#{ Process.pid } #{ Time.new } hello i'm #{ hello.inspect } #{ ctld_port }"
       key = [ HELLO ].pack( 'C' )
       add_ctlmsg( key, hello )
     end
@@ -769,7 +771,7 @@ module Girl
 
       if @qnames.any? { | qname | data.include?( qname ) } then
         data = @custom.encode( data )
-        to_addr = @resolvd_addr
+        to_addr = Socket.sockaddr_in( @resolvd_ports.sample, @proxyd_host )
       else
         to_addr = @nameserver_addr
       end
@@ -881,11 +883,22 @@ module Girl
       data = @custom.encode( data )
 
       begin
-        @ctl.sendmsg( data, 0, @proxyd_addr )
+        @ctl.sendmsg( data, 0, @ctl_info[ :ctld_addr ] )
         @ctl_info[ :last_sent_at ] = Time.new
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
         close_ctl( @ctl )
+      end
+    end
+
+    ##
+    # send data
+    #
+    def send_data( sock, to_addr, data )
+      begin
+        sock.sendmsg( data, 0, to_addr )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
       end
     end
 
@@ -902,14 +915,12 @@ module Girl
     end
 
     ##
-    # send data
+    # set ctl closing
     #
-    def send_data( sock, to_addr, data )
-      begin
-        sock.sendmsg( data, 0, to_addr )
-      rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
-      end
+    def set_ctl_closing
+      return if @ctl.closed?
+      @ctl_info[ :closing ] = true
+      next_tick
     end
 
     ##
@@ -1015,7 +1026,7 @@ module Girl
       data, addrinfo, rflags, *controls = rsv.recvmsg
       # puts "debug rsv recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
 
-      if addrinfo.to_sockaddr == @resolvd_addr then
+      if addrinfo.ip_address == @proxyd_host then
         data = @custom.decode( data )
       end
 
