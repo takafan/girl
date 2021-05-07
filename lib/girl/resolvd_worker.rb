@@ -49,7 +49,7 @@ module Girl
     # quit!
     #
     def quit!
-      # puts "debug1 exit"
+      # puts "debug exit"
       exit
     end
 
@@ -82,7 +82,7 @@ module Girl
     # close dst
     #
     def close_dst( dst )
-      # puts "debug1 close dst"
+      # puts "debug close dst"
       dst.close
       @reads.delete( dst )
       @roles.delete( dst )
@@ -116,7 +116,7 @@ module Girl
       dst.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       dst.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
-      puts "p#{ Process.pid } #{ Time.new } new a dst"
+      # puts "debug new a dst"
       @dst_infos[ dst ] = {
         resolvd: resolvd,
         src_addr: src_addr,
@@ -178,7 +178,7 @@ module Girl
     #
     def read_resolvd( resolvd )
       data, addrinfo, rflags, *controls = resolvd.recvmsg
-      # puts "debug1 resolvd recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
+      # puts "debug resolvd recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       data = @custom.decode( data )
       new_a_dst( resolvd, addrinfo.to_sockaddr, data )
     end
@@ -188,7 +188,7 @@ module Girl
     #
     def read_dst( dst )
       data, addrinfo, rflags, *controls = dst.recvmsg
-      # puts "debug1 dst recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
+      # puts "debug dst recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       dst_info = @dst_infos[ dst ]
       data = @custom.encode( data )
       send_data( dst_info[ :resolvd ], dst_info[ :src_addr ], data )
