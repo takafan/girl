@@ -154,7 +154,7 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 1. dns查询得到正确的ip。
 2. tcp流量正常的到达目的地。
 
-需要靠中转，中转需要应对：
+需要靠中转，中转又需要应对：
 
 1. 若流量含有特定域名，且形似http头或者证书，会吃到一个reset。
 
