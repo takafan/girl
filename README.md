@@ -206,30 +206,6 @@ ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线
 
 switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填写地址和端口 > 保存
 
-## ipv6
-
-如果光猫开启ipv6，确保妹子近端所在操作系统开启ipv6。
-
-如果光猫未开启ipv6，但近端开启ipv6，dns解析weibo.com会得到ipv6地址，访问会超时。因此需关闭近端的ipv6，设备端同理，也需关闭ipv6。
-
-windows关闭ipv6:
-
-开始 > 设置 > 网络和Internet > 以太网 > 更改适配器选项 > 右键属性 > 取消勾选Internet协议版本6（TCP/IPv6）
-
-macos关闭ipv6:
-
-```bash
-networksetup -setv6off Ethernet
-networksetup -setv6off Wi-Fi
-```
-
-linux关闭ipv6:
-
-```bash
-echo -e 'net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1' > /etc/sysctl.d/59-disable-ipv6.conf
-sysctl --system
-```
-
 ## 代理之外
 
 代理设在那里，但应用程序可以选择不走。例如switch版的youtube。
