@@ -208,20 +208,22 @@ switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置
 
 ## ipv6
 
-妹子支持ipv6，优先走ipv6。如果近端所在的操作系统打开了ipv6，先要确保ipv6连的通。
+如果光猫开启ipv6，确保妹子近端所在操作系统开启ipv6。
 
-测试连通：连光猫wifi，访问test-ipv6.com，看通不通。如果不通，需关闭近端系统上的ipv6。
+如果光猫未开启ipv6，但近端开启ipv6，dns解析weibo.com会得到ipv6地址，访问会超时。因此需关闭近端的ipv6，设备端同理，也需关闭ipv6。
 
-windows: 开始 > 设置 > 网络和Internet > 以太网 > 更改适配器选项 > 右键属性 > 取消勾选Internet协议版本6（TCP/IPv6）
+windows关闭ipv6:
 
-macos:
+开始 > 设置 > 网络和Internet > 以太网 > 更改适配器选项 > 右键属性 > 取消勾选Internet协议版本6（TCP/IPv6）
+
+macos关闭ipv6:
 
 ```bash
 networksetup -setv6off Ethernet
 networksetup -setv6off Wi-Fi
 ```
 
-linux:
+linux关闭ipv6:
 
 ```bash
 echo -e 'net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1' > /etc/sysctl.d/59-disable-ipv6.conf

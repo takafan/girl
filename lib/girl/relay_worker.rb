@@ -665,13 +665,20 @@ module Girl
       src_info = @src_infos[ src ]
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
-      dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+
+      begin
+        dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] } #{ e.class }"
+        add_closing_src( src )
+        return
+      end
+
       dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
-        # connect nonblock 必抛 wait writable
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }"
         dst.close

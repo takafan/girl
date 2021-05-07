@@ -644,13 +644,20 @@ module Girl
       src_info = @src_infos[ src ]
       domain = src_info[ :destination_domain ]
       destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
-      dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+
+      begin
+        dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] } #{ e.class }"
+        add_closing_src( src )
+        return
+      end
+
       dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
-        # connect nonblock 必抛 wait writable
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }"
         dst.close
@@ -1200,8 +1207,15 @@ module Girl
           src_info[ :rbuff ] << data
         end
 
-        domain, port = domain_port.split( ':' )
-        port = port ? port.to_i : 80
+        colon_idx = domain_port.rindex( ':' )
+
+        if colon_idx then
+          domain = domain_port[ 0...colon_idx ]
+          port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
+        else
+          domain = domain_port
+          port = 80
+        end
 
         src_info[ :proxy_proto ] = :http
         src_info[ :destination_domain ] = domain
@@ -1243,9 +1257,13 @@ module Girl
               # puts "debug DOMAINNAME #{ domain } #{ port }"
               resolve_domain( src, domain )
             end
+          else
+            puts "p#{ Process.pid } #{ Time.new } socks5 atyp #{ atyp } not implement"
+            add_closing_src( src )
           end
         else
           puts "p#{ Process.pid } #{ Time.new } socks5 cmd #{ cmd } not implement"
+          add_closing_src( src )
         end
       when :tunnel then
         atun = src_info[ :atun ]
