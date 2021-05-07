@@ -305,7 +305,13 @@ module Girl
     # deal with destination addr
     #
     def deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
-      dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+      begin
+        dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ destination_addr.inspect } #{ domain_port } #{ e.class }"
+        return
+      end
+
       dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
       begin
