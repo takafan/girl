@@ -1208,8 +1208,9 @@ module Girl
         end
 
         colon_idx = domain_port.rindex( ':' )
+        close_idx = domain_port.rindex( ']' )
 
-        if colon_idx then
+        if colon_idx && ( close_idx.nil? || ( colon_idx > close_idx ) ) then
           domain = domain_port[ 0...colon_idx ]
           port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
         else
@@ -1217,6 +1218,7 @@ module Girl
           port = 80
         end
 
+        domain = domain.gsub( /\[|\]/, '' )
         src_info[ :proxy_proto ] = :http
         src_info[ :destination_domain ] = domain
         src_info[ :destination_port ] = port
