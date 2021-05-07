@@ -31,8 +31,6 @@ lib/girl/relay.rb
 lib/girl/resolv_custom.rb
 lib/girl/resolvd_worker.rb
 lib/girl/resolvd.rb
-lib/girl/ssl_worker.rb
-lib/girl/ssl.rb
 lib/girl/version.rb
   ]
 
