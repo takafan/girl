@@ -1,7 +1,6 @@
 require 'etc'
 require 'json'
 require 'socket'
-require 'girl/concurrent_hash'
 require 'girl/head'
 require 'girl/resolv_custom'
 require 'girl/resolvd_worker'

@@ -7,11 +7,11 @@ module Girl
     def initialize( resolvd_port, nameserver )
       @custom = Girl::ResolvCustom.new
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
-      @roles = ConcurrentHash.new     # :resolvd / :dst
+      @roles = {}        # :resolvd / :dst
       @reads = []
       @writes = []
       @closing_dsts = []
-      @dst_infos = ConcurrentHash.new # dst => {}
+      @dst_infos = {}    # dst => {}
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -98,7 +98,9 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          @dst_infos.each do | dst, dst_info |
+          @dst_infos.keys.each do | dst |
+            dst_info = @dst_infos[ dst ]
+
             if ( now - dst_info[ :created_at ] >= EXPIRE_NEW ) then
               puts "p#{ Process.pid } #{ Time.new } expire dst #{ EXPIRE_NEW }"
               add_closing_dst( dst )

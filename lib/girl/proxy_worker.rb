@@ -19,15 +19,15 @@ module Girl
       @resume_srcs = []
       @resume_dsts = []
       @resume_btuns = []
-      @pending_srcs = []                     # 还没得到atund和btund地址，暂存的src
-      @roles = ConcurrentHash.new            # sock => :dotr / :redir / :ctl / :src / :dst / :atun / :btun
-      @src_infos = ConcurrentHash.new        # src => {}
-      @dst_infos = ConcurrentHash.new        # dst => {}
-      @atun_infos = ConcurrentHash.new       # atun => {}
-      @btun_infos = ConcurrentHash.new       # btun => {}
-      @resolv_caches = ConcurrentHash.new    # domain => [ ip, created_at ]
-      @is_direct_caches = ConcurrentHash.new # ip => true / false
-      @srcs = ConcurrentHash.new             # src_id => src
+      @pending_srcs = []     # 还没得到atund和btund地址，暂存的src
+      @roles = {}            # sock => :dotr / :redir / :ctl / :src / :dst / :atun / :btun
+      @src_infos = {}        # src => {}
+      @dst_infos = {}        # dst => {}
+      @atun_infos = {}       # atun => {}
+      @btun_infos = {}       # btun => {}
+      @resolv_caches = {}    # domain => [ ip, created_at ]
+      @is_direct_caches = {} # ip => true / false
+      @srcs = {}             # src_id => src
       @ip_address_list = Socket.ip_address_list
 
       dotr, dotw = IO.pipe
@@ -511,7 +511,10 @@ module Girl
             end
           end
 
-          @src_infos.each do | src, src_info |
+          # use .keys to void
+          # can't add a new key into hash during iteration (RuntimeError)
+          @src_infos.keys.each do | src |
+            src_info = @src_infos[ src ]
             last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
             last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
 
@@ -710,13 +713,13 @@ module Girl
       ctld_port = @proxyd_port + 10.times.to_a.sample
       ctld_addr = Socket.sockaddr_in( ctld_port, @proxyd_host )
       @ctl_info = {
-        ctld_addr: ctld_addr,        # ctld地址
-        resends: ConcurrentHash.new, # key => count
-        atund_addr: nil,             # atund地址，src->dst
-        btund_addr: nil,             # btund地址，dst->src
-        closing: false,              # 准备关闭
-        created_at: Time.new,        # 创建时间
-        last_recv_at: nil            # 最近一次收到数据时间
+        ctld_addr: ctld_addr, # ctld地址
+        resends: {},          # key => count
+        atund_addr: nil,      # atund地址，src->dst
+        btund_addr: nil,      # btund地址，dst->src
+        closing: false,       # 准备关闭
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil     # 最近一次收到数据时间
       }
 
       hello = @custom.hello

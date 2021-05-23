@@ -14,16 +14,16 @@ module Girl
       @paused_atuns = []
       @resume_dsts = []
       @resume_atuns = []
-      @roles = ConcurrentHash.new         # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun
-      @ctl_infos = ConcurrentHash.new     # ctl => {}
-      @dst_infos = ConcurrentHash.new     # dst => {}
-      @atund_infos = ConcurrentHash.new   # atund => {}
-      @btund_infos = ConcurrentHash.new   # btund => {}
-      @atun_infos = ConcurrentHash.new    # atun => {}
-      @btun_infos = ConcurrentHash.new    # btun => {}
-      @resolv_caches = ConcurrentHash.new # domain => [ ip, created_at ]
-      @traff_ins = ConcurrentHash.new     # im => 0
-      @traff_outs = ConcurrentHash.new    # im => 0
+      @roles = {}         # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun
+      @ctl_infos = {}     # ctl => {}
+      @dst_infos = {}     # dst => {}
+      @atund_infos = {}   # atund => {}
+      @btund_infos = {}   # btund => {}
+      @atun_infos = {}    # atun => {}
+      @btun_infos = {}    # btun => {}
+      @resolv_caches = {} # domain => [ ip, created_at ]
+      @traff_ins = {}     # im => 0
+      @traff_outs = {}    # im => 0
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -401,7 +401,9 @@ module Girl
           sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          @ctl_infos.each do | ctl_addr, ctl_info |
+          @ctl_infos.keys.each do | ctl_addr |
+            ctl_info = @ctl_infos[ ctl_addr ]
+
             if now - ctl_info[ :last_recv_at ] >= EXPIRE_CTL
               puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL } #{ ctl_info[ :addrinfo ].inspect } tund ports #{ ctl_info[ :atund_port ] } #{ ctl_info[ :btund_port ] }"
 
@@ -412,7 +414,9 @@ module Girl
             end
           end
 
-          @dst_infos.each do | dst, dst_info |
+          @dst_infos.keys.each do | dst |
+            dst_info = @dst_infos[ dst ]
+
             if dst_info[ :connected ] then
               last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
               last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
@@ -705,16 +709,16 @@ module Girl
           }
 
           @ctl_infos[ ctl_addr ] = {
-            ctld: ctld,                  # 对应的ctld
-            addrinfo: addrinfo,          # 地址
-            im: im,                      # 标识
-            atund: atund,                # 对应atund，src->dst
-            atund_port: atund_port,      # atund端口
-            btund: btund,                # 对应btund，dst->src
-            btund_port: btund_port,      # btund端口
-            dsts: ConcurrentHash.new,    # dst_id => dst
-            dst_ids: ConcurrentHash.new, # src_id => dst_id
-            last_recv_at: Time.new       # 上一次收到流量的时间
+            ctld: ctld,             # 对应的ctld
+            addrinfo: addrinfo,     # 地址
+            im: im,                 # 标识
+            atund: atund,           # 对应atund，src->dst
+            atund_port: atund_port, # atund端口
+            btund: btund,           # 对应btund，dst->src
+            btund_port: btund_port, # btund端口
+            dsts: {},               # dst_id => dst
+            dst_ids: {},            # src_id => dst_id
+            last_recv_at: Time.new  # 上一次收到流量的时间
           }
 
           puts "p#{ Process.pid } #{ Time.new } got hello #{ im.inspect }, atund listen on #{ atund_port }, btund listen on #{ btund_port }, ctl infos size #{ @ctl_infos.size }"
