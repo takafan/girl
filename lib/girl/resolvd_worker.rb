@@ -12,6 +12,7 @@ module Girl
       @writes = []
       @closing_dsts = []
       @dst_infos = {}    # dst => {}
+      @mutex = Mutex.new
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -96,14 +97,17 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_EXPIRE_INTERVAL
-          now = Time.new
 
-          @dst_infos.keys.each do | dst |
-            dst_info = @dst_infos[ dst ]
+          @mutex.synchronize do
+            now = Time.new
 
-            if ( now - dst_info[ :created_at ] >= EXPIRE_NEW ) then
-              puts "p#{ Process.pid } #{ Time.new } expire dst #{ EXPIRE_NEW }"
-              add_closing_dst( dst )
+            @dst_infos.keys.each do | dst |
+              dst_info = @dst_infos[ dst ]
+
+              if ( now - dst_info[ :created_at ] >= EXPIRE_NEW ) then
+                puts "p#{ Process.pid } #{ Time.new } expire dst #{ EXPIRE_NEW }"
+                add_closing_dst( dst )
+              end
             end
           end
         end

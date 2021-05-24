@@ -29,6 +29,7 @@ module Girl
       @is_direct_caches = {} # ip => true / false
       @srcs = {}             # src_id => src
       @ip_address_list = Socket.ip_address_list
+      @mutex = Mutex.new
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -500,46 +501,49 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_EXPIRE_INTERVAL
-          now = Time.new
 
-          if @ctl && !@ctl.closed? then
-            last_recv_at = @ctl_info[ :last_recv_at ] || @ctl_info[ :created_at ]
+          @mutex.synchronize do
+            now = Time.new
 
-            if now - last_recv_at >= EXPIRE_CTL then
-               puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL }"
-               set_ctl_closing
+            if @ctl && !@ctl.closed? then
+              last_recv_at = @ctl_info[ :last_recv_at ] || @ctl_info[ :created_at ]
+
+              if now - last_recv_at >= EXPIRE_CTL then
+                 puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL }"
+                 set_ctl_closing
+              end
             end
-          end
 
-          # use .keys to void
-          # can't add a new key into hash during iteration (RuntimeError)
-          @src_infos.keys.each do | src |
-            src_info = @src_infos[ src ]
-            last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
-            last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
+            # use .keys to void
+            # can't add a new key into hash during iteration (RuntimeError)
+            @src_infos.keys.each do | src |
+              src_info = @src_infos[ src ]
+              last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
+              last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
 
-            if src_info[ :dst ] then
-              if src_info[ :dst_connected ] then
+              if src_info[ :dst ] then
+                if src_info[ :dst_connected ] then
+                  expire_after = EXPIRE_AFTER
+                  is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+                else
+                  expire_after = EXPIRE_CONNECTING
+                  is_expire = ( now - src_info[ :dst_created_at ] >= expire_after )
+                end
+              elsif src_info[ :atun ] then
                 expire_after = EXPIRE_AFTER
                 is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
               else
-                expire_after = EXPIRE_CONNECTING
-                is_expire = ( now - src_info[ :dst_created_at ] >= expire_after )
+                expire_after = EXPIRE_NEW
+                is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
               end
-            elsif src_info[ :atun ] then
-              expire_after = EXPIRE_AFTER
-              is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
-            else
-              expire_after = EXPIRE_NEW
-              is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
-            end
 
-            if is_expire then
-              puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
-              add_closing_src( src )
+              if is_expire then
+                puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
+                add_closing_src( src )
 
-              unless src_info[ :rbuff ].empty? then
-                puts "p#{ Process.pid } #{ Time.new } lost rbuff #{ src_info[ :rbuff ].inspect }"
+                unless src_info[ :rbuff ].empty? then
+                  puts "p#{ Process.pid } #{ Time.new } lost rbuff #{ src_info[ :rbuff ].inspect }"
+                end
               end
             end
           end
@@ -555,57 +559,59 @@ module Girl
         loop do
           sleep CHECK_RESUME_INTERVAL
 
-          @paused_srcs.each do | src |
-            src_info = @src_infos[ src ]
-            dst = src_info[ :dst ]
+          @mutex.synchronize do
+            @paused_srcs.each do | src |
+              src_info = @src_infos[ src ]
+              dst = src_info[ :dst ]
 
-            if dst then
-              if !dst.closed? then
-                dst_info = @dst_infos[ dst ]
+              if dst then
+                if !dst.closed? then
+                  dst_info = @dst_infos[ dst ]
 
-                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
-                  add_resume_src( src )
+                  if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
+                    puts "p#{ Process.pid } #{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
+                    add_resume_src( src )
+                  end
                 end
-              end
-            else
-              atun = src_info[ :atun ]
+              else
+                atun = src_info[ :atun ]
 
-              if atun && !atun.closed? then
-                atun_info = @atun_infos[ atun ]
+                if atun && !atun.closed? then
+                  atun_info = @atun_infos[ atun ]
 
-                if atun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
-                  add_resume_src( src )
+                  if atun_info[ :wbuff ].bytesize < RESUME_BELOW then
+                    puts "p#{ Process.pid } #{ Time.new } resume tunnel src #{ src_info[ :destination_domain ] }"
+                    add_resume_src( src )
+                  end
                 end
               end
             end
-          end
 
-          @paused_dsts.each do | dst |
-            dst_info = @dst_infos[ dst ]
-            src = dst_info[ :src ]
+            @paused_dsts.each do | dst |
+              dst_info = @dst_infos[ dst ]
+              src = dst_info[ :src ]
 
-            if src && !src.closed? then
-              src_info = @src_infos[ src ]
+              if src && !src.closed? then
+                src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
-                add_resume_dst( dst )
+                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
+                  add_resume_dst( dst )
+                end
               end
             end
-          end
 
-          @paused_btuns.each do | btun |
-            btun_info = @btun_infos[ btun ]
-            src = btun_info[ :src ]
+            @paused_btuns.each do | btun |
+              btun_info = @btun_infos[ btun ]
+              src = btun_info[ :src ]
 
-            if src && !src.closed? then
-              src_info = @src_infos[ src ]
+              if src && !src.closed? then
+                src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume btun #{ btun_info[ :domain ] }"
-                add_resume_btun( btun )
+                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume btun #{ btun_info[ :domain ] }"
+                  add_resume_btun( btun )
+                end
               end
             end
           end
@@ -620,21 +626,29 @@ module Girl
       Thread.new do
         loop do
           sleep RESEND_INTERVAL
+          is_break_loop = false
 
-          resend = @ctl_info[ :resends ][ key ]
-          break unless resend
+          @mutex.synchronize do
+            resend = @ctl_info[ :resends ][ key ]
 
-          puts "p#{ Process.pid } #{ Time.new } resend #{ ctlmsg.inspect }"
-          send_ctlmsg( ctlmsg )
-          resend += 1
+            if resend then
+              puts "p#{ Process.pid } #{ Time.new } resend #{ ctlmsg.inspect }"
+              send_ctlmsg( ctlmsg )
+              resend += 1
 
-          if resend >= RESEND_LIMIT then
-            @ctl_info[ :resends ].delete( key )
-            set_ctl_closing
-            break
+              if resend >= RESEND_LIMIT then
+                @ctl_info[ :resends ].delete( key )
+                set_ctl_closing
+                is_break_loop = true
+              else
+                @ctl_info[ :resends ][ key ] = resend
+              end
+            else
+              is_break_loop = true
+            end
           end
 
-          @ctl_info[ :resends ][ key ] = resend
+          break if is_break_loop
         end
       end
     end
@@ -880,12 +894,14 @@ module Girl
           puts "p#{ Process.pid } #{ Time.new } resolv #{ domain.inspect } #{ e.class }"
         end
 
-        if ip_info then
-          @resolv_caches[ domain ] = [ ip_info, Time.new ]
-          puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
-          deal_with_destination_ip( src, ip_info )
-        else
-          add_closing_src( src )
+        @mutex.synchronize do
+          if ip_info then
+            @resolv_caches[ domain ] = [ ip_info, Time.new ]
+            puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
+            deal_with_destination_ip( src, ip_info )
+          else
+            add_closing_src( src )
+          end
         end
       end
     end

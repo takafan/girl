@@ -24,6 +24,7 @@ module Girl
       @resolv_caches = {} # domain => [ ip, created_at ]
       @traff_ins = {}     # im => 0
       @traff_outs = {}    # im => 0
+      @mutex = Mutex.new
 
       dotr, dotw = IO.pipe
       @dotw = dotw
@@ -399,40 +400,43 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_EXPIRE_INTERVAL
-          now = Time.new
 
-          @ctl_infos.keys.each do | ctl_addr |
-            ctl_info = @ctl_infos[ ctl_addr ]
+          @mutex.synchronize do
+            now = Time.new
 
-            if now - ctl_info[ :last_recv_at ] >= EXPIRE_CTL
-              puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL } #{ ctl_info[ :addrinfo ].inspect } tund ports #{ ctl_info[ :atund_port ] } #{ ctl_info[ :btund_port ] }"
+            @ctl_infos.keys.each do | ctl_addr |
+              ctl_info = @ctl_infos[ ctl_addr ]
 
-              unless @deleting_ctl_infos.include?( ctl_addr ) then
-                @deleting_ctl_infos << ctl_addr
-                next_tick
+              if now - ctl_info[ :last_recv_at ] >= EXPIRE_CTL
+                puts "p#{ Process.pid } #{ Time.new } expire ctl #{ EXPIRE_CTL } #{ ctl_info[ :addrinfo ].inspect } tund ports #{ ctl_info[ :atund_port ] } #{ ctl_info[ :btund_port ] }"
+
+                unless @deleting_ctl_infos.include?( ctl_addr ) then
+                  @deleting_ctl_infos << ctl_addr
+                  next_tick
+                end
               end
             end
-          end
 
-          @dst_infos.keys.each do | dst |
-            dst_info = @dst_infos[ dst ]
+            @dst_infos.keys.each do | dst |
+              dst_info = @dst_infos[ dst ]
 
-            if dst_info[ :connected ] then
-              last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
-              last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
-              expire_after = EXPIRE_AFTER
-              is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
-            else
-              expire_after = EXPIRE_CONNECTING
-              is_expire = ( now - dst_info[ :created_at ] >= expire_after )
-            end
+              if dst_info[ :connected ] then
+                last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
+                last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
+                expire_after = EXPIRE_AFTER
+                is_expire = ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
+              else
+                expire_after = EXPIRE_CONNECTING
+                is_expire = ( now - dst_info[ :created_at ] >= expire_after )
+              end
 
-            if is_expire then
-              puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
+              if is_expire then
+                puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
 
-              unless @closing_dsts.include?( dst ) then
-                @closing_dsts << dst
-                next_tick
+                unless @closing_dsts.include?( dst ) then
+                  @closing_dsts << dst
+                  next_tick
+                end
               end
             end
           end
@@ -448,30 +452,32 @@ module Girl
         loop do
           sleep CHECK_RESUME_INTERVAL
 
-          @paused_dsts.each do | dst |
-            dst_info = @dst_infos[ dst ]
-            btun = dst_info[ :btun ]
+          @mutex.synchronize do
+            @paused_dsts.each do | dst |
+              dst_info = @dst_infos[ dst ]
+              btun = dst_info[ :btun ]
 
-            if btun && !btun.closed? then
-              btun_info = @btun_infos[ btun ]
+              if btun && !btun.closed? then
+                btun_info = @btun_infos[ btun ]
 
-              if btun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
-                add_resume_dst( dst )
+                if btun_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
+                  add_resume_dst( dst )
+                end
               end
             end
-          end
 
-          @paused_atuns.each do | atun |
-            atun_info = @atun_infos[ atun ]
-            dst = atun_info[ :dst ]
+            @paused_atuns.each do | atun |
+              atun_info = @atun_infos[ atun ]
+              dst = atun_info[ :dst ]
 
-            if dst && !dst.closed? then
-              dst_info = @dst_infos[ dst ]
+              if dst && !dst.closed? then
+                dst_info = @dst_infos[ dst ]
 
-              if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "p#{ Process.pid } #{ Time.new } resume atun #{ atun_info[ :domain_port ] }"
-                add_resume_atun( atun )
+                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "p#{ Process.pid } #{ Time.new } resume atun #{ atun_info[ :domain_port ] }"
+                  add_resume_atun( atun )
+                end
               end
             end
           end
@@ -488,10 +494,12 @@ module Girl
           loop do
             sleep CHECK_TRAFF_INTERVAL
 
-            if Time.new.day == RESET_TRAFF_DAY then
-              puts "p#{ Process.pid } #{ Time.new } reset traffs"
-              @traff_ins.transform_values!{ | _ | 0 }
-              @traff_outs.transform_values!{ | _ | 0 }
+            @mutex.synchronize do
+              if Time.new.day == RESET_TRAFF_DAY then
+                puts "p#{ Process.pid } #{ Time.new } reset traffs"
+                @traff_ins.transform_values!{ | _ | 0 }
+                @traff_outs.transform_values!{ | _ | 0 }
+              end
             end
           end
         end
@@ -582,10 +590,12 @@ module Girl
           end
         end
 
-        if destination_addr then
-          # puts "debug resolved #{ domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
-          @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
-          deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
+        @mutex.synchronize do
+          if destination_addr then
+            # puts "debug resolved #{ domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
+            @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
+            deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
+          end
         end
       end
     end
