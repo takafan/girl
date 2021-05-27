@@ -306,6 +306,13 @@ module Girl
     # deal with destination addr
     #
     def deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
+      ctl_info = @ctl_infos[ ctl_addr ]
+
+      unless ctl_info then
+        puts "p#{ Process.pid } #{ Time.new } ctl info not found #{ Addrinfo.new( ctl_addr ).inspect }"
+        return
+      end
+
       begin
         dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
@@ -320,14 +327,6 @@ module Girl
       rescue IO::WaitWritable
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } connect destination #{ domain_port } #{ e.class }"
-        dst.close
-        return
-      end
-
-      ctl_info = @ctl_infos[ ctl_addr ]
-
-      unless ctl_info then
-        puts "p#{ Process.pid } #{ Time.new } ctl info not found #{ Addrinfo.new( ctl_addr ).inspect }, close dst #{ domain_port }"
         dst.close
         return
       end
