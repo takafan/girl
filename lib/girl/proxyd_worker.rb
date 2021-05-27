@@ -309,7 +309,7 @@ module Girl
       begin
         dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } new a dst #{ destination_addr.inspect } #{ domain_port } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain_port } #{ e.class }"
         return
       end
 
@@ -324,8 +324,15 @@ module Girl
         return
       end
 
-      dst_id = dst.local_address.ip_port
       ctl_info = @ctl_infos[ ctl_addr ]
+
+      unless ctl_info then
+        puts "p#{ Process.pid } #{ Time.new } ctl info not found #{ Addrinfo.new( ctl_addr ).inspect }, close dst #{ domain_port }"
+        dst.close
+        return
+      end
+
+      dst_id = dst.local_address.ip_port
 
       @dst_infos[ dst ] = {
         id: dst_id,               # id

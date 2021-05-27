@@ -665,7 +665,7 @@ module Girl
       begin
         dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } new a dst #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain } #{ src_info[ :destination_port ] } #{ e.class }"
         add_closing_src( src )
         return
       end
@@ -716,11 +716,6 @@ module Girl
     #
     def new_a_ctl
       ctl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        ctl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
       @ctl = ctl
       add_read( ctl, :ctl )
 
@@ -918,7 +913,7 @@ module Girl
         @ctl_info[ :last_sent_at ] = Time.new
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
-        close_ctl( @ctl )
+        set_ctl_closing
       end
     end
 
