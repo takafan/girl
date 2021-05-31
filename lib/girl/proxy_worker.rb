@@ -4,15 +4,17 @@ module Girl
     ##
     # initialize
     #
-    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
+    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im )
       @proxyd_host = proxyd_host
       @proxyd_port = proxyd_port
       @directs = directs
       @remotes = remotes
+      @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
       @closing_srcs = []
+      @closing_dnses = []
       @paused_srcs = []
       @paused_dsts = []
       @paused_btuns = []
@@ -20,15 +22,16 @@ module Girl
       @resume_dsts = []
       @resume_btuns = []
       @pending_srcs = []     # 还没得到atund和btund地址，暂存的src
-      @roles = {}            # sock => :dotr / :redir / :ctl / :src / :dst / :atun / :btun
+      @roles = {}            # sock => :dotr / :redir / :ctl / :src / :dst / :atun / :btun / :dns
       @src_infos = {}        # src => {}
       @dst_infos = {}        # dst => {}
       @atun_infos = {}       # atun => {}
       @btun_infos = {}       # btun => {}
+      @dns_infos = {}        # dns => {}
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
       @srcs = {}             # src_id => src
-      @ip_address_list = Socket.ip_address_list
+      @local_addrinfos = Socket.ip_address_list
       @mutex = Mutex.new
 
       dotr, dotw = IO.pipe
@@ -54,6 +57,8 @@ module Girl
             read_dotr( sock )
           when :redir then
             read_redir( sock )
+          when :dns then
+            read_dns( sock )
           when :ctl then
             read_ctl( sock )
           when :src then
@@ -120,6 +125,15 @@ module Girl
         puts "p#{ Process.pid } #{ Time.new } pause tunnel src #{ atun_info[ :domain ] }"
         add_paused_src( atun_info[ :src ] )
       end
+    end
+
+    ##
+    # add closing dns
+    #
+    def add_closing_dns( dns )
+      return if dns.closed? || @closing_dnses.include?( dns )
+      @closing_dnses << dns
+      next_tick
     end
 
     ##
@@ -322,6 +336,14 @@ module Girl
     end
 
     ##
+    # close dns
+    #
+    def close_dns( dns )
+      close_sock( dns )
+      @dns_infos.delete( dns )
+    end
+
+    ##
     # close read dst
     #
     def close_read_dst( dst )
@@ -425,38 +447,39 @@ module Girl
     end
 
     ##
-    # deal with destination ip
+    # deal with destination ipaddr
     #
-    def deal_with_destination_ip( src, ip_info )
+    def deal_with_destination_ipaddr( ipaddr, src )
       return if src.closed?
       src_info = @src_infos[ src ]
+      ip = ipaddr.to_s
 
-      if ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) then
-        puts "p#{ Process.pid } #{ Time.new } ignore #{ ip_info.ip_address }:#{ src_info[ :destination_port ] }"
+      if ( @local_addrinfos.any?{ | _addrinfo | _addrinfo.ip_address == ip } ) && ( src_info[ :destination_port ] == @redir_port ) then
+        puts "p#{ Process.pid } #{ Time.new } ignore #{ ip }:#{ src_info[ :destination_port ] }"
         add_closing_src( src )
         return
       end
 
       if ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) then
         # 访问远端非80/443端口，直连
-        puts "p#{ Process.pid } #{ Time.new } direct #{ ip_info.ip_address } #{ src_info[ :destination_port ] }"
-        new_a_dst( src, ip_info )
+        puts "p#{ Process.pid } #{ Time.new } direct #{ ip } #{ src_info[ :destination_port ] }"
+        new_a_dst( src, ipaddr )
         return
       end
 
-      if @is_direct_caches.include?( ip_info.ip_address ) then
-        is_direct = @is_direct_caches[ ip_info.ip_address ]
+      if @is_direct_caches.include?( ip ) then
+        is_direct = @is_direct_caches[ ip ]
       else
-        is_direct = @directs.any? { | direct | direct.include?( ip_info.ip_address ) }
-        puts "p#{ Process.pid } #{ Time.new } cache is direct #{ ip_info.ip_address } #{ is_direct }"
-        @is_direct_caches[ ip_info.ip_address ] = is_direct
+        is_direct = @directs.any?{ | direct | direct.include?( ip ) }
+        puts "p#{ Process.pid } #{ Time.new } cache is direct #{ ip } #{ is_direct }"
+        @is_direct_caches[ ip ] = is_direct
       end
 
       if is_direct then
-        # puts "debug #{ ip_info.inspect } hit directs"
-        new_a_dst( src, ip_info )
+        # puts "debug #{ ip } hit directs"
+        new_a_dst( src, ipaddr )
       else
-        # puts "debug #{ ip_info.inspect } go tunnel"
+        # puts "debug #{ ip } go tunnel"
         set_proxy_type_tunnel( src )
       end
     end
@@ -544,6 +567,15 @@ module Girl
                 unless src_info[ :rbuff ].empty? then
                   puts "p#{ Process.pid } #{ Time.new } lost rbuff #{ src_info[ :rbuff ].inspect }"
                 end
+              end
+            end
+
+            @dns_infos.keys.each do | dns |
+              dst_info = @dns_infos[ dns ]
+
+              if now - dst_info[ :created_at ] >= EXPIRE_NEW then
+                 puts "p#{ Process.pid } #{ Time.new } expire dns #{ EXPIRE_NEW }"
+                 add_closing_dns( dns )
               end
             end
           end
@@ -656,14 +688,15 @@ module Girl
     ##
     # new a dst
     #
-    def new_a_dst( src, ip_info )
+    def new_a_dst( src, ipaddr )
       return if src.closed?
       src_info = @src_infos[ src ]
+      ip = ipaddr.to_s
       domain = src_info[ :destination_domain ]
-      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
+      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip )
 
       begin
-        dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+        dst = Socket.new( ipaddr.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain } #{ src_info[ :destination_port ] } #{ e.class }"
         add_closing_src( src )
@@ -676,7 +709,7 @@ module Girl
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip } #{ e.class }"
         dst.close
         add_closing_src( src )
         return
@@ -857,9 +890,9 @@ module Girl
     ##
     # resolve domain
     #
-    def resolve_domain( src, domain )
-      if @remotes.any? { | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) } then
-        puts "p#{ Process.pid } #{ Time.new } #{ domain } hit remotes"
+    def resolve_domain( domain, src )
+      if @remotes.any?{ | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) } then
+        puts "p#{ Process.pid } #{ Time.new } hit remotes #{ domain }"
         set_proxy_type_tunnel( src )
         return
       end
@@ -867,11 +900,11 @@ module Girl
       resolv_cache = @resolv_caches[ domain ]
 
       if resolv_cache then
-        ip_info, created_at = resolv_cache
+        ipaddr, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug #{ domain } hit resolv cache #{ ip_info.inspect }"
-          deal_with_destination_ip( src, ip_info )
+          # puts "debug #{ domain } hit resolv cache #{ ipaddr.to_s }"
+          deal_with_destination_ipaddr( ipaddr, src )
           return
         end
 
@@ -879,26 +912,45 @@ module Girl
         @resolv_caches.delete( domain )
       end
 
+      begin
+        ipaddr = IPAddr.new( domain )
+
+        if ipaddr.ipv4? || ipaddr.ipv6? then
+          deal_with_destination_ipaddr( ipaddr, src )
+          return
+        end
+      rescue Exception => e
+      end
+
+      begin
+        packet = Net::DNS::Packet.new( domain )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } new packet #{ e.class } #{ domain.inspect }"
+        add_closing_src( src )
+        return
+      end
+
+      dns = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+
+      begin
+        # puts "debug dns query #{ domain }"
+        dns.sendmsg( packet.data, 0, @nameserver_addr )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } dns sendmsg #{ e.class }"
+        dns.close
+        add_closing_src( src )
+        return
+      end
+
+      add_read( dns, :dns )
+      @dns_infos[ dns ] = {
+        domain: domain,
+        src: src,
+        created_at: Time.new
+      }
+
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :checking
-
-      Thread.new do
-        begin
-          ip_info = Addrinfo.ip( domain )
-        rescue Exception => e
-          puts "p#{ Process.pid } #{ Time.new } resolv #{ domain.inspect } #{ e.class }"
-        end
-
-        @mutex.synchronize do
-          if ip_info then
-            @resolv_caches[ domain ] = [ ip_info, Time.new ]
-            puts "p#{ Process.pid } #{ Time.new } resolved #{ domain } #{ ip_info.ip_address }"
-            deal_with_destination_ip( src, ip_info )
-          else
-            add_closing_src( src )
-          end
-        end
-      end
     end
 
     ##
@@ -912,7 +964,7 @@ module Girl
         @ctl.sendmsg( data, 0, @ctl_info[ :ctld_addr ] )
         @ctl_info[ :last_sent_at ] = Time.new
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } ctl sendmsg #{ e.class }"
         set_ctl_closing
       end
     end
@@ -993,6 +1045,11 @@ module Girl
         @closing_srcs.clear
       end
 
+      if @closing_dnses.any? then
+        @closing_dnses.each { | dns | close_dns( dns ) }
+        @closing_dnses.clear
+      end
+
       if @resume_srcs.any? then
         @resume_srcs.each do | src |
           add_read( src )
@@ -1066,13 +1123,51 @@ module Girl
     end
 
     ##
+    # read dns
+    #
+    def read_dns( dns )
+      begin
+        data, addrinfo, rflags, *controls = dns.recvmsg
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } dns recvmsg #{ e.class }"
+        close_dns( dns )
+        return
+      end
+
+      # puts "debug recv dns #{ data.inspect }"
+      begin
+        packet = Net::DNS::Packet::parse( data )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } parse packet #{ e.class }"
+        close_dns( dns )
+        return
+      end
+
+      dns_info = @dns_infos[ dns ]
+      src = dns_info[ :src ]
+      domain = dns_info[ :domain ]
+      ans = packet.answer.find{ | ans | ans.class == Net::DNS::RR::A }
+
+      if ans then
+        ipaddr = IPAddr.new( ans.value )
+        @resolv_caches[ domain ] = [ ipaddr, Time.new ]
+        deal_with_destination_ipaddr( ipaddr, src )
+      else
+        puts "p#{ Process.pid } #{ Time.new } dns query no answer #{ domain }"
+        add_closing_src( src )
+      end
+
+      close_dns( dns )
+    end
+
+    ##
     # read ctl
     #
     def read_ctl( ctl )
       begin
         data, addrinfo, rflags, *controls = ctl.recvmsg
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } recvmsg #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } ctl recvmsg #{ e.class }"
         close_ctl( ctl )
         return
       end
@@ -1187,7 +1282,7 @@ module Girl
           return
         else
           # puts "debug not CONNECT #{ data.inspect }"
-          host_line = data.split( "\r\n" ).find { | _line | _line[ 0, 6 ] == 'Host: ' }
+          host_line = data.split( "\r\n" ).find{ | _line | _line[ 0, 6 ] == 'Host: ' }
 
           unless host_line then
             # puts "debug not found host line"
@@ -1237,7 +1332,7 @@ module Girl
         src_info[ :destination_domain ] = domain
         src_info[ :destination_port ] = port
 
-        resolve_domain( src, domain )
+        resolve_domain( domain, src )
       when :checking then
         # puts "debug add src rbuff before resolved #{ data.inspect }"
         src_info[ :rbuff ] << data
@@ -1256,12 +1351,21 @@ module Girl
           if atyp == 1 then
             destination_host, destination_port = data[ 4, 6 ].unpack( 'Nn' )
             destination_addr = Socket.sockaddr_in( destination_port, destination_host )
-            destination_addrinfo = Addrinfo.new( destination_addr )
+
+            begin
+              destination_addrinfo = Addrinfo.new( destination_addr )
+            rescue Exception => e
+              puts "p#{ Process.pid } #{ Time.new } new addrinfo #{ e.class }"
+              add_closing_src( src )
+              return
+            end
+
             destination_ip = destination_addrinfo.ip_address
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
-            # puts "debug IP V4 address #{ destination_addrinfo.ip_unpack.inspect }"
-            deal_with_destination_ip( src, destination_addrinfo )
+            # puts "debug IP V4 address #{ destination_ip } #{ destination_port }"
+            ipaddr = IPAddr.new( destination_ip )
+            deal_with_destination_ipaddr( ipaddr, src )
           elsif atyp == 3 then
             domain_len = data[ 4 ].unpack( 'C' ).first
 
@@ -1271,7 +1375,7 @@ module Girl
               src_info[ :destination_domain ] = domain
               src_info[ :destination_port ] = port
               # puts "debug DOMAINNAME #{ domain } #{ port }"
-              resolve_domain( src, domain )
+              resolve_domain( domain, src )
             end
           else
             puts "p#{ Process.pid } #{ Time.new } socks5 atyp #{ atyp } not implement"

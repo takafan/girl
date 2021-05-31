@@ -32,7 +32,7 @@ module Girl
       @btun_infos = {}       # btun => {}
       @is_direct_caches = {} # ip => true / false
       @srcs = {}             # src_id => src
-      @ip_address_list = Socket.ip_address_list
+      @local_addrinfos = Socket.ip_address_list
       @mutex = Mutex.new
 
       dotr, dotw = IO.pipe
@@ -439,38 +439,39 @@ module Girl
     end
 
     ##
-    # deal with destination ip
+    # deal with destination addrinfo
     #
-    def deal_with_destination_ip( src, ip_info )
+    def deal_with_destination_addrinfo( addrinfo, src )
       return if src.closed?
       src_info = @src_infos[ src ]
+      ip = addrinfo.ip_address
 
-      if ( @ip_address_list.any? { | addrinfo | addrinfo.ip_address == ip_info.ip_address } ) && ( src_info[ :destination_port ] == @redir_port ) then
-        puts "p#{ Process.pid } #{ Time.new } ignore #{ ip_info.ip_address }:#{ src_info[ :destination_port ] }"
+      if ( @local_addrinfos.any?{ | _addrinfo | _addrinfo.ip_address == ip } ) && ( src_info[ :destination_port ] == @redir_port ) then
+        puts "p#{ Process.pid } #{ Time.new } ignore #{ ip }:#{ src_info[ :destination_port ] }"
         add_closing_src( src )
         return
       end
 
       if ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) then
         # 访问远端非80/443端口，直连
-        puts "p#{ Process.pid } #{ Time.new } direct #{ ip_info.ip_address } #{ src_info[ :destination_port ] }"
-        new_a_dst( src, ip_info )
+        puts "p#{ Process.pid } #{ Time.new } direct #{ ip } #{ src_info[ :destination_port ] }"
+        new_a_dst( src, addrinfo )
         return
       end
 
-      if @is_direct_caches.include?( ip_info.ip_address ) then
-        is_direct = @is_direct_caches[ ip_info.ip_address ]
+      if @is_direct_caches.include?( ip ) then
+        is_direct = @is_direct_caches[ ip ]
       else
-        is_direct = @directs.any? { | direct | direct.include?( ip_info.ip_address ) }
-        puts "p#{ Process.pid } #{ Time.new } cache is direct #{ ip_info.ip_address } #{ is_direct }"
-        @is_direct_caches[ ip_info.ip_address ] = is_direct
+        is_direct = @directs.any?{ | direct | direct.include?( ip ) }
+        puts "p#{ Process.pid } #{ Time.new } cache is direct #{ ip } #{ is_direct }"
+        @is_direct_caches[ ip ] = is_direct
       end
 
       if is_direct then
-        # puts "debug #{ ip_info.inspect } hit directs"
-        new_a_dst( src, ip_info )
+        # puts "debug #{ addrinfo.inspect } hit directs"
+        new_a_dst( src, addrinfo )
       else
-        # puts "debug #{ ip_info.inspect } go tunnel"
+        # puts "debug #{ addrinfo.inspect } go tunnel"
         set_proxy_type_tunnel( src )
       end
     end
@@ -677,14 +678,15 @@ module Girl
     ##
     # new a dst
     #
-    def new_a_dst( src, ip_info )
+    def new_a_dst( src, addrinfo )
       return if src.closed?
       src_info = @src_infos[ src ]
+      ip = addrinfo.ip_address
       domain = src_info[ :destination_domain ]
-      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip_info.ip_address )
+      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip )
 
       begin
-        dst = Socket.new( ip_info.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+        dst = Socket.new( addrinfo.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } new a dst #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] } #{ e.class }"
         add_closing_src( src )
@@ -697,7 +699,7 @@ module Girl
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip_info.ip_address } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip } #{ e.class }"
         dst.close
         add_closing_src( src )
         return
@@ -793,7 +795,7 @@ module Girl
       rsv.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       rsv.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
-      if @qnames.any? { | qname | data.include?( qname ) } then
+      if @qnames.any?{ | qname | data.include?( qname ) } then
         data = @custom.encode( data )
         to_addr = Socket.sockaddr_in( @resolvd_ports.sample, @proxyd_host )
       else
@@ -910,7 +912,7 @@ module Girl
         @ctl.sendmsg( data, 0, @ctl_info[ :ctld_addr ] )
         @ctl_info[ :last_sent_at ] = Time.new
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } sendmsg #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } ctl sendmsg #{ e.class }"
         close_ctl( @ctl )
       end
     end
@@ -1113,7 +1115,7 @@ module Girl
         new_a_ctl
       end
 
-      deal_with_destination_ip( src, dest_addrinfo )
+      deal_with_destination_addrinfo( dest_addrinfo, src )
     end
 
     ##
@@ -1123,7 +1125,7 @@ module Girl
       begin
         data, addrinfo, rflags, *controls = ctl.recvmsg
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } recvmsg #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } ctl recvmsg #{ e.class }"
         close_ctl( ctl )
         return
       end

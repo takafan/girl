@@ -4,26 +4,29 @@ module Girl
     ##
     # initialize
     #
-    def initialize( proxyd_port, infod_port )
+    def initialize( proxyd_port, infod_port, nameserver )
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
       @deleting_ctl_infos = []
       @closing_dsts = []
+      @closing_dnses = []
       @paused_dsts = []
       @paused_atuns = []
       @resume_dsts = []
       @resume_atuns = []
-      @roles = {}         # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun
+      @roles = {}         # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun / :dns
       @ctl_infos = {}     # ctl => {}
       @dst_infos = {}     # dst => {}
       @atund_infos = {}   # atund => {}
       @btund_infos = {}   # btund => {}
       @atun_infos = {}    # atun => {}
       @btun_infos = {}    # btun => {}
+      @dns_infos = {}     # dns => {}
       @resolv_caches = {} # domain => [ ip, created_at ]
       @traff_ins = {}     # im => 0
       @traff_outs = {}    # im => 0
+      @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @mutex = Mutex.new
 
       dotr, dotw = IO.pipe
@@ -49,6 +52,8 @@ module Girl
           case @roles[ sock ]
           when :dotr then
             read_dotr( sock )
+          when :dns then
+            read_dns( sock )
           when :ctld then
             read_ctld( sock )
           when :infod then
@@ -91,6 +96,24 @@ module Girl
     private
 
     ##
+    # add closing dns
+    #
+    def add_closing_dns( dns )
+      return if dns.closed? || @closing_dnses.include?( dns )
+      @closing_dnses << dns
+      next_tick
+    end
+
+    ##
+    # add closing dst
+    #
+    def add_closing_dst( dst )
+      return if dst.closed? || @closing_dsts.include?( dst )
+      @closing_dsts << dst
+      next_tick
+    end
+
+    ##
     # add btun wbuff
     #
     def add_btun_wbuff( btun, data )
@@ -100,7 +123,7 @@ module Girl
       add_write( btun )
 
       if btun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause dst #{ btun_info[ :domain_port ] }"
+        puts "p#{ Process.pid } #{ Time.new } pause dst #{ btun_info[ :domain ] }"
         add_paused_dst( btun_info[ :dst ] )
       end
     end
@@ -129,7 +152,7 @@ module Girl
       add_write( dst )
 
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "p#{ Process.pid } #{ Time.new } pause atun #{ dst_info[ :domain_port ] }"
+        puts "p#{ Process.pid } #{ Time.new } pause atun #{ dst_info[ :domain ] }"
         add_paused_atun( dst_info[ :atun ] )
       end
     end
@@ -239,6 +262,14 @@ module Girl
     end
 
     ##
+    # close dns
+    #
+    def close_dns( dns )
+      close_sock( dns )
+      @dns_infos.delete( dns )
+    end
+
+    ##
     # close dst
     #
     def close_dst( dst )
@@ -303,9 +334,9 @@ module Girl
     end
 
     ##
-    # deal with destination addr
+    # deal with destination ipaddr
     #
-    def deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
+    def deal_with_destination_ipaddr( ipaddr, ctl_addr, src_id, domain, port )
       ctl_info = @ctl_infos[ ctl_addr ]
 
       unless ctl_info then
@@ -314,19 +345,21 @@ module Girl
       end
 
       begin
-        dst = Socket.new( Addrinfo.new( destination_addr ).ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+        dst = Socket.new( ipaddr.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain_port } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain } #{ port } #{ e.class }"
         return
       end
 
       dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+      ip = ipaddr.to_s
+      destination_addr = Socket.sockaddr_in( port, ip )
 
       begin
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } connect destination #{ domain_port } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } connect destination #{ domain } #{ ip } #{ port } #{ e.class }"
         dst.close
         return
       end
@@ -334,20 +367,20 @@ module Girl
       dst_id = dst.local_address.ip_port
 
       @dst_infos[ dst ] = {
-        id: dst_id,               # id
-        ctl_addr: ctl_addr,       # 对应ctl
-        im: ctl_info[ :im ],      # 标识
-        domain_port: domain_port, # 目的地和端口
-        connected: false,         # 是否已连接
-        rbuff: '',                # 对应的tun没准备好，暂存读到的流量
-        atun: nil,                # 对应的atun
-        btun: nil,                # 对应的btun
-        wbuff: '',                # 从tun读到的流量
-        src_id: src_id,           # 近端src id
-        created_at: Time.new,     # 创建时间
-        last_recv_at: nil,        # 上一次收到新流量（由tun收到）的时间
-        last_sent_at: nil,        # 上一次发出流量（由tun发出）的时间
-        closing_write: false      # 准备关闭写
+        id: dst_id,           # id
+        ctl_addr: ctl_addr,   # 对应ctl
+        im: ctl_info[ :im ],  # 标识
+        domain: domain,       # 目的地
+        connected: false,     # 是否已连接
+        rbuff: '',            # 对应的tun没准备好，暂存读到的流量
+        atun: nil,            # 对应的atun
+        btun: nil,            # 对应的btun
+        wbuff: '',            # 从tun读到的流量
+        src_id: src_id,       # 近端src id
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil,    # 上一次收到新流量（由tun收到）的时间
+        last_sent_at: nil,    # 上一次发出流量（由tun发出）的时间
+        closing_write: false  # 准备关闭写
       }
 
       add_read( dst, :dst )
@@ -437,12 +470,17 @@ module Girl
               end
 
               if is_expire then
-                puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain_port ] }"
+                puts "p#{ Process.pid } #{ Time.new } expire dst #{ expire_after } #{ dst_info[ :domain ] }"
+                add_closing_dst( dst )
+              end
+            end
 
-                unless @closing_dsts.include?( dst ) then
-                  @closing_dsts << dst
-                  next_tick
-                end
+            @dns_infos.keys.each do | dns |
+              dst_info = @dns_infos[ dns ]
+
+              if now - dst_info[ :created_at ] >= EXPIRE_NEW then
+                 puts "p#{ Process.pid } #{ Time.new } expire dns #{ EXPIRE_NEW }"
+                 add_closing_dns( dns )
               end
             end
           end
@@ -467,7 +505,7 @@ module Girl
                 btun_info = @btun_infos[ btun ]
 
                 if btun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain_port ] }"
+                  puts "p#{ Process.pid } #{ Time.new } resume dst #{ dst_info[ :domain ] }"
                   add_resume_dst( dst )
                 end
               end
@@ -481,7 +519,7 @@ module Girl
                 dst_info = @dst_infos[ dst ]
 
                 if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "p#{ Process.pid } #{ Time.new } resume atun #{ atun_info[ :domain_port ] }"
+                  puts "p#{ Process.pid } #{ Time.new } resume atun #{ atun_info[ :domain ] }"
                   add_resume_atun( atun )
                 end
               end
@@ -564,46 +602,65 @@ module Girl
     end
 
     ##
-    # resolve domain
+    # resolve domain port
     #
-    def resolve_domain( ctl_addr, src_id, domain_port )
-      resolv_cache = @resolv_caches[ domain_port ]
+    def resolve_domain_port( domain_port, ctl_addr, src_id )
+      colon_idx = domain_port.rindex( ':' )
+      return unless colon_idx
+
+      domain = domain_port[ 0...colon_idx ]
+      port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
+      resolv_cache = @resolv_caches[ domain ]
 
       if resolv_cache then
-        destination_addr, created_at = resolv_cache
+        ipaddr, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug #{ domain_port } hit resolv cache #{ Addrinfo.new( destination_addr ).inspect }"
-          deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
+          # puts "debug #{ domain } hit resolv cache #{ ipaddr.to_s }"
+          deal_with_destination_ipaddr( ipaddr, ctl_addr, src_id, domain, port )
           return
         end
 
-        # puts "debug expire #{ domain_port } resolv cache"
-        @resolv_caches.delete( domain_port )
+        # puts "debug expire #{ domain } resolv cache"
+        @resolv_caches.delete( domain )
       end
 
-      Thread.new do
-        colon_idx = domain_port.rindex( ':' )
+      begin
+        ipaddr = IPAddr.new( domain )
 
-        if colon_idx then
-          destination_domain = domain_port[ 0...colon_idx ]
-          destination_port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
-
-          begin
-            destination_addr = Socket.sockaddr_in( destination_port, destination_domain )
-          rescue Exception => e
-            puts "p#{ Process.pid } #{ Time.new } sockaddr in #{ domain_port } #{ e.class }"
-          end
+        if ipaddr.ipv4? || ipaddr.ipv6? then
+          deal_with_destination_ipaddr( ipaddr, ctl_addr, src_id, domain, port )
+          return
         end
-
-        @mutex.synchronize do
-          if destination_addr then
-            # puts "debug resolved #{ domain_port } #{ Addrinfo.new( destination_addr ).inspect }"
-            @resolv_caches[ domain_port ] = [ destination_addr, Time.new ]
-            deal_with_destination_addr( ctl_addr, src_id, destination_addr, domain_port )
-          end
-        end
+      rescue Exception => e
       end
+
+      begin
+        packet = Net::DNS::Packet.new( domain )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } new packet #{ e.class } #{ domain.inspect }"
+        return
+      end
+
+      dns = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+
+      begin
+        # puts "debug dns query #{ domain }"
+        dns.sendmsg( packet.data, 0, @nameserver_addr )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } dns sendmsg #{ e.class }"
+        dns.close
+        return
+      end
+
+      add_read( dns, :dns )
+      @dns_infos[ dns ] = {
+        ctl_addr: ctl_addr,
+        src_id: src_id,
+        domain: domain,
+        port: port,
+        created_at: Time.new
+      }
     end
 
     ##
@@ -659,6 +716,11 @@ module Girl
         @closing_dsts.clear
       end
 
+      if @closing_dnses.any? then
+        @closing_dnses.each { | dns | close_dns( dns ) }
+        @closing_dnses.clear
+      end
+
       if @resume_dsts.any? then
         @resume_dsts.each do | dst |
           add_read( dst )
@@ -676,6 +738,43 @@ module Girl
 
         @resume_atuns.clear
       end
+    end
+
+    ##
+    # read dns
+    #
+    def read_dns( dns )
+      begin
+        data, addrinfo, rflags, *controls = dns.recvmsg
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } dns recvmsg #{ e.class }"
+        close_dns( dns )
+        return
+      end
+
+      # puts "debug recv dns #{ data.inspect }"
+      begin
+        packet = Net::DNS::Packet::parse( data )
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } parse packet #{ e.class }"
+        close_dns( dns )
+        return
+      end
+
+      ans = packet.answer.find{ | ans | ans.class == Net::DNS::RR::A }
+
+      if ans then
+        dns_info = @dns_infos[ dns ]
+        domain = dns_info[ :domain ]
+        ipaddr = IPAddr.new( ans.value )
+        @resolv_caches[ domain ] = [ ipaddr, Time.new ]
+        ctl_addr = dns_info[ :ctl_addr ]
+        src_id = dns_info[ :src_id ]
+        port = dns_info[ :port ]
+        deal_with_destination_ipaddr( ipaddr, ctl_addr, src_id, domain, port )
+      end
+
+      close_dns( dns )
     end
 
     ##
@@ -761,7 +860,7 @@ module Girl
 
         domain_port = data[ 9..-1 ]
         # puts "debug got a new source #{ src_id } #{ domain_port }"
-        resolve_domain( ctl_addr, src_id, domain_port )
+        resolve_domain_port( domain_port, ctl_addr, src_id )
         ctl_info[ :last_recv_at ] = Time.new
       when CTL_FIN then
         return unless ctl_info
@@ -862,7 +961,7 @@ module Girl
         ctl_addr: atund_info[ :ctl_addr ], # 对应ctl
         im: atund_info[ :im ],             # 标识
         dst: nil,                          # 对应dst
-        domain_port: nil,                  # dst的目的地和端口
+        domain: nil,                       # 目的地
         rbuff: '',                         # 暂存当前块没收全的流量
         wait_bytes: 0,                     # 还差多少字节收全当前块
         lbuff: ''                          # 流量截断在长度前缀处
@@ -896,7 +995,7 @@ module Girl
         ctl_addr: btund_info[ :ctl_addr ], # 对应ctl
         im: btund_info[ :im ],             # 标识
         dst: nil,                          # 对应dst
-        domain_port: nil,                  # dst的目的地和端口
+        domain: nil,                       # 目的地
         wbuff: '',                         # 写前
         closing: false                     # 准备关闭
       }
@@ -954,7 +1053,7 @@ module Girl
         # puts "debug set atun.dst #{ dst_id }"
         atun_info[ :dst ] = dst
         dst_info = @dst_infos[ dst ]
-        atun_info[ :domain_port ] = dst_info[ :domain_port ]
+        atun_info[ :domain ] = dst_info[ :domain ]
         dst_info[ :atun ] = atun
 
         data = data[ 2..-1 ]
@@ -1077,7 +1176,7 @@ module Girl
       # puts "debug set btun.dst #{ dst_id }"
       btun_info[ :dst ] = dst
       dst_info = @dst_infos[ dst ]
-      btun_info[ :domain_port ] = dst_info[ :domain_port ]
+      btun_info[ :domain ] = dst_info[ :domain ]
 
       unless dst_info[ :rbuff ].empty? then
         data2 = ''

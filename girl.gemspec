@@ -34,4 +34,5 @@ lib/girl/version.rb
   ]
 
   spec.require_paths = ['lib']
+  spec.add_dependency 'net-dns', '~> 0.9.0'
 end

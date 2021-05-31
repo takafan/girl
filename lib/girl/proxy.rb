@@ -5,6 +5,7 @@ require 'girl/proxy_worker'
 require 'girl/version'
 require 'ipaddr'
 require 'json'
+require 'net/dns'
 require 'socket'
 
 ##
@@ -56,6 +57,7 @@ module Girl
       proxyd_port = conf[ :proxyd_port ]
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
+      nameserver = conf[ :nameserver ]
       im = conf[ :im ]
       worker_count = conf[ :worker_count ]
 
@@ -83,6 +85,10 @@ module Girl
         remotes = IO.binread( remote_path ).split( "\n" ).map{ | line | line.strip }
       end
 
+      unless nameserver then
+        nameserver = '114.114.114.114'
+      end
+
       unless im then
         im = 'girl'
       end
@@ -101,7 +107,7 @@ module Girl
 
       title = "girl proxy #{ Girl::VERSION }"
       puts title
-      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im } worker count #{ worker_count }"
+      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } nameserver #{ nameserver } im #{ im } worker count #{ worker_count }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
@@ -112,7 +118,7 @@ module Girl
         worker_count.times do | i |
           workers << fork do
             $0 = 'girl proxy worker'
-            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im )
+            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im )
 
             Signal.trap( :TERM ) do
               puts "w#{ i } exit"
@@ -136,7 +142,7 @@ module Girl
 
         Process.waitall
       else
-        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, im ).looping
+        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im ).looping
       end
     end
 

@@ -92,10 +92,10 @@ girl.conf.json的格式：
     "infod_port": 6070,                   // 查询服务，供远端本机调用
     "direct_path": "girl.direct.txt",     // 直连ip段
     "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
+    "nameserver": "114.114.114.114",      // 域名列表之外的域名就近查询，国内的dns服务器
     "im": "girl",                         // 标识，用来识别近端
     "worker_count": 1,                    // 子进程数，默认取cpu个数
     "resolv_port": 1053,                  // 透明中转，近端接收dns查询流量的端口
-    "nameserver": "114.114.114.114",      // 透明中转，域名列表之外的域名就近查询，国内的dns服务器
     "resolvd_port": 5353,                 // 透明中转，远端dns查询中继端口
     "relay_port": 1066                    // 透明中转，近端接收tcp流量的端口
 }

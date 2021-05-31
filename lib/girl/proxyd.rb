@@ -4,6 +4,7 @@ require 'girl/proxyd_custom'
 require 'girl/proxyd_worker'
 require 'girl/version'
 require 'json'
+require 'net/dns'
 require 'socket'
 
 ##
@@ -29,6 +30,9 @@ module Girl
         infod_port = 6070
       end
 
+      text = IO.read( '/etc/resolv.conf' )
+      match_data = /^nameserver .*\n/.match( text )
+      nameserver = match_data ? match_data.to_a.first.split(' ')[ 1 ].strip : '8.8.8.8'
       nprocessors = Etc.nprocessors
 
       if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
@@ -43,7 +47,7 @@ module Girl
 
       title = "girl proxyd #{ Girl::VERSION }"
       puts title
-      puts "proxyd port #{ proxyd_port } infod port #{ infod_port } worker count #{ worker_count }"
+      puts "proxyd port #{ proxyd_port } infod port #{ infod_port } nameserver #{ nameserver } worker count #{ worker_count }"
 
       $0 = title
       workers = []
@@ -51,7 +55,7 @@ module Girl
       worker_count.times do | i |
         workers << fork do
           $0 = 'girl proxyd worker'
-          worker = Girl::ProxydWorker.new( proxyd_port, infod_port )
+          worker = Girl::ProxydWorker.new( proxyd_port, infod_port, nameserver )
 
           Signal.trap( :TERM ) do
             puts "w#{ i } exit"
