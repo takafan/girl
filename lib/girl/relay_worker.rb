@@ -681,14 +681,15 @@ module Girl
     def new_a_dst( src, addrinfo )
       return if src.closed?
       src_info = @src_infos[ src ]
-      ip = addrinfo.ip_address
       domain = src_info[ :destination_domain ]
-      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip )
+      port = src_info[ :destination_port ]
+      ip = addrinfo.ip_address
+      destination_addr = Socket.sockaddr_in( port, ip )
 
       begin
         dst = Socket.new( addrinfo.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } new a dst #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain } #{ ip } #{ port } #{ e.class }"
         add_closing_src( src )
         return
       end
@@ -699,7 +700,7 @@ module Girl
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ ip } #{ port } #{ e.class }"
         dst.close
         add_closing_src( src )
         return

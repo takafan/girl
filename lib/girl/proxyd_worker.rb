@@ -476,10 +476,10 @@ module Girl
             end
 
             @dns_infos.keys.each do | dns |
-              dst_info = @dns_infos[ dns ]
+              dns_info = @dns_infos[ dns ]
 
-              if now - dst_info[ :created_at ] >= EXPIRE_NEW then
-                 puts "p#{ Process.pid } #{ Time.new } expire dns #{ EXPIRE_NEW }"
+              if now - dns_info[ :created_at ] >= EXPIRE_NEW then
+                 puts "p#{ Process.pid } #{ Time.new } expire dns #{ EXPIRE_NEW } #{ dns_info[ :domain ] }"
                  add_closing_dns( dns )
               end
             end

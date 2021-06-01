@@ -453,16 +453,17 @@ module Girl
       return if src.closed?
       src_info = @src_infos[ src ]
       ip = ipaddr.to_s
+      port = src_info[ :destination_port ]
 
-      if ( @local_addrinfos.any?{ | _addrinfo | _addrinfo.ip_address == ip } ) && ( src_info[ :destination_port ] == @redir_port ) then
-        puts "p#{ Process.pid } #{ Time.new } ignore #{ ip }:#{ src_info[ :destination_port ] }"
+      if ( @local_addrinfos.any?{ | _addrinfo | _addrinfo.ip_address == ip } ) && ( port == @redir_port ) then
+        puts "p#{ Process.pid } #{ Time.new } ignore #{ ip }:#{ port }"
         add_closing_src( src )
         return
       end
 
-      if ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( src_info[ :destination_port ] ) then
+      if ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( port ) then
         # 访问远端非80/443端口，直连
-        puts "p#{ Process.pid } #{ Time.new } direct #{ ip } #{ src_info[ :destination_port ] }"
+        puts "p#{ Process.pid } #{ Time.new } direct #{ ip } #{ port }"
         new_a_dst( src, ipaddr )
         return
       end
@@ -571,10 +572,10 @@ module Girl
             end
 
             @dns_infos.keys.each do | dns |
-              dst_info = @dns_infos[ dns ]
+              dns_info = @dns_infos[ dns ]
 
-              if now - dst_info[ :created_at ] >= EXPIRE_NEW then
-                 puts "p#{ Process.pid } #{ Time.new } expire dns #{ EXPIRE_NEW }"
+              if now - dns_info[ :created_at ] >= EXPIRE_NEW then
+                 puts "p#{ Process.pid } #{ Time.new } expire dns #{ EXPIRE_NEW } #{ dns_info[ :domain ] }"
                  add_closing_dns( dns )
               end
             end
@@ -691,14 +692,15 @@ module Girl
     def new_a_dst( src, ipaddr )
       return if src.closed?
       src_info = @src_infos[ src ]
-      ip = ipaddr.to_s
       domain = src_info[ :destination_domain ]
-      destination_addr = Socket.sockaddr_in( src_info[ :destination_port ], ip )
+      port = src_info[ :destination_port ]
+      ip = ipaddr.to_s
+      destination_addr = Socket.sockaddr_in( port, ip )
 
       begin
         dst = Socket.new( ipaddr.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain } #{ src_info[ :destination_port ] } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } new a dst #{ domain } #{ ip } #{ port } #{ e.class }"
         add_closing_src( src )
         return
       end
@@ -709,7 +711,7 @@ module Girl
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ src_info[ :destination_port ] } #{ ip } #{ e.class }"
+        puts "p#{ Process.pid } #{ Time.new } dst connect destination #{ domain } #{ ip } #{ port } #{ e.class }"
         dst.close
         add_closing_src( src )
         return
@@ -912,6 +914,16 @@ module Girl
         @resolv_caches.delete( domain )
       end
 
+      src_info = @src_infos[ src ]
+
+      if domain == 'localhost' then
+        ip = src_info[ :addrinfo ].ip_address
+        # puts "debug redirect #{ domain } to #{ ip }"
+        ipaddr = IPAddr.new( ip )
+        deal_with_destination_ipaddr( ipaddr, src )
+        return
+      end
+
       begin
         ipaddr = IPAddr.new( domain )
 
@@ -949,7 +961,6 @@ module Girl
         created_at: Time.new
       }
 
-      src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :checking
     end
 
@@ -1095,6 +1106,7 @@ module Girl
       @srcs[ src_id ] = src
       @src_infos[ src ] = {
         id: src_id,              # id
+        addrinfo: addrinfo,      # addrinfo
         proxy_proto: :uncheck,   # :uncheck / :http / :socks5
         proxy_type: :uncheck,    # :uncheck / :checking / :direct / :tunnel / :negotiation
         destination_domain: nil, # 目的地域名
