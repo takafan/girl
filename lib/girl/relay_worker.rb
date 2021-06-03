@@ -71,6 +71,9 @@ module Girl
             read_dst( sock )
           when :btun then
             read_btun( sock )
+          else
+            puts "p#{ Process.pid } #{ Time.new } read unknown role"
+            close_sock( sock )
           end
         end
 
@@ -84,6 +87,9 @@ module Girl
             write_atun( sock )
           when :btun then
             write_btun( sock )
+          else
+            puts "p#{ Process.pid } #{ Time.new } write unknown role"
+            close_sock( sock )
           end
         end
       end
@@ -910,7 +916,7 @@ module Girl
       data = @custom.encode( data )
 
       begin
-        @ctl.sendmsg( data, 0, @ctl_info[ :ctld_addr ] )
+        @ctl.sendmsg_nonblock( data, 0, @ctl_info[ :ctld_addr ] )
         @ctl_info[ :last_sent_at ] = Time.new
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } ctl sendmsg #{ e.class }"
@@ -923,7 +929,7 @@ module Girl
     #
     def send_data( sock, to_addr, data )
       begin
-        sock.sendmsg( data, 0, to_addr )
+        sock.sendmsg_nonblock( data, 0, to_addr )
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
       end
@@ -1000,12 +1006,12 @@ module Girl
       end
 
       if @closing_rsvs.any? then
-        @closing_rsvs.each { | rsv | close_rsv( rsv ) }
+        @closing_rsvs.each{ | rsv | close_rsv( rsv ) }
         @closing_rsvs.clear
       end
 
       if @closing_srcs.any? then
-        @closing_srcs.each { | src | close_src( src ) }
+        @closing_srcs.each{ | src | close_src( src ) }
         @closing_srcs.clear
       end
 
@@ -1050,7 +1056,14 @@ module Girl
     # read rsv
     #
     def read_rsv( rsv )
-      data, addrinfo, rflags, *controls = rsv.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = rsv.recvmsg
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } rsv recvmsg #{ e.class }"
+        close_rsv( rsv )
+        return
+      end
+
       # puts "debug rsv recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
 
       if addrinfo.ip_address == @proxyd_host then
@@ -1146,7 +1159,7 @@ module Girl
 
         if @pending_srcs.any? then
           puts "p#{ Process.pid } #{ Time.new } send pending sources"
-          @pending_srcs.each { | src | add_a_new_source( src ) }
+          @pending_srcs.each{ | src | add_a_new_source( src ) }
           @pending_srcs.clear
         end
       when PAIRED then

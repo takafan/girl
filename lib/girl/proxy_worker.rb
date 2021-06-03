@@ -67,6 +67,9 @@ module Girl
             read_dst( sock )
           when :btun then
             read_btun( sock )
+          else
+            puts "p#{ Process.pid } #{ Time.new } read unknown role"
+            close_sock( sock )
           end
         end
 
@@ -80,6 +83,9 @@ module Girl
             write_atun( sock )
           when :btun then
             write_btun( sock )
+          else
+            puts "p#{ Process.pid } #{ Time.new } write unknown role"
+            close_sock( sock )
           end
         end
       end
@@ -946,7 +952,7 @@ module Girl
 
       begin
         # puts "debug dns query #{ domain }"
-        dns.sendmsg( packet.data, 0, @nameserver_addr )
+        dns.sendmsg_nonblock( packet.data, 0, @nameserver_addr )
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } dns sendmsg #{ e.class }"
         dns.close
@@ -972,7 +978,7 @@ module Girl
       data = @custom.encode( data )
 
       begin
-        @ctl.sendmsg( data, 0, @ctl_info[ :ctld_addr ] )
+        @ctl.sendmsg_nonblock( data, 0, @ctl_info[ :ctld_addr ] )
         @ctl_info[ :last_sent_at ] = Time.new
       rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } ctl sendmsg #{ e.class }"
@@ -1052,12 +1058,12 @@ module Girl
       end
 
       if @closing_srcs.any? then
-        @closing_srcs.each { | src | close_src( src ) }
+        @closing_srcs.each{ | src | close_src( src ) }
         @closing_srcs.clear
       end
 
       if @closing_dnses.any? then
-        @closing_dnses.each { | dns | close_dns( dns ) }
+        @closing_dnses.each{ | dns | close_dns( dns ) }
         @closing_dnses.clear
       end
 
@@ -1199,7 +1205,7 @@ module Girl
 
         if @pending_srcs.any? then
           puts "p#{ Process.pid } #{ Time.new } send pending sources"
-          @pending_srcs.each { | src | add_a_new_source( src ) }
+          @pending_srcs.each{ | src | add_a_new_source( src ) }
           @pending_srcs.clear
         end
       when PAIRED then

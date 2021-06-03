@@ -38,6 +38,10 @@ module Girl
             read_resolvd( sock )
           when :dst then
             read_dst( sock )
+          else
+            puts "p#{ Process.pid } #{ Time.new } read unknown role"
+            sock.close
+            @reads.delete( sock )
           end
         end
       end
@@ -159,10 +163,8 @@ module Girl
     #
     def send_data( sock, to_addr, data )
       begin
-        sock.sendmsg( data, 0, to_addr )
-      rescue IO::WaitWritable, Errno::EINTR
-        print 'w'
-      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::ENETDOWN => e
+        sock.sendmsg_nonblock( data, 0, to_addr )
+      rescue Exception => e
         puts "p#{ Process.pid } #{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
       end
     end
@@ -174,7 +176,7 @@ module Girl
       dotr.read_nonblock( READ_SIZE )
 
       if @closing_dsts.any? then
-        @closing_dsts.each { | dst | close_dst( dst ) }
+        @closing_dsts.each{ | dst | close_dst( dst ) }
         @closing_dsts.clear
       end
     end
@@ -193,7 +195,14 @@ module Girl
     # read dst
     #
     def read_dst( dst )
-      data, addrinfo, rflags, *controls = dst.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = dst.recvmsg
+      rescue Exception => e
+        puts "p#{ Process.pid } #{ Time.new } dst recvmsg #{ e.class }"
+        close_dst( dst )
+        return
+      end
+
       # puts "debug dst recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       dst_info = @dst_infos[ dst ]
       data = @custom.encode( data )

@@ -8,39 +8,14 @@ require 'json'
 require 'net/dns'
 require 'socket'
 
+unless Net::DNS::RR.const_defined?(:DNAME) then
+  Net::DNS::RR::DNAME = Net::DNS::DNAME
+end
+
 ##
 # Girl::Proxy - 近端
 #
 #
-=begin
-C:  1 hello            -> hello
-    2 tund port        -> n: atund port -> n: btund port
-    3 a new source     -> Q>: src id -> destination
-    4 paired           -> Q>: src id -> n: dst id
-    5 dest status      NOT USE
-    6 source status    NOT USE
-    7 miss             NOT USE
-    8 fin1             NOT USE
-    9 confirm fin1     NOT USE
-   10 fin2             NOT USE
-   11 confirm fin2     NOT USE
-   12 tund fin         NOT USE
-   13 tun fin          NOT USE
-   14 tun ip changed   NOT USE
-   15 single miss      NOT USE
-   16 range miss       NOT USE
-   17 continue         NOT USE
-   18 is resend ready  NOT USE
-   19 resend ready     NOT USE
-   20 resolv           NOT USE
-   21 resolved         NOT USE
-   22 heartbeat        NOT USE
-   23 unknown ctl addr
-   24 ctl fin
-  101 traff infos
-  101 traff infos      -> [ C: im len -> im -> Q>: traff in ->  Q>: traff out ]
-=end
-
 module Girl
   class Proxy
 
