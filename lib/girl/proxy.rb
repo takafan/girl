@@ -9,7 +9,7 @@ require 'net/dns'
 require 'socket'
 
 unless Net::DNS::RR.const_defined?(:DNAME) then
-  Net::DNS::RR::DNAME = Net::DNS::DNAME
+  Net::DNS::RR::DNAME = Net::DNS::RR
 end
 
 ##
