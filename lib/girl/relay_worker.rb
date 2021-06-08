@@ -566,7 +566,7 @@ module Girl
               end
 
               if is_expire then
-                puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :id ] } #{ src_info[ :destination_domain ] }"
+                puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }"
                 add_closing_src( src )
 
                 unless src_info[ :rbuff ].empty? then
@@ -1105,6 +1105,7 @@ module Girl
       @srcs[ src_id ] = src
       @src_infos[ src ] = {
         id: src_id,                  # id
+        addrinfo: addrinfo,          # addrinfo
         proxy_type: :checking,       # :checking / :direct / :tunnel
         destination_domain: dest_ip, # 目的地域名
         destination_port: dest_port, # 目的地端口
