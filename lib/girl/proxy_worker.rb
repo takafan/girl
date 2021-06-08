@@ -568,7 +568,7 @@ module Girl
               end
 
               if is_expire then
-                puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ] }"
+                puts "p#{ Process.pid } #{ Time.new } expire src #{ expire_after } #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }"
                 add_closing_src( src )
 
                 unless src_info[ :rbuff ].empty? then
