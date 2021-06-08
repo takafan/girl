@@ -8,7 +8,14 @@ require 'net/dns'
 require 'socket'
 
 unless Net::DNS::RR.const_defined?(:DNAME) then
-  Net::DNS::RR::DNAME = Net::DNS::RR
+  module Net
+    module DNS
+      class RR
+        class DNAME < RR
+        end
+      end
+    end
+  end
 end
 
 ##
