@@ -1,4 +1,3 @@
-require 'etc'
 require 'girl/head'
 require 'girl/proxy_custom'
 require 'girl/proxy_worker'
@@ -41,7 +40,6 @@ module Girl
       remote_path = conf[ :remote_path ]
       nameserver = conf[ :nameserver ]
       im = conf[ :im ]
-      worker_count = conf[ :worker_count ]
 
       unless redir_port then
         redir_port = 6666
@@ -75,12 +73,6 @@ module Girl
         im = 'girl'
       end
 
-      nprocessors = Etc.nprocessors
-
-      if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
-        worker_count = nprocessors
-      end
-
       len = CONSTS.map{ | name | name.size }.max
 
       CONSTS.each do | name |
@@ -89,43 +81,18 @@ module Girl
 
       title = "girl proxy #{ Girl::VERSION }"
       puts title
-      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } nameserver #{ nameserver } im #{ im } worker count #{ worker_count }"
+      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } nameserver #{ nameserver } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        $0 = title
-        workers = []
+      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im )
 
-        worker_count.times do | i |
-          workers << fork do
-            $0 = 'girl proxy worker'
-            worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im )
-
-            Signal.trap( :TERM ) do
-              puts "w#{ i } exit"
-              worker.quit!
-            end
-
-            worker.looping
-          end
-        end
-
-        Signal.trap( :TERM ) do
-          puts 'trap TERM'
-          workers.each do | pid |
-            begin
-              Process.kill( :TERM, pid )
-            rescue Errno::ESRCH => e
-              puts e.class
-            end
-          end
-        end
-
-        Process.waitall
-      else
-        Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im ).looping
+      Signal.trap( :TERM ) do
+        puts 'exit'
+        worker.quit!
       end
+
+      worker.looping
     end
 
   end

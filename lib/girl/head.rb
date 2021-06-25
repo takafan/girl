@@ -11,6 +11,7 @@ module Girl
   CHECK_TRAFF_INTERVAL  = 86400            # 检查今天是否是流量计数重置日间隔
   CHECK_EXPIRE_INTERVAL = 1                # 检查过期间隔
   CHECK_RESUME_INTERVAL = 1                # 检查恢复读间隔
+  CHECK_STATE_INTERVAL  = 1                # 检查过期，恢复读
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
   RESEND_LIMIT          = 5                # ctlmsg重传次数
   RESEND_INTERVAL       = 1                # ctlmsg重传间隔

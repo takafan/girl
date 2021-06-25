@@ -7,16 +7,14 @@ module Girl
     def initialize( resolvd_port, nameserver )
       @custom = Girl::ResolvCustom.new
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
-      @roles = {}        # :resolvd / :dst
+      @roles = {}        # :dotr / :resolvd / :dst
       @reads = []
       @writes = []
       @closing_dsts = []
-      @dst_infos = {}    # dst => {}
+      @dst_infos = {}    # dst => { :resolvd, :src_addr, :created_at, :closing }
       @mutex = Mutex.new
 
-      dotr, dotw = IO.pipe
-      @dotw = dotw
-      add_read( dotr, :dotr )
+      new_a_pipe
       new_resolvds( resolvd_port )
     end
 
@@ -24,14 +22,16 @@ module Girl
     # looping
     #
     def looping
-      puts "p#{ Process.pid } #{ Time.new } looping"
-      loop_check_expire
+      puts "#{ Time.new } looping"
+      loop_check_state
 
       loop do
         rs, _ = IO.select( @reads )
 
         rs.each do | sock |
-          case @roles[ sock ]
+          role = @roles[ sock ]
+
+          case role
           when :dotr then
             read_dotr( sock )
           when :resolvd then
@@ -39,9 +39,8 @@ module Girl
           when :dst then
             read_dst( sock )
           else
-            puts "p#{ Process.pid } #{ Time.new } read unknown role"
-            sock.close
-            @reads.delete( sock )
+            puts "#{ Time.new } read unknown role #{ role }"
+            close_sock( sock )
           end
         end
       end
@@ -61,19 +60,10 @@ module Girl
     private
 
     ##
-    # add closing dst
-    #
-    def add_closing_dst( dst )
-      return if dst.closed? || @closing_dsts.include?( dst )
-      @closing_dsts << dst
-      next_tick
-    end
-
-    ##
     # add read
     #
     def add_read( sock, role = nil )
-      return if sock.closed? || @reads.include?( sock )
+      return if sock.nil? || sock.closed? || @reads.include?( sock )
       @reads << sock
 
       if role then
@@ -88,30 +78,35 @@ module Girl
     #
     def close_dst( dst )
       # puts "debug close dst"
-      dst.close
-      @reads.delete( dst )
-      @roles.delete( dst )
+      close_sock( dst )
       @dst_infos.delete( dst )
     end
 
     ##
-    # loop check expire
+    # close sock
     #
-    def loop_check_expire
+    def close_sock( sock )
+      return if sock.nil? || sock.closed?
+      sock.close
+      @reads.delete( sock )
+      @roles.delete( sock )
+    end
+
+    ##
+    # loop check state
+    #
+    def loop_check_state
       Thread.new do
         loop do
-          sleep CHECK_EXPIRE_INTERVAL
+          sleep CHECK_STATE_INTERVAL
 
           @mutex.synchronize do
             now = Time.new
 
-            @dst_infos.keys.each do | dst |
-              dst_info = @dst_infos[ dst ]
-
-              if ( now - dst_info[ :created_at ] >= EXPIRE_NEW ) then
-                puts "p#{ Process.pid } #{ Time.new } expire dst #{ EXPIRE_NEW }"
-                add_closing_dst( dst )
-              end
+            @dst_infos.keys.select{ | dst | !dst.closed? && ( now - dst_info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dst_info |
+              puts "#{ Time.new } expire dst"
+              dst_info[ :closing ] = true
+              next_tick
             end
           end
         end
@@ -130,10 +125,20 @@ module Girl
       @dst_infos[ dst ] = {
         resolvd: resolvd,
         src_addr: src_addr,
-        created_at: Time.new
+        created_at: Time.new,
+        closing: false
       }
       add_read( dst, :dst )
       send_data( dst, @nameserver_addr, data )
+    end
+
+    ##
+    # new a pipe
+    #
+    def new_a_pipe
+      dotr, dotw = IO.pipe
+      @dotw = dotw
+      add_read( dotr, :dotr )
     end
 
     ##
@@ -145,7 +150,7 @@ module Girl
         resolvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         resolvd.bind( Socket.sockaddr_in( resolvd_port, '0.0.0.0' ) )
 
-        puts "p#{ Process.pid } #{ Time.new } resolvd bind on #{ resolvd_port }"
+        puts "#{ Time.new } resolvd bind on #{ resolvd_port }"
         add_read( resolvd, :resolvd )
         resolvd_port += 1
       end
@@ -165,7 +170,7 @@ module Girl
       begin
         sock.sendmsg_nonblock( data, 0, to_addr )
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
+        puts "#{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
       end
     end
 
@@ -198,7 +203,7 @@ module Girl
       begin
         data, addrinfo, rflags, *controls = dst.recvmsg
       rescue Exception => e
-        puts "p#{ Process.pid } #{ Time.new } dst recvmsg #{ e.class }"
+        puts "#{ Time.new } dst recvmsg #{ e.class }"
         close_dst( dst )
         return
       end

@@ -1,4 +1,3 @@
-require 'etc'
 require 'girl/head'
 require 'girl/proxy_custom'
 require 'girl/relay_worker'
@@ -30,7 +29,6 @@ module Girl
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
       im = conf[ :im ]
-      worker_count = conf[ :worker_count ]
 
       unless resolv_port then
         resolv_port = 1053
@@ -72,12 +70,6 @@ module Girl
         im = 'girl'
       end
 
-      nprocessors = Etc.nprocessors
-
-      if worker_count.nil? || worker_count <= 0 || worker_count > nprocessors then
-        worker_count = nprocessors
-      end
-
       len = CONSTS.map{ | name | name.size }.max
 
       CONSTS.each do | name |
@@ -86,39 +78,18 @@ module Girl
 
       title = "girl relay #{ Girl::VERSION }"
       puts title
-      puts "resolv port #{ resolv_port } nameserver #{ nameserver } resolvd port #{ resolvd_port } redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im } worker count #{ worker_count }"
+      puts "resolv port #{ resolv_port } nameserver #{ nameserver } resolvd port #{ resolvd_port } redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
-      $0 = title
-      workers = []
-
-      worker_count.times do | i |
-        workers << fork do
-          $0 = 'girl relay worker'
-          worker = Girl::RelayWorker.new( resolv_port, nameserver, resolvd_port, redir_port, proxyd_host, proxyd_port, directs, remotes, im )
-
-          Signal.trap( :TERM ) do
-            puts "w#{ i } exit"
-            worker.quit!
-          end
-
-          worker.looping
-        end
-      end
+      worker = Girl::RelayWorker.new( resolv_port, nameserver, resolvd_port, redir_port, proxyd_host, proxyd_port, directs, remotes, im )
 
       Signal.trap( :TERM ) do
-        puts 'trap TERM'
-        workers.each do | pid |
-          begin
-            Process.kill( :TERM, pid )
-          rescue Errno::ESRCH => e
-            puts e.class
-          end
-        end
+        puts 'exit'
+        worker.quit!
       end
 
-      Process.waitall
+      worker.looping
     end
 
   end
