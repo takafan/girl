@@ -70,6 +70,7 @@ module Girl
         im = 'girl'
       end
 
+      im = "#{ im }-relay"
       len = CONSTS.map{ | name | name.size }.max
 
       CONSTS.each do | name |
@@ -78,7 +79,7 @@ module Girl
 
       title = "girl relay #{ Girl::VERSION }"
       puts title
-      puts "resolv port #{ resolv_port } nameserver #{ nameserver } resolvd port #{ resolvd_port } redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } im #{ im }"
+      puts "resolv #{ resolv_port } nameserver #{ nameserver } resolvd #{ resolvd_port } redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 

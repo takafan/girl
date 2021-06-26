@@ -1,5 +1,6 @@
 module Girl
   class ProxydWorker
+
     ##
     # initialize
     #
@@ -101,6 +102,7 @@ module Girl
     def add_btun_wbuff( btun, data )
       return if btun.nil? || btun.closed?
       btun_info = @btun_infos[ btun ]
+      return if btun_info[ :closing ]
       btun_info[ :wbuff ] << data
       add_write( btun )
 
@@ -310,9 +312,7 @@ module Girl
           @mutex.synchronize do
             now = Time.new
 
-            @dst_infos.keys.select{ | dst | !dst.closed? }.each do | dst |
-              dst_info = @dst_infos[ dst ]
-
+            @dst_infos.select{ | dst, _ | !dst.closed? }.each do | dst, dst_info |
               if dst_info[ :connected ] then
                 last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
                 last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
@@ -354,7 +354,7 @@ module Girl
               end
             end
 
-            @dns_infos.select{ | dns, info | !dns.closed? && ( now - dns_info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
+            @dns_infos.select{ | dns, info | !dns.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
               puts "#{ Time.new } expire dns #{ dns_info[ :im ].inspect } #{ dns_info[ :domain ].inspect }"
               dns_info[ :closing ] = true
               next_tick
@@ -473,9 +473,9 @@ module Girl
     ##
     # new ctlds
     #
-    def new_ctlds( proxyd_port )
+    def new_ctlds( begin_port )
       10.times do | i |
-        ctld_port = proxyd_port + i
+        ctld_port = begin_port + i
         ctld = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         ctld.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         ctld.bind( Socket.sockaddr_in( ctld_port, '0.0.0.0' ) )
@@ -732,8 +732,8 @@ module Girl
         dst_info = @dst_infos.values.find{ | info | info[ :src_id ] == src_id }
 
         if dst_info then
+          # puts "debug dst info exist, send ctlmsg paired #{ src_id } #{ dst_info[ :dst_id ] }"
           data2 = [ PAIRED, src_id, dst_info[ :dst_id ] ].pack( 'CQ>n' )
-          # puts "debug dst id exist, send ctlmsg paired #{ src_id } #{ dst_id }"
           send_ctlmsg( ctld, data2, ctl_addr )
           return
         end
@@ -826,7 +826,7 @@ module Girl
         return
       end
 
-      # puts "debug accept a atun #{ atund_info[ :im ].inspect }"
+      # puts "debug accept a atun"
 
       @atun_infos[ atun ] = {
         im: atund_info[ :im ], # 标识
@@ -858,7 +858,7 @@ module Girl
         return
       end
 
-      # puts "debug accept a btun #{ btund_info[ :im ].inspect }"
+      # puts "debug accept a btun"
 
       @btun_infos[ btun ] = {
         im: btund_info[ :im ],             # 标识
@@ -886,7 +886,7 @@ module Girl
       begin
         data = atun.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "debug read atun #{ e.class } #{ atun_info[ :im ].inspect }"
+        # puts "debug read atun #{ e.class }"
         close_atun( atun )
         set_dst_closing_write( dst )
         return
@@ -959,7 +959,7 @@ module Girl
       begin
         data = btun.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "debug read btun #{ btun_info[ :im ].inspect } #{ e.class }"
+        # puts "debug read btun #{ e.class }"
         close_btun( btun )
         return
       end
@@ -1090,10 +1090,7 @@ module Girl
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]
-
-        if dst_info then
-          dst_info[ :last_sent_at ] = Time.new
-        end
+        dst_info[ :last_sent_at ] = Time.new
       end
     end
 

@@ -124,6 +124,7 @@ module Girl
     def add_atun_wbuff( atun, data )
       return if atun.nil? || atun.closed?
       atun_info = @atun_infos[ atun ]
+      return if atun_info[ :closing ]
       atun_info[ :wbuff ] << data
       add_write( atun )
 
@@ -207,7 +208,6 @@ module Girl
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
       return if src_info[ :closing ]
-      src_info = @src_infos[ src ]
       src_info[ :rbuff ] << data
 
       if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
@@ -418,11 +418,8 @@ module Girl
 
           @mutex.synchronize do
             now = Time.new
-            # use .keys to void
-            # can't add a new key into hash during iteration (RuntimeError)
-            @src_infos.keys.select{ | src | !src.closed? }.each do | src |
-              src_info = @src_infos[ src ]
 
+            @src_infos.select{ | src, _ | !src.closed? }.each do | src, src_info |
               if src_info[ :dst ] then
                 if src_info[ :dst_connected ] then
                   is_expire = check_has_traffic( src_info, EXPIRE_AFTER )
@@ -494,7 +491,7 @@ module Girl
               end
             end
 
-            @dns_infos.select{ | dns, info | !dns.closed? && ( now - dns_info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
+            @dns_infos.select{ | dns, info | !dns.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
               puts "#{ Time.new } expire dns #{ dns_info[ :domain ].inspect }"
               dns_info[ :closing ] = true
               next_tick
@@ -509,26 +506,24 @@ module Girl
     #
     def loop_resend_ctlmsg( key, ctlmsg )
       Thread.new do
-        is_out_of_limit = true
+        resending = true
 
         RESEND_LIMIT.times do
           sleep RESEND_INTERVAL
 
-          if @ctl.nil? || @ctl.closed? then
-            is_out_of_limit = false
-            break
+          @mutex.synchronize do
+            if @ctl && !@ctl.closed? && @ctl_info[ :resends ].include?( key ) then
+              puts "#{ Time.new } resend #{ ctlmsg.inspect }"
+              send_ctlmsg( ctlmsg )
+            else
+              resending = false
+            end
           end
 
-          if @ctl_info[ :resends ].include?( key ) then
-            puts "#{ Time.new } resend #{ ctlmsg.inspect }"
-            send_ctlmsg( ctlmsg )
-          else
-            is_out_of_limit = false
-            break
-          end
+          break unless resending
         end
 
-        if is_out_of_limit then
+        if resending then
           set_ctl_closing
         end
       end
@@ -1106,11 +1101,7 @@ module Girl
         if dst then
           set_dst_closing_write( dst )
         else
-          atun = src_info[ :atun ]
-
-          if atun then
-            set_atun_closing( atun )
-          end
+          set_atun_closing( src_info[ :atun ] )
         end
 
         return
@@ -1440,7 +1431,7 @@ module Girl
       src = dst_info[ :src ]
       src_info = @src_infos[ src ]
 
-      unless src.closed? then
+      if src && !src.closed? then
         src_info[ :dst_connected ] = true
       end
 
@@ -1470,7 +1461,7 @@ module Girl
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
 
-      unless src.closed? then
+      if src && !src.closed? then
         src_info[ :last_sent_at ] = Time.new
       end
     end
@@ -1512,7 +1503,7 @@ module Girl
       data = data[ written..-1 ]
       atun_info[ :wbuff ] = data
 
-      unless src.closed? then
+      if src && !src.closed? then
         src_info = @src_infos[ src ]
         src_info[ :last_sent_at ] = Time.new
       end

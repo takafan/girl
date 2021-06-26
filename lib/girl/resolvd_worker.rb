@@ -9,8 +9,6 @@ module Girl
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @roles = {}        # :dotr / :resolvd / :dst
       @reads = []
-      @writes = []
-      @closing_dsts = []
       @dst_infos = {}    # dst => { :resolvd, :src_addr, :created_at, :closing }
       @mutex = Mutex.new
 
@@ -103,7 +101,7 @@ module Girl
           @mutex.synchronize do
             now = Time.new
 
-            @dst_infos.keys.select{ | dst | !dst.closed? && ( now - dst_info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dst_info |
+            @dst_infos.select{ | dst, info | !dst.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dst_info |
               puts "#{ Time.new } expire dst"
               dst_info[ :closing ] = true
               next_tick
@@ -119,7 +117,6 @@ module Girl
     def new_a_dst( resolvd, src_addr, data )
       dst = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       dst.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      dst.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
 
       # puts "debug new a dst"
       @dst_infos[ dst ] = {
@@ -128,6 +125,7 @@ module Girl
         created_at: Time.new,
         closing: false
       }
+
       add_read( dst, :dst )
       send_data( dst, @nameserver_addr, data )
     end
@@ -144,15 +142,15 @@ module Girl
     ##
     # new resolvds
     #
-    def new_resolvds( resolvd_port )
-      10.times do
+    def new_resolvds( begin_port )
+      10.times do | i |
+        resolvd_port = begin_port + i
         resolvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
         resolvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         resolvd.bind( Socket.sockaddr_in( resolvd_port, '0.0.0.0' ) )
 
         puts "#{ Time.new } resolvd bind on #{ resolvd_port }"
         add_read( resolvd, :resolvd )
-        resolvd_port += 1
       end
     end
 
@@ -170,7 +168,7 @@ module Girl
       begin
         sock.sendmsg_nonblock( data, 0, to_addr )
       rescue Exception => e
-        puts "#{ Time.new } sendmsg to #{ to_addr.ip_unpack.inspect } #{ e.class }"
+        puts "#{ Time.new } sendmsg #{ e.class } #{ to_addr.inspect }"
       end
     end
 
@@ -179,11 +177,7 @@ module Girl
     #
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
-
-      if @closing_dsts.any? then
-        @closing_dsts.each{ | dst | close_dst( dst ) }
-        @closing_dsts.clear
-      end
+      @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
     end
 
     ##
@@ -193,13 +187,18 @@ module Girl
       data, addrinfo, rflags, *controls = resolvd.recvmsg
       # puts "debug resolvd recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       data = @custom.decode( data )
-      new_a_dst( resolvd, addrinfo.to_sockaddr, data )
+      new_a_dst( resolvd, addrinfo, data )
     end
 
     ##
     # read dst
     #
     def read_dst( dst )
+      if dst.closed? then
+        puts "#{ Time.new } read dst but dst closed?"
+        return
+      end
+
       begin
         data, addrinfo, rflags, *controls = dst.recvmsg
       rescue Exception => e

@@ -50,7 +50,7 @@ module Girl
 
       title = "girl proxyd #{ Girl::VERSION }"
       puts title
-      puts "proxyd port #{ proxyd_port } infod port #{ infod_port } nameserver #{ nameserver }"
+      puts "proxyd #{ proxyd_port } infod #{ infod_port } nameserver #{ nameserver }"
 
       worker = Girl::ProxydWorker.new( proxyd_port, infod_port, nameserver )
 

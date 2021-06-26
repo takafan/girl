@@ -36,7 +36,7 @@ module Girl
 
       title = "girl resolvd #{ Girl::VERSION }"
       puts title
-      puts "resolvd port #{ resolvd_port } nameserver #{ nameserver }"
+      puts "resolvd #{ resolvd_port } nameserver #{ nameserver }"
 
       worker = Girl::ResolvdWorker.new( resolvd_port, nameserver )
 

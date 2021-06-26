@@ -81,7 +81,7 @@ module Girl
 
       title = "girl proxy #{ Girl::VERSION }"
       puts title
-      puts "redir port #{ redir_port } proxyd host #{ proxyd_host } proxyd port #{ proxyd_port } nameserver #{ nameserver } im #{ im }"
+      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } nameserver #{ nameserver } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
