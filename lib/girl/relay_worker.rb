@@ -15,17 +15,16 @@ module Girl
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
-      @roles = {}            # sock => :dotr / :resolv / :rsv / :redir / :proxy / :src / :dst / :atun / :btun
-      @rsv_infos = {}        # rsv => { :src_addr, :created_at }
-      @src_infos = {}        # src => { :src_id, :addrinfo, :proxy_type, :destination_domain, :destination_port,
-                             #          :rbuff, :dst, :dst_created_at, :dst_connected, :ctl, :atun, :btun, :dst_id,
-                             #          :wbuff, :created_at, :pending, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
-      @dst_infos = {}        # dst => { :src, :domain, :wbuff, :closing_write, :paused }
-      @atun_infos = {}       # atun => { :src, :domain, :wbuff, :closing }
-      @btun_infos = {}       # btun => { :src, :domain, :wbuff, :rbuff, :paused }
-      @is_direct_caches = {} # ip => true / false
+      @roles = {}                      # sock => :dotr / :resolv / :rsv / :redir / :proxy / :src / :dst / :atun / :btun
+      @is_direct_caches = {}           # ip => true / false
+      @src_infos = ConcurrentHash.new  # src => { :src_id, :addrinfo, :proxy_type, :destination_domain, :destination_port,
+                                       #          :rbuff, :dst, :dst_created_at, :dst_connected, :ctl, :atun, :btun, :dst_id,
+                                       #          :wbuff, :created_at, :pending, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
+      @dst_infos = ConcurrentHash.new  # dst => { :src, :domain, :wbuff, :closing_write, :paused }
+      @atun_infos = ConcurrentHash.new # atun => { :src, :domain, :wbuff, :closing }
+      @btun_infos = ConcurrentHash.new # btun => { :src, :domain, :wbuff, :rbuff, :paused }
+      @rsv_infos = ConcurrentHash.new  # rsv => { :src_addr, :created_at }
       @local_addrinfos = Socket.ip_address_list
-      @mutex = Mutex.new
 
       new_a_pipe
       new_a_resolv( resolv_port )
@@ -404,87 +403,84 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_STATE_INTERVAL
+          now = Time.new
 
-          @mutex.synchronize do
-            now = Time.new
-
-            @src_infos.select{ | src, _ | !src.closed? }.each do | src, src_info |
-              if src_info[ :dst ] then
-                if src_info[ :dst_connected ] then
-                  is_expire = check_has_traffic( src_info, EXPIRE_AFTER )
-                else
-                  is_expire = ( now - src_info[ :dst_created_at ] >= EXPIRE_CONNECTING )
-                end
-              elsif src_info[ :atun ] then
+          @src_infos.select{ | src, _ | !src.closed? }.each do | src, src_info |
+            if src_info[ :dst ] then
+              if src_info[ :dst_connected ] then
                 is_expire = check_has_traffic( src_info, EXPIRE_AFTER )
               else
-                is_expire = check_has_traffic( src_info, EXPIRE_NEW )
+                is_expire = ( now - src_info[ :dst_created_at ] >= EXPIRE_CONNECTING )
               end
+            elsif src_info[ :atun ] then
+              is_expire = check_has_traffic( src_info, EXPIRE_AFTER )
+            else
+              is_expire = check_has_traffic( src_info, EXPIRE_NEW )
+            end
 
-              if is_expire then
-                puts "#{ Time.new } expire src #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
-                src_info[ :closing ] = true
-                next_tick
-              elsif src_info[ :paused ] then
-                dst = src_info[ :dst ]
+            if is_expire then
+              puts "#{ Time.new } expire src #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
+              src_info[ :closing ] = true
+              next_tick
+            elsif src_info[ :paused ] then
+              dst = src_info[ :dst ]
 
-                if dst then
-                  dst_info = @dst_infos[ dst ]
+              if dst then
+                dst_info = @dst_infos[ dst ]
 
-                  if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                    puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
+                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
+                  add_read( src )
+                  src_info[ :paused ] = false
+                end
+              else
+                atun = src_info[ :atun ]
+
+                if atun && !atun.closed? then
+                  atun_info = @atun_infos[ atun ]
+
+                  if atun_info[ :wbuff ].bytesize < RESUME_BELOW then
+                    puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
                     add_read( src )
                     src_info[ :paused ] = false
                   end
-                else
-                  atun = src_info[ :atun ]
-
-                  if atun && !atun.closed? then
-                    atun_info = @atun_infos[ atun ]
-
-                    if atun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                      puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
-                      add_read( src )
-                      src_info[ :paused ] = false
-                    end
-                  end
                 end
               end
             end
+          end
 
-            @dst_infos.select{ | dst, info | !dst.closed? && info[ :paused ] }.each do | dst, dst_info |
-              src = dst_info[ :src ]
+          @dst_infos.select{ | dst, info | !dst.closed? && info[ :paused ] }.each do | dst, dst_info |
+            src = dst_info[ :src ]
 
-              if src && !src.closed? then
-                src_info = @src_infos[ src ]
+            if src && !src.closed? then
+              src_info = @src_infos[ src ]
 
-                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
-                  add_read( dst )
-                  dst_info[ :paused ] = false
-                end
+              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
+                puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
+                add_read( dst )
+                dst_info[ :paused ] = false
               end
             end
+          end
 
-            @btun_infos.select{ | btun, info | !btun.closed? && info[ :paused ] }.each do | btun, btun_info |
-              src = btun_info[ :src ]
+          @btun_infos.select{ | btun, info | !btun.closed? && info[ :paused ] }.each do | btun, btun_info |
+            src = btun_info[ :src ]
 
-              if src && !src.closed? then
-                src_info = @src_infos[ src ]
+            if src && !src.closed? then
+              src_info = @src_infos[ src ]
 
-                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume btun #{ btun_info[ :domain ].inspect }"
-                  add_read( btun )
-                  btun_info[ :paused ] = false
-                end
+              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
+                puts "#{ Time.new } resume btun #{ btun_info[ :domain ].inspect }"
+                add_read( btun )
+                btun_info[ :paused ] = false
               end
             end
+          end
 
-            @rsv_infos.select{ | rsv, info | !rsv.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | rsv_info |
-              puts "#{ Time.new } expire rsv"
-              rsv_info[ :closing ] = true
-              next_tick
-            end
+          @rsv_infos.select{ | rsv, info | !rsv.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | rsv_info |
+            puts "#{ Time.new } expire rsv"
+            rsv_info[ :closing ] = true
+            next_tick
           end
         end
       end
@@ -500,15 +496,13 @@ module Girl
         RESEND_LIMIT.times do
           sleep RESEND_INTERVAL
 
-          @mutex.synchronize do
-            if @ctl && !@ctl.closed? && @ctl_info[ :resends ].include?( key ) then
-              puts "#{ Time.new } resend #{ ctlmsg.inspect }"
-              send_ctlmsg( ctlmsg )
-            else
-              resending = false
-            end
+          if @ctl && !@ctl.closed? && @ctl_info[ :resends ].include?( key ) then
+            puts "#{ Time.new } resend #{ ctlmsg.inspect }"
+            send_ctlmsg( ctlmsg )
+          else
+            resending = false
           end
-
+          
           break unless resending
         end
 

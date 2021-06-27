@@ -8,20 +8,18 @@ module Girl
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
-      @roles = {}         # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun / :dns
-      @ctl_infos = {}     # im => { :ctl_addr, :ctld, :atund, :btund }
-      @dst_infos = {}     # dst => { :dst_id, :im, :domain, :connected, :rbuff, :atun, :btun, :wbuff, :src_id,
-                          #          :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
-      @atund_infos = {}   # atund => { :im }
-      @btund_infos = {}   # btund => { :im }
-      @atun_infos = {}    # atun => { :im, :dst, :domain, :rbuff, :paused }
-      @btun_infos = {}    # btun => { :im, :dst, :domain, :wbuff, :closing }
-      @dns_infos = {}     # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
-      @resolv_caches = {} # domain => [ ip, created_at ]
-      @traff_ins = {}     # im => 0
-      @traff_outs = {}    # im => 0
+      @roles = {}                      # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun / :dns
+      @ctl_infos = {}                  # im => { :ctl_addr, :ctld, :atund, :btund }
+      @atund_infos = {}                # atund => { :im }
+      @btund_infos = {}                # btund => { :im }
+      @resolv_caches = {}              # domain => [ ip, created_at ]
+      @dst_infos = ConcurrentHash.new  # dst => { :dst_id, :im, :domain, :connected, :rbuff, :atun, :btun, :wbuff, :src_id,
+                                       #          :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
+      @atun_infos = ConcurrentHash.new # atun => { :im, :dst, :domain, :rbuff, :paused }
+      @btun_infos = ConcurrentHash.new # btun => { :im, :dst, :domain, :wbuff, :closing }
+      @dns_infos = ConcurrentHash.new  # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
+      @traffs = ConcurrentHash.new     # im => { :in, :out }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
-      @mutex = Mutex.new
 
       new_a_pipe
       new_ctlds( proxyd_port )
@@ -308,57 +306,54 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_STATE_INTERVAL
+          now = Time.new
 
-          @mutex.synchronize do
-            now = Time.new
-
-            @dst_infos.select{ | dst, _ | !dst.closed? }.each do | dst, dst_info |
-              if dst_info[ :connected ] then
-                last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
-                last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
-                is_expire = ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER )
-              else
-                is_expire = ( now - dst_info[ :created_at ] >= EXPIRE_CONNECTING )
-              end
-
-              if is_expire then
-                puts "#{ Time.new } expire dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
-                dst_info[ :closing ] = true
-                next_tick
-              elsif dst_info[ :paused ] then
-                btun = dst_info[ :btun ]
-
-                if btun && !btun.closed? then
-                  btun_info = @btun_infos[ btun ]
-
-                  if btun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                    puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
-                    add_read( dst )
-                    dst_info[ :paused ] = false
-                  end
-                end
-              end
+          @dst_infos.select{ | dst, _ | !dst.closed? }.each do | dst, dst_info |
+            if dst_info[ :connected ] then
+              last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
+              last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
+              is_expire = ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER )
+            else
+              is_expire = ( now - dst_info[ :created_at ] >= EXPIRE_CONNECTING )
             end
 
-            @atun_infos.select{ | atun, info | !atun.closed? && info[ :paused ] }.each do | atun, atun_info |
-              dst = atun_info[ :dst ]
-
-              if dst && !dst.closed? then
-                dst_info = @dst_infos[ dst ]
-
-                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume atun #{ atun_info[ :im ].inspect } #{ atun_info[ :domain ].inspect }"
-                  add_read( atun )
-                  atun_info[ :paused ] = false
-                end
-              end
-            end
-
-            @dns_infos.select{ | dns, info | !dns.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
-              puts "#{ Time.new } expire dns #{ dns_info[ :im ].inspect } #{ dns_info[ :domain ].inspect }"
-              dns_info[ :closing ] = true
+            if is_expire then
+              puts "#{ Time.new } expire dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+              dst_info[ :closing ] = true
               next_tick
+            elsif dst_info[ :paused ] then
+              btun = dst_info[ :btun ]
+
+              if btun && !btun.closed? then
+                btun_info = @btun_infos[ btun ]
+
+                if btun_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+                  add_read( dst )
+                  dst_info[ :paused ] = false
+                end
+              end
             end
+          end
+
+          @atun_infos.select{ | atun, info | !atun.closed? && info[ :paused ] }.each do | atun, atun_info |
+            dst = atun_info[ :dst ]
+
+            if dst && !dst.closed? then
+              dst_info = @dst_infos[ dst ]
+
+              if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
+                puts "#{ Time.new } resume atun #{ atun_info[ :im ].inspect } #{ atun_info[ :domain ].inspect }"
+                add_read( atun )
+                atun_info[ :paused ] = false
+              end
+            end
+          end
+
+          @dns_infos.select{ | dns, info | !dns.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
+            puts "#{ Time.new } expire dns #{ dns_info[ :im ].inspect } #{ dns_info[ :domain ].inspect }"
+            dns_info[ :closing ] = true
+            next_tick
           end
         end
       end
@@ -373,12 +368,9 @@ module Girl
           loop do
             sleep CHECK_TRAFF_INTERVAL
 
-            @mutex.synchronize do
-              if Time.new.day == RESET_TRAFF_DAY then
-                puts "#{ Time.new } reset traffs"
-                @traff_ins.transform_values!{ | _ | 0 }
-                @traff_outs.transform_values!{ | _ | 0 }
-              end
+            if Time.new.day == RESET_TRAFF_DAY then
+              puts "#{ Time.new } reset traffs"
+              @traffs.each{ | im, info | info[ :in ] = info[ :out ] = 0 }
             end
           end
         end
@@ -681,9 +673,11 @@ module Girl
           return
         end
 
-        unless @traff_ins.include?( im ) then
-          @traff_ins[ im ] = 0
-          @traff_outs[ im ] = 0
+        unless @traffs.include?( im ) then
+          @traffs[ im ] = {
+            in: 0,
+            out: 0
+          }
         end
 
         ctl_info = @ctl_infos[ im ]
@@ -715,7 +709,9 @@ module Girl
           }
         end
 
-        puts "#{ Time.new } got hello #{ addrinfo.ip_unpack.inspect } #{ im.inspect } #{ atund_port } #{ btund_port } #{ @ctl_infos.size }"
+        puts "#{ Time.new } got hello #{ addrinfo.ip_unpack.inspect } #{ im.inspect } #{ atund_port } #{ btund_port }"
+        puts "ctls #{ @ctl_infos.size } atunds #{ @atund_infos.size } btunds #{ @btund_infos.size }"
+        print " dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } dnses #{ @dns_infos.size }"
         data2 = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
         send_ctlmsg( ctld, data2, addrinfo )
       when A_NEW_SOURCE then
@@ -762,10 +758,8 @@ module Girl
       when TRAFF_INFOS then
         data2 = [ TRAFF_INFOS ].pack( 'C' )
 
-        @traff_ins.keys.sort.each do | im |
-          traff_in = @traff_ins[ im ]
-          traff_out = @traff_outs[ im ]
-          data2 << [ [ im.bytesize ].pack( 'C' ), im, [ traff_in, traff_out ].pack( 'Q>Q>' ) ].join
+        @traffs.sort.each do | im, info |
+          data2 << [ [ im.bytesize ].pack( 'C' ), im, [ info[ :in ], info[ :out ] ].pack( 'Q>Q>' ) ].join
         end
 
         begin
@@ -797,7 +791,7 @@ module Girl
         return
       end
 
-      @traff_ins[ dst_info[ :im ] ] += data.bytesize
+      @traffs[ dst_info[ :im ] ][ :in ] += data.bytesize
 
       if btun then
         add_btun_wbuff( btun, pack_a_chunk( data ) )
@@ -969,9 +963,7 @@ module Girl
         return
       end
 
-      im = btun_info[ :im ]
-      @traff_ins[ im ] += data.bytesize
-
+      @traffs[ btun_info[ :im ] ][ :in ] += data.bytesize
       dst = btun_info[ :dst ]
 
       if dst then
@@ -1047,7 +1039,7 @@ module Girl
 
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
-      @traff_outs[ dst_info[ :im ] ] += written
+      @traffs[ dst_info[ :im ] ][ :out ] += written
     end
 
     ##
@@ -1086,7 +1078,7 @@ module Girl
 
       data = data[ written..-1 ]
       btun_info[ :wbuff ] = data
-      @traff_outs[ btun_info[ :im ] ] += written
+      @traffs[ btun_info[ :im ] ][ :out ] += written
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]

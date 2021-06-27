@@ -1,3 +1,4 @@
+require 'girl/concurrent_hash'
 require 'girl/head'
 require 'girl/proxyd_custom'
 require 'girl/proxyd_worker'
@@ -48,8 +49,7 @@ module Girl
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
 
-      title = "girl proxyd #{ Girl::VERSION }"
-      puts title
+      puts "girl proxyd #{ Girl::VERSION }"
       puts "proxyd #{ proxyd_port } infod #{ infod_port } nameserver #{ nameserver }"
 
       worker = Girl::ProxydWorker.new( proxyd_port, infod_port, nameserver )

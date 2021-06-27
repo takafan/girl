@@ -1,9 +1,10 @@
-require 'json'
-require 'socket'
+require 'girl/concurrent_hash'
 require 'girl/head'
 require 'girl/resolv_custom'
 require 'girl/resolvd_worker'
 require 'girl/version'
+require 'json'
+require 'socket'
 
 ##
 # Girl::Resolvd
@@ -34,8 +35,7 @@ module Girl
         puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
       end
 
-      title = "girl resolvd #{ Girl::VERSION }"
-      puts title
+      puts "girl resolvd #{ Girl::VERSION }"
       puts "resolvd #{ resolvd_port } nameserver #{ nameserver }"
 
       worker = Girl::ResolvdWorker.new( resolvd_port, nameserver )

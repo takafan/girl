@@ -7,10 +7,9 @@ module Girl
     def initialize( resolvd_port, nameserver )
       @custom = Girl::ResolvCustom.new
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
-      @roles = {}        # :dotr / :resolvd / :dst
       @reads = []
-      @dst_infos = {}    # dst => { :resolvd, :src_addr, :created_at, :closing }
-      @mutex = Mutex.new
+      @roles = {}                     # sock => :dotr / :resolvd / :dst
+      @dst_infos = ConcurrentHash.new # dst => { :resolvd, :src_addr, :created_at, :closing }
 
       new_a_pipe
       new_resolvds( resolvd_port )
@@ -97,15 +96,12 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_STATE_INTERVAL
+          now = Time.new
 
-          @mutex.synchronize do
-            now = Time.new
-
-            @dst_infos.select{ | dst, info | !dst.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dst_info |
-              puts "#{ Time.new } expire dst"
-              dst_info[ :closing ] = true
-              next_tick
-            end
+          @dst_infos.select{ | dst, info | !dst.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dst_info |
+            puts "#{ Time.new } expire dst"
+            dst_info[ :closing ] = true
+            next_tick
           end
         end
       end
