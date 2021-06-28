@@ -66,8 +66,6 @@ module Girl
       if role then
         @roles[ sock ] = role
       end
-
-      next_tick
     end
 
     ##

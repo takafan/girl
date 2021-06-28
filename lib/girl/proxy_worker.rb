@@ -259,7 +259,6 @@ module Girl
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
-      next_tick
     end
 
     ##
@@ -301,21 +300,21 @@ module Girl
     end
 
     ##
-    # close dst
-    #
-    def close_dst( dst )
-      return if dst.nil? || dst.closed?
-      close_sock( dst )
-      @dst_infos.delete( dst )
-    end
-
-    ##
     # close dns
     #
     def close_dns( dns )
       return if dns.nil? || dns.closed?
       close_sock( dns )
       @dns_infos.delete( dns )
+    end
+
+    ##
+    # close dst
+    #
+    def close_dst( dst )
+      return if dst.nil? || dst.closed?
+      close_sock( dst )
+      @dst_infos.delete( dst )
     end
 
     ##

@@ -247,7 +247,6 @@ module Girl
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
-      next_tick
     end
 
     ##
@@ -502,7 +501,7 @@ module Girl
           else
             resending = false
           end
-          
+
           break unless resending
         end
 

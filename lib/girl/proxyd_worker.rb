@@ -180,7 +180,6 @@ module Girl
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
-      next_tick
     end
 
     ##
@@ -710,8 +709,8 @@ module Girl
         end
 
         puts "#{ Time.new } got hello #{ addrinfo.ip_unpack.inspect } #{ im.inspect } #{ atund_port } #{ btund_port }"
-        puts "ctls #{ @ctl_infos.size } atunds #{ @atund_infos.size } btunds #{ @btund_infos.size }"
-        print " dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } dnses #{ @dns_infos.size }"
+        print "ctls #{ @ctl_infos.size } atunds #{ @atund_infos.size } btunds #{ @btund_infos.size }"
+        puts " dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } dnses #{ @dns_infos.size }"
         data2 = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
         send_ctlmsg( ctld, data2, addrinfo )
       when A_NEW_SOURCE then

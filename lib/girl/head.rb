@@ -6,7 +6,6 @@ module Girl
   EXPIRE_NEW            = 5                # 多久没有建立通道，过期
   EXPIRE_CONNECTING     = 2                # 连接中，多久没连上过期
   EXPIRE_AFTER          = 86400            # 多久没有新流量，过期
-  EXPIRE_CTL            = 86400            # 多久没有ctlmsg来，过期
   RESET_TRAFF_DAY       = 1                # 流量计数重置日，0为不重置
   CHECK_TRAFF_INTERVAL  = 86400            # 检查今天是否是流量计数重置日间隔
   CHECK_STATE_INTERVAL  = 1                # 检查过期，恢复读
@@ -38,7 +37,6 @@ module Girl
   UNKNOWN_CTL_ADDR      = 23
   CTL_FIN               = 24
   TRAFF_INFOS           = 101
-  SEPARATE              = "\r\n\r\n"
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   RESERVED_ROUTE = <<EOF
 0.0.0.0/8
@@ -58,7 +56,6 @@ EOF
     EXPIRE_NEW
     EXPIRE_CONNECTING
     EXPIRE_AFTER
-    EXPIRE_CTL
     RESET_TRAFF_DAY
     CHECK_TRAFF_INTERVAL
     CHECK_STATE_INTERVAL
