@@ -181,8 +181,6 @@ module Girl
       if role then
         @roles[ sock ] = role
       end
-
-      next_tick
     end
 
     ##
@@ -442,6 +440,7 @@ module Girl
                   puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
                   add_read( src )
                   src_info[ :paused ] = false
+                  next_tick
                 end
               else
                 atun = src_info[ :atun ]
@@ -453,6 +452,7 @@ module Girl
                     puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
                     add_read( src )
                     src_info[ :paused ] = false
+                    next_tick
                   end
                 end
               end
@@ -469,6 +469,7 @@ module Girl
                 puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
                 add_read( dst )
                 dst_info[ :paused ] = false
+                next_tick
               end
             end
           end
@@ -483,6 +484,7 @@ module Girl
                 puts "#{ Time.new } resume btun #{ btun_info[ :domain ].inspect }"
                 add_read( btun )
                 btun_info[ :paused ] = false
+                next_tick
               end
             end
           end

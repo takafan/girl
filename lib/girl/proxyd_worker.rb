@@ -170,8 +170,6 @@ module Girl
       if role then
         @roles[ sock ] = role
       end
-
-      next_tick
     end
 
     ##
@@ -330,6 +328,7 @@ module Girl
                   puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
                   add_read( dst )
                   dst_info[ :paused ] = false
+                  next_tick
                 end
               end
             end
@@ -345,6 +344,7 @@ module Girl
                 puts "#{ Time.new } resume atun #{ atun_info[ :im ].inspect } #{ atun_info[ :domain ].inspect }"
                 add_read( atun )
                 atun_info[ :paused ] = false
+                next_tick
               end
             end
           end
@@ -627,6 +627,16 @@ module Girl
       end
 
       # puts "debug recv dns #{ data.inspect }"
+      dns_info = @dns_infos[ dns ]
+      im = dns_info[ :im ]
+      ctl_info = @ctl_infos[ im ]
+
+      unless ctl_info then
+        puts "#{ Time.new } read dns but ctl already closed #{ im.inspect }"
+        close_dns( dns )
+        return
+      end
+
       begin
         packet = Net::DNS::Packet::parse( data )
       rescue Exception => e
@@ -638,12 +648,9 @@ module Girl
       ans = packet.answer.find{ | ans | ans.class == Net::DNS::RR::A }
 
       if ans then
-        dns_info = @dns_infos[ dns ]
         domain = dns_info[ :domain ]
         ipaddr = IPAddr.new( ans.value )
         @resolv_caches[ domain ] = [ ipaddr, Time.new ]
-        im = dns_info[ :im ]
-        ctl_info = @ctl_infos[ im ]
         src_id = dns_info[ :src_id ]
         port = dns_info[ :port ]
         new_a_dst( ipaddr, domain, port, src_id, im, ctl_info[ :ctld ], ctl_info[ :ctl_addr ] )
