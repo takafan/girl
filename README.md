@@ -246,9 +246,9 @@ iptables配置：
 
 ```bash
 iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053
-iptables -t nat -A PREROUTING -p tcp -d 127.0.0.1 -j RETURN
-iptables -t nat -A PREROUTING -p tcp -d 192.168.1.59 -j RETURN
-iptables -t nat -A PREROUTING -p tcp -d 192.168.59.1 -j RETURN
+iptables -t nat -A PREROUTING -d 127.0.0.1 -j RETURN
+iptables -t nat -A PREROUTING -d 192.168.1.59 -j RETURN
+iptables -t nat -A PREROUTING -d 192.168.59.1 -j RETURN
 iptables -t nat -A PREROUTING -p tcp -d 1.2.3.4 --match multiport --dports 80,443 -j REDIRECT --to-ports 1066
 iptables -t nat -A PREROUTING -p tcp -d 1.2.3.4 -j RETURN
 iptables -t nat -A PREROUTING -p tcp -j REDIRECT --to-ports 1066
