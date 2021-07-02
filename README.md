@@ -165,7 +165,7 @@ CONNECT google.com HTTP/1.1\r\n\r\n
 
 2. 回程流量引起，ping不通vps，3分钟后恢复
 3. ssl握手随机被拦
-4. udp随机被拦
+4. udp随机被拦端口
 5. udp被限速，被限在200K/1M/2M/4M不等，阈值内的包一个不丢，后面的包全丢
 6. tcp被偷偷限速在200K，重启vps恢复
 
