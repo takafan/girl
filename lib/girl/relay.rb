@@ -72,11 +72,6 @@ module Girl
       end
 
       im = "#{ im }-relay"
-      len = CONSTS.map{ | name | name.size }.max
-
-      CONSTS.each do | name |
-        puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
-      end
 
       puts "girl relay #{ Girl::VERSION }"
       puts "resolv #{ resolv_port } nameserver #{ nameserver } resolvd #{ resolvd_port } redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } im #{ im }"

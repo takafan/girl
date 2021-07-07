@@ -12,6 +12,8 @@ module Girl
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
   RESEND_LIMIT          = 5                # ctlmsg重传次数
   RESEND_INTERVAL       = 1                # ctlmsg重传间隔
+  RENEW_CTL_INTERVAL    = 10               # p1心跳间隔
+  ROOM_TITLE_LIMIT      = 16               # 房间名称字数
   HELLO                 = 1
   TUND_PORT             = 2
   A_NEW_SOURCE          = 3
@@ -48,19 +50,4 @@ module Girl
 255.255.255.255/32
 ::1
 EOF
-  CONSTS = %w[
-    READ_SIZE
-    WBUFF_LIMIT
-    RESUME_BELOW
-    CHUNK_SIZE
-    EXPIRE_NEW
-    EXPIRE_CONNECTING
-    EXPIRE_AFTER
-    RESET_TRAFF_DAY
-    CHECK_TRAFF_INTERVAL
-    CHECK_STATE_INTERVAL
-    RESOLV_CACHE_EXPIRE
-    RESEND_LIMIT
-    RESEND_INTERVAL
-  ]
 end

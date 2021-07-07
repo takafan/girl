@@ -74,12 +74,6 @@ module Girl
         im = 'girl'
       end
 
-      len = CONSTS.map{ | name | name.size }.max
-
-      CONSTS.each do | name |
-        puts "#{ name.gsub( '_', ' ' ).ljust( len ) } #{ Girl.const_get( name ) }"
-      end
-
       puts "girl proxy #{ Girl::VERSION }"
       puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } nameserver #{ nameserver } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"

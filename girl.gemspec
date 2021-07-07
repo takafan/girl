@@ -20,6 +20,10 @@ lib/girl.rb
 lib/girl/concurrent_hash.rb
 lib/girl/custom.rb
 lib/girl/head.rb
+lib/girl/mirrord_worker.rb
+lib/girl/mirrord.rb
+lib/girl/p1_worker.rb
+lib/girl/p1.rb
 lib/girl/proxy_custom.rb
 lib/girl/proxy_worker.rb
 lib/girl/proxy.rb

@@ -236,7 +236,12 @@ module Girl
       return if dst.nil? || dst.closed?
       # puts "debug close dst"
       close_sock( dst )
-      @dst_infos.delete( dst )
+      dst_info = @dst_infos.delete( dst )
+
+      if dst_info then
+        close_atun( dst_info[ :atun ] )
+        close_btun( dst_info[ :btun ] )
+      end
     end
 
     ##
@@ -598,15 +603,7 @@ module Girl
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
       @dns_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dns | close_dns( dns ) }
-
-      @dst_infos.select{ | _, info | info[ :closing ] }.keys.each do | dst |
-        dst_info = close_dst( dst )
-
-        if dst_info then
-          close_atun( dst_info[ :atun ] )
-          close_btun( dst_info[ :btun ] )
-        end
-      end
+      @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
     end
 
     ##

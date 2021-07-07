@@ -533,6 +533,7 @@ module Girl
       add_read( ctl, :ctl )
       hello = @custom.hello
       puts "#{ Time.new } hello i'm #{ hello.inspect } #{ ctld_port }"
+      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } rsvs #{ @rsv_infos.size }"
       add_ctlmsg( [ HELLO ].pack( 'C' ), hello )
     end
 

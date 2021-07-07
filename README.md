@@ -86,17 +86,23 @@ girl.conf.json的格式：
 ```javascript
 // girl.conf.json
 {
-    "redir_port": 6666,                   // 近端（本地）端口
-    "proxyd_host": "1.2.3.4",             // 远端服务器
-    "proxyd_port": 6060,                  // 远端端口
-    "infod_port": 6070,                   // 查询服务，供远端本机调用
-    "direct_path": "girl.direct.txt",     // 直连ip段
-    "remote_path": "girl.remote.txt",     // 交给远端解析（并中转流量）的域名列表
-    "nameserver": "114.114.114.114",      // 域名列表之外的域名就近查询，国内的dns服务器
-    "im": "girl",                         // 标识，用来识别近端
-    "resolv_port": 1053,                  // 透明中转，近端接收dns查询流量的端口
-    "resolvd_port": 5353,                 // 透明中转，远端dns查询中继端口
-    "relay_port": 1066                    // 透明中转，近端接收tcp流量的端口
+    "redir_port": 6666,                 // 近端（本地）端口
+    "proxyd_host": "1.2.3.4",           // 远端服务器
+    "proxyd_port": 6060,                // 远端端口
+    "infod_port": 6070,                 // 查询服务，供远端本机调用
+    "direct_path": "girl.direct.txt",   // 直连ip段
+    "remote_path": "girl.remote.txt",   // 交给远端解析（并中转流量）的域名列表
+    "nameserver": "114.114.114.114",    // 域名列表之外的域名就近查询，国内的dns服务器
+    "im": "girl",                       // 标识，用来识别近端
+    "resolv_port": 1053,                // 透明中转，近端接收dns查询流量的端口
+    "resolvd_port": 5353,               // 透明中转，远端dns查询中继端口
+    "relay_port": 1066,                 // 透明中转，近端接收tcp流量的端口
+    "mirrord_port": 7070,               // 镜子服务端口
+    "mirrord_infod_port": 7080,         // 镜子服务查询端口，供本地调用
+    "p2d_ports": [ [ "girl", 2222 ] ],  // 镜子服务，标识对应影子端口
+    "p2d_host": "127.0.0.1",            // 镜子服务，影子端口暴露地址，0.0.0.0为对外
+    "appd_host": "127.0.0.1",           // 镜子p1端，内网应用地址
+    "appd_port": 22                     // 镜子p1端，应用端口
 }
 ```
 
@@ -258,7 +264,55 @@ iptables -t nat -A PREROUTING -p tcp -j REDIRECT --to-ports 1066
 
 连近端wifi，打开youtube。
 
-# udp漫谈
+## 连回家
+
+反过来，妹子也支持从外面连进家。
+
+```
+         mirrord
+        v       ^
+       v         ^
+     p1           ssh
+    v
+   v
+sshd
+```
+
+不单sshd，可以是p1所在内网的任意应用。
+
+镜子端：
+
+```ruby
+# mirrord.rb
+require 'girl/mirrord'
+
+Girl::Mirrord.new '/etc/girl.conf.json'
+```
+
+```bash
+ruby mirrord.rb
+```
+
+p1端：
+
+```ruby
+# p1.rb
+require 'girl/p1'
+
+Girl::P1.new '/boot/girl.conf.json'
+```
+
+```bash
+ruby p1.rb
+```
+
+镜子端本地，ssh连p1映射出来的影子端口：
+
+```bash
+ssh -p2222 pi@localhost
+```
+
+## udp漫谈
 
 有没有办法，降低联机游戏的延迟？
 
