@@ -356,7 +356,18 @@ module Girl
       return if src.nil? || src.closed?
       # puts "debug close src"
       close_sock( src )
-      @src_infos.delete( src )
+      src_info = @src_infos.delete( src )
+
+      if src_info then
+        dst = src_info[ :dst ]
+
+        if dst then
+          close_dst( dst )
+        else
+          close_atun( src_info[ :atun ] )
+          close_btun( src_info[ :btun ] )
+        end
+      end
     end
 
     ##
@@ -870,20 +881,7 @@ module Girl
         close_ctl( @ctl )
       end
 
-      @src_infos.select{ | _, info | info[ :closing ] }.keys.each do | src |
-        src_info = close_src( src )
-
-        if src_info then
-          dst = src_info[ :dst ]
-
-          if dst then
-            close_dst( dst )
-          else
-            close_atun( src_info[ :atun ] )
-            close_btun( src_info[ :btun ] )
-          end
-        end
-      end
+      @src_infos.select{ | _, info | info[ :closing ] }.keys.each{ | src | close_src( src ) }
     end
 
     ##

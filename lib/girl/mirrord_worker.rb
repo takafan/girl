@@ -196,7 +196,11 @@ module Girl
       return if p2.nil? || p2.closed?
       # puts "debug close p2"
       close_sock( p2 )
-      @p2_infos.delete( p2 )
+      p2_info = @p2_infos.delete( p2 )
+
+      if p2_info then
+        close_p1( p2_info[ :p1 ] )
+      end
     end
 
     ##
@@ -462,14 +466,7 @@ module Girl
     #
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
-
-      @p2_infos.select{ | _, info | info[ :closing ] }.keys.each do | p2 |
-        p2_info = close_p2( p2 )
-
-        if p2_info then
-          close_p1( p2_info[ :p1 ] )
-        end
-      end
+      @p2_infos.select{ | _, info | info[ :closing ] }.keys.each{ | p2 | close_p2( p2 ) }
     end
 
     ##

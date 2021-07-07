@@ -147,7 +147,11 @@ module Girl
       return if app.nil? || app.closed?
       puts "#{ Time.new } close app"
       close_sock( app )
-      @app_infos.delete( app )
+      app_info = @app_infos.delete( app )
+
+      if app_info then
+        close_p1( app_info[ :p1 ] )
+      end
     end
 
     ##
@@ -454,13 +458,7 @@ module Girl
         new_a_ctl
       end
 
-      @app_infos.select{ | _, info | info[ :closing ] }.keys.each do | app |
-        app_info = close_app( app )
-
-        if app_info then
-          close_p1( app_info[ :p1 ] )
-        end
-      end
+      @app_infos.select{ | _, info | info[ :closing ] }.keys.each{ | app | close_app( app ) }
     end
 
     ##
