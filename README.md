@@ -269,12 +269,12 @@ iptables -t nat -A PREROUTING -p tcp -j REDIRECT --to-ports 1066
 反过来，妹子也支持从外面连进家。
 
 ```
-         mirrord
-        v       ^
-       v         ^
-     p1           ssh
-    v
-   v
+          mirrord
+         ^       ^
+        ^         ^
+      p1           ssh
+     ^
+    ^
 sshd
 ```
 
