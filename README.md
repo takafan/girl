@@ -182,7 +182,7 @@ CONNECT google.com HTTP/1.1\r\n\r\n
 3. 不用ssl
 4. udp可变端口，不心跳
 5. 微小控制信息走udp，流量走tcp
-6. 恨死了
+6. 气死
 
 妹子是这些限制下的一个极简解。
 
