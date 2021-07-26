@@ -10,6 +10,7 @@ module Girl
       @directs = directs
       @remotes = remotes
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
+      @im = im
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
@@ -111,7 +112,7 @@ module Girl
         domain_port = [ destination_domain, destination_port ].join( ':' )
         # puts "debug add a new source #{ src_info[ :src_id ] } #{ domain_port }"
         key = [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' )
-        add_ctlmsg( key, domain_port )
+        add_ctlmsg( key, "#{ domain_port }/#{ @im }" )
       else
         src_info[ :pending ] = true
       end
@@ -685,7 +686,7 @@ module Girl
         is_direct = @is_direct_caches[ ip ]
       else
         is_direct = @directs.any?{ | direct | direct.include?( ip ) }
-        puts "#{ Time.new } cache is direct #{ ip } #{ is_direct }"
+        puts "#{ Time.new } cache is direct #{ src_info[ :destination_domain ] } #{ ip } #{ is_direct }"
         @is_direct_caches[ ip ] = is_direct
       end
 

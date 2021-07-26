@@ -521,6 +521,7 @@ module Girl
       data2 = @room_infos.sort_by{ | _, info | info[ :updated_at ] }.reverse.map do | im, info |
         [
           info[ :updated_at ],
+          @p2d_ports[ im ],
           im + ' ' * ( ROOM_TITLE_LIMIT - im.size ),
           info[ :p1_addrinfo ].ip_unpack.join( ':' )
         ].join( ' ' )

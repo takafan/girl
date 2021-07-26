@@ -718,16 +718,27 @@ module Girl
         data2 = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
         send_ctlmsg( ctld, data2, addrinfo )
       when A_NEW_SOURCE then
-        im, ctl_info = @ctl_infos.find{ | _, info | info[ :ctl_addr ] == ctl_addr }
-
-        unless im then
-          # puts "debug got a new source but unknown ctl addr"
-          send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), addrinfo )
-          return
-        end
-
         return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        domain_port, im = data[ 9..-1 ].split( '/' )
+
+        if im then
+          ctl_info = @ctl_infos[ im ]
+
+          unless ctl_info then
+            puts "#{ Time.new } got a new source but unknown im #{ im.inspect }"
+            return
+          end
+        else
+          im, ctl_info = @ctl_infos.find{ | _, info | info[ :ctl_addr ] == ctl_addr }
+
+          unless im then
+            puts "#{ Time.new } got a new source but unknown ctl addr"
+            send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), addrinfo )
+            return
+          end
+        end
+
         dst_info = @dst_infos.values.find{ | info | info[ :src_id ] == src_id }
 
         if dst_info then
@@ -737,8 +748,7 @@ module Girl
           return
         end
 
-        domain_port = data[ 9..-1 ]
-        # puts "debug got a new source #{ im.inspect } #{ src_id } #{ domain_port.inspect }"
+        # puts "debug got a new source #{ src_id } #{ domain_port.inspect } #{ im.inspect }"
         resolve_domain_port( domain_port, src_id, im, ctl_info[ :ctld ], ctl_info[ :ctl_addr ] )
       when CTL_FIN then
         im, _ = @ctl_infos.find{ | _, info | info[ :ctl_addr ] == ctl_addr }
