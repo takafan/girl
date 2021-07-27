@@ -729,6 +729,8 @@ module Girl
             puts "#{ Time.new } got a new source but unknown im #{ im.inspect }"
             return
           end
+
+          ctl_info[ :ctl_addr ] = ctl_addr
         else
           im, ctl_info = @ctl_infos.find{ | _, info | info[ :ctl_addr ] == ctl_addr }
 
@@ -739,6 +741,7 @@ module Girl
           end
         end
 
+        ctl_info[ :ctld ] = ctld
         dst_info = @dst_infos.values.find{ | info | info[ :src_id ] == src_id }
 
         if dst_info then
