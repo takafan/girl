@@ -716,7 +716,7 @@ module Girl
         print "ctls #{ @ctl_infos.size } atunds #{ @atund_infos.size } btunds #{ @btund_infos.size }"
         puts " dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } dnses #{ @dns_infos.size }"
         data2 = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
-        send_ctlmsg( ctld, data2, addrinfo )
+        send_ctlmsg( ctld, data2, ctl_addr )
       when A_NEW_SOURCE then
         return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -727,6 +727,7 @@ module Girl
 
           unless ctl_info then
             puts "#{ Time.new } got a new source but unknown im #{ im.inspect }"
+            send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), ctl_addr )
             return
           end
 
@@ -736,7 +737,7 @@ module Girl
 
           unless im then
             puts "#{ Time.new } got a new source but unknown ctl addr"
-            send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), addrinfo )
+            send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), ctl_addr )
             return
           end
         end
