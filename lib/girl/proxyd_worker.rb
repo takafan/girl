@@ -9,7 +9,7 @@ module Girl
       @reads = []
       @writes = []
       @roles = {}                      # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun / :dns
-      @ctl_infos = {}                  # im => { :ctl_addr, :ctld, :atund, :btund }
+      @ctl_infos = {}                  # im => { :ctl_addr, :ctld, :atunds, :btunds }
       @atund_infos = {}                # atund => { :im }
       @btund_infos = {}                # btund => { :im }
       @resolv_caches = {}              # domain => [ ip, created_at ]
@@ -129,7 +129,7 @@ module Girl
       dst_info[ :rbuff ] << data
 
       if dst_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-        # puts "debug dst.rbuff full"
+        puts "#{ Time.new } dst rbuff full"
         close_dst( dst )
       end
     end
@@ -230,6 +230,13 @@ module Girl
     end
 
     ##
+    # close dsts
+    #
+    def close_dsts( im )
+      @dst_infos.select{ | _, info | info[ :im ] == im }.keys.each{ | dst | close_dst( dst ) }
+    end
+
+    ##
     # close dst
     #
     def close_dst( dst )
@@ -270,18 +277,6 @@ module Girl
       @reads.delete( sock )
       @writes.delete( sock )
       @roles.delete( sock )
-    end
-
-    ##
-    # close socks in ctl
-    #
-    def close_socks_in_ctl( im )
-      return unless im
-      ctl_info = @ctl_infos[ im ]
-      return unless ctl_info
-      close_atund( ctl_info[ :atund ] )
-      close_btund( ctl_info[ :btund ] )
-      @dst_infos.select{ | _, info | info[ :im ] == im }.keys.each{ | dst | close_dst( dst ) }
     end
 
     ##
@@ -574,6 +569,17 @@ module Girl
     end
 
     ##
+    # send tund port
+    #
+    def send_tund_port( ctl_info )
+      atund_port = ctl_info[ :atunds ].sample.local_address.ip_port
+      btund_port = ctl_info[ :btunds ].sample.local_address.ip_port
+      puts "#{ Time.new } send tund port #{ atund_port } #{ btund_port }"
+      data = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
+      send_ctlmsg( ctl_info[ :ctld ], data, ctl_info[ :ctl_addr ] )
+    end
+
+    ##
     # set btun closing
     #
     def set_btun_closing( btun )
@@ -686,37 +692,38 @@ module Girl
         ctl_info = @ctl_infos[ im ]
 
         if ctl_info then
-          close_socks_in_ctl( im )
-        end
-
-        atund = new_a_tund
-        atund_port = atund.local_address.ip_port
-        btund = new_a_tund
-        btund_port = btund.local_address.ip_port
-        @atund_infos[ atund ] = { im: im }
-        @btund_infos[ btund ] = { im: im }
-        add_read( atund, :atund )
-        add_read( btund, :btund )
-
-        if ctl_info then
           ctl_info[ :ctl_addr ] = ctl_addr
           ctl_info[ :ctld ] = ctld
-          ctl_info[ :atund ] = atund
-          ctl_info[ :btund ] = btund
+          close_dsts( im )
         else
-          @ctl_infos[ im ] = {
-            ctl_addr: ctl_addr, # 地址
+          atunds = []
+          btunds = []
+
+          10.times do
+            atund = new_a_tund
+            btund = new_a_tund
+            @atund_infos[ atund ] = { im: im }
+            @btund_infos[ btund ] = { im: im }
+            add_read( atund, :atund )
+            add_read( btund, :btund )
+            atunds << atund
+            btunds << btund
+          end
+
+          ctl_info = {
+            ctl_addr: ctl_addr, # ctl地址
             ctld: ctld,         # 对应的ctld
-            atund: atund,       # 对应atund
-            btund: btund        # 对应btund
+            atunds: atunds,     # 对应atunds
+            btunds: btunds      # 对应btunds
           }
+
+          @ctl_infos[ im ] = ctl_info
         end
 
-        puts "#{ Time.new } got hello #{ addrinfo.ip_unpack.inspect } #{ im.inspect } #{ atund_port } #{ btund_port }"
+        puts "#{ Time.new } got hello #{ addrinfo.ip_unpack.inspect } #{ im.inspect }"
         print "ctls #{ @ctl_infos.size } atunds #{ @atund_infos.size } btunds #{ @btund_infos.size }"
         puts " dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } dnses #{ @dns_infos.size }"
-        data2 = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
-        send_ctlmsg( ctld, data2, ctl_addr )
+        send_tund_port( ctl_info )
       when A_NEW_SOURCE then
         return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -758,8 +765,10 @@ module Girl
         im, _ = @ctl_infos.find{ | _, info | info[ :ctl_addr ] == ctl_addr }
         return unless im
         # puts "debug got ctl fin #{ im.inspect }"
-        close_socks_in_ctl( im )
-        @ctl_infos.delete( im )
+        close_dsts( im )
+        ctl_info = @ctl_infos.delete( im )
+        ctl_info[ :atunds ].each{ | atund | close_atund( atund ) }
+        ctl_info[ :btunds ].each{ | btund | close_btund( btund ) }
       end
     end
 
@@ -833,7 +842,7 @@ module Girl
         atun, _ = atund.accept_nonblock
       rescue Exception => e
         puts "#{ Time.new } atund accept #{ e.class } #{ atund_info[ :im ].inspect }"
-        close_socks_in_ctl( atund_info[ :im ] )
+        close_dsts( atund_info[ :im ] )
         return
       end
 
@@ -865,7 +874,7 @@ module Girl
         btun, _ = btund.accept_nonblock
       rescue Exception => e
         puts "#{ Time.new } btund accept #{ e.class } #{ btund_info[ :im ].inspect }"
-        close_socks_in_ctl( btund_info[ :im ] )
+        close_dsts( btund_info[ :im ] )
         return
       end
 

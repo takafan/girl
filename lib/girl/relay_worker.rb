@@ -18,8 +18,9 @@ module Girl
       @roles = {}                      # sock => :dotr / :resolv / :rsv / :redir / :proxy / :src / :dst / :atun / :btun
       @is_direct_caches = {}           # ip => true / false
       @src_infos = ConcurrentHash.new  # src => { :src_id, :addrinfo, :proxy_type, :destination_domain, :destination_port,
-                                       #          :rbuff, :dst, :dst_created_at, :dst_connected, :ctl, :atun, :btun, :dst_id,
-                                       #          :wbuff, :created_at, :pending, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
+                                       #          :rbuff, :dst, :dst_created_at, :dst_connected, :dst_id, :ctl, :atun, :btun,
+                                       #          :new_tuns_at, :btun_responded, :renew_tuns_times, :wbuff,
+                                       #          :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
       @dst_infos = ConcurrentHash.new  # dst => { :src, :domain, :wbuff, :closing_write, :paused }
       @atun_infos = ConcurrentHash.new # atun => { :src, :domain, :wbuff, :closing }
       @btun_infos = ConcurrentHash.new # btun => { :src, :domain, :wbuff, :rbuff, :paused }
@@ -116,8 +117,6 @@ module Girl
         # puts "debug add a new source #{ src_info[ :src_id ] } #{ domain_port }"
         key = [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' )
         add_ctlmsg( key, domain_port )
-      else
-        src_info[ :pending ] = true
       end
     end
 
@@ -175,6 +174,15 @@ module Girl
     end
 
     ##
+    # add hello
+    #
+    def add_hello
+      hello = @custom.hello
+      puts "#{ Time.new } hello i'm #{ hello.inspect }"
+      add_ctlmsg( [ HELLO ].pack( 'C' ), hello )
+    end
+
+    ##
     # add read
     #
     def add_read( sock, role = nil )
@@ -196,7 +204,7 @@ module Girl
       src_info[ :rbuff ] << data
 
       if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-        # puts "debug src.rbuff full"
+        puts "#{ Time.new } src rbuff full"
         close_src( src )
       end
     end
@@ -456,6 +464,16 @@ module Girl
                   end
                 end
               end
+            elsif src_info[ :btun ] && !src_info[ :btun_responded ] && ( now - src_info[ :new_tuns_at ] >= BTUN_RESPOND_TIMEOUT ) then
+              if src_info[ :renew_tuns_times ] >= RENEW_TUNS_LIMIT then
+                puts "#{ Time.new } renew tuns out of limit #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
+                src_info[ :closing ] = true
+                next_tick
+              elsif @ctl && !@ctl_info[ :need_rehello ] then
+                puts "#{ Time.new } rehello #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
+                @ctl_info[ :need_rehello ] = true
+                next_tick
+              end
             end
           end
 
@@ -538,14 +556,14 @@ module Girl
         resends: [],          # 重传的key
         atund_addr: nil,      # atund地址
         btund_addr: nil,      # btund地址
+        need_rehello: false,  # 是否需要重新hello
         closing: false        # 准备关闭
       }
 
       add_read( ctl, :ctl )
-      hello = @custom.hello
-      puts "#{ Time.new } hello i'm #{ hello.inspect } #{ ctld_port }"
+      puts "#{ Time.new } new a ctl #{ ctld_port }"
       puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } rsvs #{ @rsv_infos.size }"
-      add_ctlmsg( [ HELLO ].pack( 'C' ), hello )
+      add_hello
     end
 
     ##
@@ -707,10 +725,10 @@ module Girl
       end
 
       if is_direct then
-        # puts "debug #{ addrinfo.inspect } hit directs"
+        # puts "debug hit directs #{ addrinfo.inspect }"
         new_a_dst( addrinfo, src )
       else
-        # puts "debug #{ addrinfo.inspect } go remote"
+        # puts "debug go remote #{ addrinfo.inspect }"
         new_a_remote( src )
       end
     end
@@ -719,7 +737,7 @@ module Girl
     # new tuns
     #
     def new_tuns( src_id, dst_id )
-      src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) && info[ :dst_id ].nil? }
+      src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) }
       return if src.nil? || src.closed?
 
       # puts "debug new atun and btun"
@@ -749,13 +767,14 @@ module Girl
 
       domain = src_info[ :destination_domain ]
       atun_wbuff = [ dst_id ].pack( 'n' )
+      src_rbuff = src_info[ :rbuff ]
+      idx = 0
+      # puts "debug copy src rbuff #{ src_rbuff.bytesize } to atun wbuff"
 
-      until src_info[ :rbuff ].empty? do
-        data = src_info[ :rbuff ][ 0, CHUNK_SIZE ]
-        data_size = data.bytesize
-        # puts "debug move src.rbuff #{ data_size } to atun.wbuff"
+      while idx < src_rbuff.bytesize do
+        data = src_rbuff[ idx, CHUNK_SIZE ]
         atun_wbuff << pack_a_chunk( data )
-        src_info[ :rbuff ] = src_info[ :rbuff ][ data_size..-1 ]
+        idx += data.bytesize
       end
 
       @atun_infos[ atun ] = {
@@ -775,9 +794,9 @@ module Girl
         paused: false      # 是否已暂停
       }
 
-      src_info[ :dst_id ] = dst_id
       src_info[ :atun ] = atun
       src_info[ :btun ] = btun
+      src_info[ :new_tuns_at ] = Time.new
       add_read( atun, :atun )
       add_read( btun, :btun )
       add_write( atun )
@@ -876,9 +895,14 @@ module Girl
       dotr.read_nonblock( READ_SIZE )
       @rsv_infos.select{ | _, info | info[ :closing ] }.keys.each{ | rsv | close_rsv( rsv ) }
 
-      if @ctl && !@ctl.closed? && @ctl_info[ :closing ] then
-        send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
-        close_ctl( @ctl )
+      if @ctl && !@ctl.closed? then
+        if @ctl_info[ :closing ] then
+          send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
+          close_ctl( @ctl )
+        elsif @ctl_info[ :need_rehello ] then
+          add_hello
+          @ctl_info[ :need_rehello ] = false
+        end
       end
 
       @src_infos.select{ | _, info | info[ :closing ] }.keys.each{ | src | close_src( src ) }
@@ -958,10 +982,13 @@ module Girl
         dst: nil,                    # :direct的场合，对应的dst
         dst_created_at: nil,         # :direct的场合，对应的dst的创建时间
         dst_connected: false,        # :direct的场合，对应的dst是否已连接
+        dst_id: nil,                 # 远端dst id
         ctl: nil,                    # :tunnel的场合，对应的ctl
         atun: nil,                   # :tunnel的场合，对应的atun
         btun: nil,                   # :tunnel的场合，对应的btun
-        dst_id: nil,                 # 远端dst id
+        new_tuns_at: nil,            # :remote的场合，建atun和btun的时间
+        btun_responded: false,       # :remote的场合，btun有收到流量
+        renew_tuns_times: 0,         # :remote的场合，重建atun和btun次数
         wbuff: '',                   # 从dst/btun读到的流量
         created_at: Time.new,        # 创建时间
         pending: false,              # 是否在收到TUND_PORT时补发A_NEW_SOURCE
@@ -998,21 +1025,29 @@ module Girl
 
       case ctl_num
       when TUND_PORT then
-        return if @ctl_info[ :atund_addr ] || data.bytesize != 5
+        return if data.bytesize != 5
         atund_port, btund_port = data[ 1, 4 ].unpack( 'nn' )
         puts "#{ Time.new } got tund port #{ atund_port } #{ btund_port }"
         @ctl_info[ :resends ].delete( [ HELLO ].pack( 'C' ) )
         @ctl_info[ :atund_addr ] = Socket.sockaddr_in( atund_port, @proxyd_host )
         @ctl_info[ :btund_addr ] = Socket.sockaddr_in( btund_port, @proxyd_host )
+        @src_infos.select{ | _, info | ( info[ :proxy_type ] == :remote ) && !info[ :dst_id ] }.keys.each{ | src | add_a_new_source( src ) }
 
-        @src_infos.select{ | src, info | info[ :pending ] }.each do | src, src_info |
-          add_a_new_source( src )
-          src_info[ :pending ] = false
+        @src_infos.select{ | _, info | info[ :btun ] && !info[ :btun_responded ] }.values.each do | src_info |
+          puts "#{ Time.new } renew tuns #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
+          close_atun( src_info[ :atun ] )
+          close_btun( src_info[ :btun ] )
+          new_tuns( src_info[ :src_id ], src_info[ :dst_id ] )
+          src_info[ :renew_tuns_times ] += 1
         end
       when PAIRED then
         return if data.bytesize != 11 || @ctl_info[ :atund_addr ].nil? || @ctl_info[ :btund_addr ].nil?
         src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
+        src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) && info[ :dst_id ].nil? }
+        return if src.nil? || src.closed?
+
         # puts "debug got paired #{ src_id } #{ dst_id }"
+        src_info[ :dst_id ] = dst_id
         @ctl_info[ :resends ].delete( [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) )
         new_tuns( src_id, dst_id )
       when UNKNOWN_CTL_ADDR then
@@ -1135,6 +1170,8 @@ module Girl
 
       btun_info = @btun_infos[ btun ]
       src = btun_info[ :src ]
+      src_info = @src_infos[ src ]
+      src_info[ :btun_responded ] = true
 
       begin
         data = btun.read_nonblock( READ_SIZE )
