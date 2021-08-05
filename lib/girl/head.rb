@@ -40,6 +40,9 @@ module Girl
   HEARTBEAT             = 22
   UNKNOWN_CTL_ADDR      = 23
   CTL_FIN               = 24
+  SOURCE_CLOSED         = 25
+  SOURCE_CLOSED_READ    = 26
+  SOURCE_CLOSED_WRITE   = 27
   TRAFF_INFOS           = 101
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   RESERVED_ROUTE = <<EOF

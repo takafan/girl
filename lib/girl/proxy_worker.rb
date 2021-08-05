@@ -349,6 +349,11 @@ module Girl
       # puts "debug close read src"
       src.close_read
       @reads.delete( src )
+      src_info = @src_infos[ src ]
+
+      if src_info[ :atun ] then
+        send_src_closed_read( src_info[ :src_id ] )
+      end
 
       if src.closed? then
         # puts "debug src closed"
@@ -383,9 +388,10 @@ module Girl
 
         if dst then
           close_dst( dst )
-        else
+        elsif src_info[ :atun ] then
           close_atun( src_info[ :atun ] )
           close_btun( src_info[ :btun ] )
+          send_src_closed( src_info[ :src_id ] )
         end
       end
     end
@@ -415,6 +421,11 @@ module Girl
       # puts "debug close write src"
       src.close_write
       @writes.delete( src )
+      src_info = @src_infos[ src ]
+
+      if src_info[ :atun ] then
+        send_src_closed_write( src_info[ :src_id ] )
+      end
 
       if src.closed? then
         # puts "debug src closed"
@@ -896,6 +907,33 @@ module Girl
     end
 
     ##
+    # send src closed
+    #
+    def send_src_closed( src_id )
+      return if @ctl.nil? || @ctl.closed?
+      data = "#{ [ SOURCE_CLOSED, src_id ].pack( 'CQ>' ) }#{ @im }"
+      send_ctlmsg( data )
+    end
+
+    ##
+    # send src closed read
+    #
+    def send_src_closed_read( src_id )
+      return if @ctl.nil? || @ctl.closed?
+      data = "#{ [ SOURCE_CLOSED_READ, src_id ].pack( 'CQ>' ) }#{ @im }"
+      send_ctlmsg( data )
+    end
+
+    ##
+    # send src closed write
+    #
+    def send_src_closed_write( src_id )
+      return if @ctl.nil? || @ctl.closed?
+      data = "#{ [ SOURCE_CLOSED_WRITE, src_id ].pack( 'CQ>' ) }#{ @im }"
+      send_ctlmsg( data )
+    end
+
+    ##
     # set atun closing
     #
     def set_atun_closing( atun )
@@ -1363,8 +1401,11 @@ module Girl
 
       btun_info = @btun_infos[ btun ]
       src = btun_info[ :src ]
-      src_info = @src_infos[ src ]
-      src_info[ :btun_responded ] = true
+
+      unless src.closed? then
+        src_info = @src_infos[ src ]
+        src_info[ :btun_responded ] = true
+      end
 
       begin
         data = btun.read_nonblock( READ_SIZE )

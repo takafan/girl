@@ -694,7 +694,6 @@ module Girl
         if ctl_info then
           ctl_info[ :ctl_addr ] = ctl_addr
           ctl_info[ :ctld ] = ctld
-          close_dsts( im )
         else
           atunds = []
           btunds = []
@@ -769,6 +768,30 @@ module Girl
         ctl_info = @ctl_infos.delete( im )
         ctl_info[ :atunds ].each{ | atund | close_atund( atund ) }
         ctl_info[ :btunds ].each{ | btund | close_btund( btund ) }
+      when SOURCE_CLOSED then
+        return if data.bytesize <= 9
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        im = data[ 9..-1 ]
+        return unless @ctl_infos.include?( im )
+        # puts "debug got src closed #{ src_id } #{ im.inspect }"
+        dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
+        close_dst( dst )
+      when SOURCE_CLOSED_READ then
+        return if data.bytesize <= 9
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        im = data[ 9..-1 ]
+        return unless @ctl_infos.include?( im )
+        # puts "debug got src closed read #{ src_id } #{ im.inspect }"
+        dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
+        set_dst_closing_write( dst )
+      when SOURCE_CLOSED_WRITE then
+        return if data.bytesize <= 9
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        im = data[ 9..-1 ]
+        return unless @ctl_infos.include?( im )
+        # puts "debug got src closed write #{ src_id } #{ im.inspect }"
+        dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
+        close_read_dst( dst )
       end
     end
 
@@ -908,7 +931,6 @@ module Girl
       rescue Exception => e
         # puts "debug read atun #{ e.class }"
         close_atun( atun )
-        set_dst_closing_write( dst )
         return
       end
 

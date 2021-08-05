@@ -1,0 +1,6 @@
+{
+  "server_ip": "1.2.3.4",
+  "server_port": 443,
+  "proxy_host": "127.0.0.1",
+  "proxy_port": 6666
+}
