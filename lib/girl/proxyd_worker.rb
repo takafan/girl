@@ -8,17 +8,15 @@ module Girl
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
-      @roles = {}                      # sock => :dotr / :ctld / :ctl / :infod / :dst / :atund / :btund / :atun / :btun / :dns
-      @ctl_infos = {}                  # im => { :ctl_addr, :ctld, :atunds, :btunds }
-      @atund_infos = {}                # atund => { :im }
-      @btund_infos = {}                # btund => { :im }
-      @resolv_caches = {}              # domain => [ ip, created_at ]
-      @dst_infos = ConcurrentHash.new  # dst => { :dst_id, :im, :domain, :connected, :rbuff, :atun, :btun, :wbuff, :src_id,
-                                       #          :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
-      @atun_infos = ConcurrentHash.new # atun => { :im, :dst, :domain, :rbuff, :paused }
-      @btun_infos = ConcurrentHash.new # btun => { :im, :dst, :domain, :wbuff, :closing }
-      @dns_infos = ConcurrentHash.new  # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
-      @traffs = ConcurrentHash.new     # im => { :in, :out }
+      @roles = {}                     # sock => :dotr / :ctld / :ctl / :infod / :dst / :tund / :tun / :dns
+      @ctl_infos = {}                 # im => { :ctl_addr, :ctld, :tunds }
+      @tund_infos = {}                # tund => { :im }
+      @resolv_caches = {}             # domain => [ ip, created_at ]
+      @dst_infos = ConcurrentHash.new # dst => { :dst_id, :im, :domain, :connected, :rbuff, :tun, :wbuff, :src_id,
+                                      #          :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
+      @tun_infos = ConcurrentHash.new # tun => { :im, :dst, :domain, :rbuff, :wbuff, :paused, :closing }
+      @dns_infos = ConcurrentHash.new # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
+      @traffs = ConcurrentHash.new    # im => { :in, :out }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
 
       new_a_pipe
@@ -51,14 +49,10 @@ module Girl
             read_infod( sock )
           when :dst then
             read_dst( sock )
-          when :atund then
-            read_atund( sock )
-          when :btund then
-            read_btund( sock )
-          when :atun then
-            read_atun( sock )
-          when :btun then
-            read_btun( sock )
+          when :tund then
+            read_tund( sock )
+          when :tun then
+            read_tun( sock )
           else
             puts "#{ Time.new } read unknown role #{ role }"
             close_sock( sock )
@@ -71,8 +65,8 @@ module Girl
           case role
           when :dst then
             write_dst( sock )
-          when :btun then
-            write_btun( sock )
+          when :tun then
+            write_tun( sock )
           else
             puts "#{ Time.new } write unknown role #{ role }"
             close_sock( sock )
@@ -95,17 +89,17 @@ module Girl
     private
 
     ##
-    # add btun wbuff
+    # add tun wbuff
     #
-    def add_btun_wbuff( btun, data )
-      return if btun.nil? || btun.closed?
-      btun_info = @btun_infos[ btun ]
-      return if btun_info[ :closing ]
-      btun_info[ :wbuff ] << data
-      add_write( btun )
+    def add_tun_wbuff( tun, data )
+      return if tun.nil? || tun.closed?
+      tun_info = @tun_infos[ tun ]
+      return if tun_info[ :closing ]
+      tun_info[ :wbuff ] << data
+      add_write( tun )
 
-      if btun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        dst = btun_info[ :dst ]
+      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        dst = tun_info[ :dst ]
 
         if dst then
           dst_info = @dst_infos[ dst ]
@@ -146,15 +140,15 @@ module Girl
       add_write( dst )
 
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        atun = dst_info[ :atun ]
+        tun = dst_info[ :tun ]
 
-        if atun then
-          atun_info = @atun_infos[ atun ]
+        if tun then
+          tun_info = @tun_infos[ tun ]
 
-          if atun_info then
-            puts "#{ Time.new } pause atun #{ atun_info[ :im ].inspect } #{ atun_info[ :domain ].inspect }"
-            @reads.delete( atun )
-            atun_info[ :paused ] = true
+          if tun_info then
+            puts "#{ Time.new } pause tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+            @reads.delete( tun )
+            tun_info[ :paused ] = true
           end
         end
       end
@@ -181,43 +175,23 @@ module Girl
     end
 
     ##
-    # close atun
+    # close tun
     #
-    def close_atun( atun )
-      return if atun.nil? || atun.closed?
-      # puts "debug close atun"
-      close_sock( atun )
-      @atun_infos.delete( atun )
+    def close_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close tun"
+      close_sock( tun )
+      @tun_infos.delete( tun )
     end
 
     ##
-    # close atund
+    # close tund
     #
-    def close_atund( atund )
-      return if atund.nil? || atund.closed?
-      # puts "debug close atund"
-      close_sock( atund )
-      @atund_infos.delete( atund )
-    end
-
-    ##
-    # close btun
-    #
-    def close_btun( btun )
-      return if btun.nil? || btun.closed?
-      # puts "debug close btun"
-      close_sock( btun )
-      @btun_infos.delete( btun )
-    end
-
-    ##
-    # close btund
-    #
-    def close_btund( btund )
-      return if btund.nil? || btund.closed?
-      # puts "debug close btund"
-      close_sock( btund )
-      @btund_infos.delete( btund )
+    def close_tund( tund )
+      return if tund.nil? || tund.closed?
+      # puts "debug close tund"
+      close_sock( tund )
+      @tund_infos.delete( tund )
     end
 
     ##
@@ -246,8 +220,7 @@ module Girl
       dst_info = @dst_infos.delete( dst )
 
       if dst_info then
-        close_atun( dst_info[ :atun ] )
-        close_btun( dst_info[ :btun ] )
+        close_tun( dst_info[ :tun ] )
       end
     end
 
@@ -265,6 +238,23 @@ module Girl
         @writes.delete( dst )
         @roles.delete( dst )
         @dst_infos.delete( dst )
+      end
+    end
+
+    ##
+    # close read tun
+    #
+    def close_read_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close read tun"
+      tun.close_read
+      @reads.delete( tun )
+
+      if tun.closed? then
+        # puts "debug tun closed"
+        @writes.delete( tun )
+        @roles.delete( tun )
+        @tun_infos.delete( tun )
       end
     end
 
@@ -297,6 +287,23 @@ module Girl
     end
 
     ##
+    # close write tun
+    #
+    def close_write_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close write tun"
+      tun.close_write
+      @writes.delete( tun )
+
+      if tun.closed? then
+        # puts "debug tun closed"
+        @reads.delete( tun )
+        @roles.delete( tun )
+        @tun_infos.delete( tun )
+      end
+    end
+
+    ##
     # loop check state
     #
     def loop_check_state
@@ -319,12 +326,12 @@ module Girl
               dst_info[ :closing ] = true
               next_tick
             elsif dst_info[ :paused ] then
-              btun = dst_info[ :btun ]
+              tun = dst_info[ :tun ]
 
-              if btun && !btun.closed? then
-                btun_info = @btun_infos[ btun ]
+              if tun && !tun.closed? then
+                tun_info = @tun_infos[ tun ]
 
-                if btun_info[ :wbuff ].bytesize < RESUME_BELOW then
+                if tun_info[ :wbuff ].bytesize < RESUME_BELOW then
                   puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
                   add_read( dst )
                   dst_info[ :paused ] = false
@@ -334,16 +341,16 @@ module Girl
             end
           end
 
-          @atun_infos.select{ | atun, info | !atun.closed? && info[ :paused ] }.each do | atun, atun_info |
-            dst = atun_info[ :dst ]
+          @tun_infos.select{ | tun, info | !tun.closed? && info[ :paused ] }.each do | tun, tun_info |
+            dst = tun_info[ :dst ]
 
             if dst && !dst.closed? then
               dst_info = @dst_infos[ dst ]
 
               if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "#{ Time.new } resume atun #{ atun_info[ :im ].inspect } #{ atun_info[ :domain ].inspect }"
-                add_read( atun )
-                atun_info[ :paused ] = false
+                puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+                add_read( tun )
+                tun_info[ :paused ] = false
                 next_tick
               end
             end
@@ -410,8 +417,7 @@ module Girl
         domain: domain,       # 目的地
         connected: false,     # 是否已连接
         rbuff: '',            # 对应的tun没准备好，暂存读到的流量
-        atun: nil,            # 对应的atun
-        btun: nil,            # 对应的btun
+        tun: nil,             # 对应的tun
         wbuff: '',            # 从tun读到的流量
         src_id: src_id,       # 近端src id
         created_at: Time.new, # 创建时间
@@ -569,26 +575,13 @@ module Girl
     end
 
     ##
-    # send tund port
+    # send tund ports
     #
-    def send_tund_port( ctl_info )
-      atund_port = ctl_info[ :atunds ].sample.local_address.ip_port
-      btund_port = ctl_info[ :btunds ].sample.local_address.ip_port
-      puts "#{ Time.new } send tund port #{ atund_port } #{ btund_port }"
-      data = [ TUND_PORT, atund_port, btund_port ].pack( 'Cnn' )
+    def send_tund_ports( ctl_info )
+      tund_ports = ctl_info[ :tunds ].map{ | tund | tund.local_address.ip_port }
+      puts "#{ Time.new } send tund ports #{ tund_ports.inspect }"
+      data = [ TUND_PORTS, *tund_ports ].pack( 'Cn*' )
       send_ctlmsg( ctl_info[ :ctld ], data, ctl_info[ :ctl_addr ] )
-    end
-
-    ##
-    # set btun closing
-    #
-    def set_btun_closing( btun )
-      return if btun.nil? || btun.closed?
-      btun_info = @btun_infos[ btun ]
-      return if btun_info[ :closing ]
-      # puts "debug set btun closing"
-      btun_info[ :closing ] = true
-      add_write( btun )
     end
 
     ##
@@ -601,6 +594,36 @@ module Girl
       # puts "debug set dst closing write"
       dst_info[ :closing_write ] = true
       add_write( dst )
+    end
+
+    ##
+    # set dst info tun
+    #
+    def set_dst_info_tun( dst_info, tun )
+      dst_info[ :tun ] = tun
+      # puts "debug add pong #{ dst_info[ :src_id ] }"
+      data = [ dst_info[ :src_id ] ].pack( 'Q>' )
+
+      until dst_info[ :rbuff ].empty? do
+        chunk_data = dst_info[ :rbuff ][ 0, CHUNK_SIZE ]
+        # puts "debug move dst rbuff to tun wbuff #{ chunk_data.bytesize }"
+        data << pack_a_chunk( chunk_data )
+        dst_info[ :rbuff ] = dst_info[ :rbuff ][ chunk_data.bytesize..-1 ]
+      end
+
+      add_tun_wbuff( tun, data )
+    end
+
+    ##
+    # set tun closing write
+    #
+    def set_tun_closing_write( tun )
+      return if tun.nil? || tun.closed?
+      tun_info = @tun_infos[ tun ]
+      return if tun_info[ :closing ] || tun_info[ :closing_write ]
+      # puts "debug set tun closing write"
+      tun_info[ :closing_write ] = true
+      add_write( tun )
     end
 
     ##
@@ -695,34 +718,28 @@ module Girl
           ctl_info[ :ctl_addr ] = ctl_addr
           ctl_info[ :ctld ] = ctld
         else
-          atunds = []
-          btunds = []
+          tunds = []
 
           10.times do
-            atund = new_a_tund
-            btund = new_a_tund
-            @atund_infos[ atund ] = { im: im }
-            @btund_infos[ btund ] = { im: im }
-            add_read( atund, :atund )
-            add_read( btund, :btund )
-            atunds << atund
-            btunds << btund
+            tund = new_a_tund
+            @tund_infos[ tund ] = { im: im }
+            add_read( tund, :tund )
+            tunds << tund
           end
 
           ctl_info = {
             ctl_addr: ctl_addr, # ctl地址
             ctld: ctld,         # 对应的ctld
-            atunds: atunds,     # 对应atunds
-            btunds: btunds      # 对应btunds
+            tunds: tunds,       # 对应tunds
           }
 
           @ctl_infos[ im ] = ctl_info
         end
 
         puts "#{ Time.new } got hello #{ addrinfo.ip_unpack.inspect } #{ im.inspect }"
-        print "ctls #{ @ctl_infos.size } atunds #{ @atund_infos.size } btunds #{ @btund_infos.size }"
-        puts " dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } dnses #{ @dns_infos.size }"
-        send_tund_port( ctl_info )
+        print "ctls #{ @ctl_infos.size } tunds #{ @tund_infos.size }"
+        puts " dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
+        send_tund_ports( ctl_info )
       when A_NEW_SOURCE then
         return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -766,8 +783,7 @@ module Girl
         # puts "debug got ctl fin #{ im.inspect }"
         close_dsts( im )
         ctl_info = @ctl_infos.delete( im )
-        ctl_info[ :atunds ].each{ | atund | close_atund( atund ) }
-        ctl_info[ :btunds ].each{ | btund | close_btund( btund ) }
+        ctl_info[ :tunds ].each{ | tund | close_tund( tund ) }
       when SOURCE_CLOSED then
         return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -829,115 +845,98 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
-      btun = dst_info[ :btun ]
+      tun = dst_info[ :tun ]
 
       begin
         data = dst.read_nonblock( CHUNK_SIZE )
       rescue Exception => e
         # puts "debug read dst #{ e.class }"
         close_read_dst( dst )
-        set_btun_closing( btun )
+        set_tun_closing_write( tun )
         return
       end
 
       @traffs[ dst_info[ :im ] ][ :in ] += data.bytesize
 
-      if btun then
-        add_btun_wbuff( btun, pack_a_chunk( data ) )
+      if tun && !tun.closed? then
+        add_tun_wbuff( tun, pack_a_chunk( data ) )
       else
-        # puts "debug add dst.rbuff #{ data.bytesize }"
+        # puts "debug add dst rbuff #{ data.bytesize }"
         add_dst_rbuff( dst, data )
       end
     end
 
     ##
-    # read atund
+    # read tund
     #
-    def read_atund( atund )
-      if atund.closed? then
-        puts "#{ Time.new } read atund but atund closed?"
+    def read_tund( tund )
+      if tund.closed? then
+        puts "#{ Time.new } read tund but tund closed?"
         return
       end
 
-      atund_info = @atund_infos[ atund ]
+      tund_info = @tund_infos[ tund ]
 
       begin
-        atun, _ = atund.accept_nonblock
+        tun, _ = tund.accept_nonblock
       rescue Exception => e
-        puts "#{ Time.new } atund accept #{ e.class } #{ atund_info[ :im ].inspect }"
-        close_dsts( atund_info[ :im ] )
+        puts "#{ Time.new } tund accept #{ e.class } #{ tund_info[ :im ].inspect }"
+        close_dsts( tund_info[ :im ] )
         return
       end
 
-      # puts "debug accept a atun"
+      # puts "debug accept a tun"
 
-      @atun_infos[ atun ] = {
-        im: atund_info[ :im ], # 标识
-        dst: nil,              # 对应dst
-        domain: nil,           # 目的地
-        rbuff: '',             # 暂存不满一块的流量
-        paused: false          # 是否暂停
+      @tun_infos[ tun ] = {
+        im: tund_info[ :im ], # 标识
+        dst: nil,             # 对应dst
+        domain: nil,          # 目的地
+        rbuff: '',            # 暂存不满一块的流量
+        wbuff: '',            # 写前
+        closing: false,       # 准备关闭
+        paused: false         # 是否暂停
       }
 
-      add_read( atun, :atun )
+      add_read( tun, :tun )
     end
 
     ##
-    # read btund
+    # read tun
     #
-    def read_btund( btund )
-      if btund.closed? then
-        puts "#{ Time.new } read btund but btund closed?"
+    def read_tun( tun )
+      if tun.closed? then
+        puts "#{ Time.new } read tun but tun closed?"
         return
       end
 
-      btund_info = @btund_infos[ btund ]
+      tun_info = @tun_infos[ tun ]
 
       begin
-        btun, _ = btund.accept_nonblock
+        data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e
-        puts "#{ Time.new } btund accept #{ e.class } #{ btund_info[ :im ].inspect }"
-        close_dsts( btund_info[ :im ] )
+        # puts "debug read tun #{ e.class }"
+        close_read_tun( tun )
         return
       end
 
-      # puts "debug accept a btun"
+      # # debug
+      # # let ping timeout
+      # unless @debug_let_ping_timeout then
+      #   sleep PING_TIMEOUT + 1
+      #   @debug_let_ping_timeout = true
+      #   return
+      # end
+      #
+      # # debug
+      # # let ping out of limit
+      # sleep PING_TIMEOUT + 1
 
-      @btun_infos[ btun ] = {
-        im: btund_info[ :im ],             # 标识
-        dst: nil,                          # 对应dst
-        domain: nil,                       # 目的地
-        wbuff: '',                         # 写前
-        closing: false                     # 准备关闭
-      }
-
-      add_read( btun, :btun )
-    end
-
-    ##
-    # read atun
-    #
-    def read_atun( atun )
-      if atun.closed? then
-        puts "#{ Time.new } read atun but atun closed?"
-        return
-      end
-
-      atun_info = @atun_infos[ atun ]
-      dst = atun_info[ :dst ]
-
-      begin
-        data = atun.read_nonblock( READ_SIZE )
-      rescue Exception => e
-        # puts "debug read atun #{ e.class }"
-        close_atun( atun )
-        return
-      end
+      dst = tun_info[ :dst ]
 
       unless dst then
         if data.bytesize < 2 then
-          # puts "debug unexpect data length? #{ data.bytesize }"
-          close_atun( atun )
+          puts "#{ Time.new } tun ping less than 2?"
+          close_tun( tun )
           return
         end
 
@@ -946,22 +945,25 @@ module Girl
 
         unless dst then
           # puts "debug dst not found #{ dst_id }"
-          close_atun( atun )
+          close_tun( tun )
           return
         end
 
-        # puts "debug set atun.dst #{ dst_id }"
-        atun_info[ :dst ] = dst
-        atun_info[ :domain ] = dst_info[ :domain ]
-        dst_info[ :atun ] = atun
+        tun_info[ :dst ] = dst
+        tun_info[ :domain ] = dst_info[ :domain ]
+        set_dst_info_tun( dst_info, tun )
         data = data[ 2..-1 ]
+
+        if data.empty? then
+          return
+        end
       end
 
-      data = "#{ atun_info[ :rbuff ] }#{ data }"
+      data = "#{ tun_info[ :rbuff ] }#{ data }"
 
       loop do
         if data.bytesize <= 2 then
-          atun_info[ :rbuff ] = data
+          tun_info[ :rbuff ] = data
           break
         end
 
@@ -969,7 +971,7 @@ module Girl
 
         if len == 0 then
           puts "#{ Time.new } zero traffic len?"
-          close_atun( atun )
+          close_tun( tun )
           close_dst( dst )
           return
         end
@@ -977,7 +979,7 @@ module Girl
         chunk = data[ 2, len ]
 
         if chunk.bytesize < len then
-          atun_info[ :rbuff ] = data
+          tun_info[ :rbuff ] = data
           break
         end
 
@@ -985,69 +987,6 @@ module Girl
         add_dst_wbuff( dst, chunk )
         data = data[ ( 2 + len )..-1 ]
       end
-    end
-
-    ##
-    # read btun
-    #
-    def read_btun( btun )
-      if btun.closed? then
-        puts "#{ Time.new } read btun but btun closed?"
-        return
-      end
-
-      btun_info = @btun_infos[ btun ]
-
-      begin
-        data = btun.read_nonblock( READ_SIZE )
-      rescue Exception => e
-        # puts "debug read btun #{ e.class }"
-        close_btun( btun )
-        return
-      end
-
-      if data.bytesize != 2 then
-        close_btun( btun )
-        return
-      end
-
-      @traffs[ btun_info[ :im ] ][ :in ] += data.bytesize
-      dst = btun_info[ :dst ]
-
-      if dst then
-        # puts "debug unexpect data?"
-        close_btun( btun )
-        return
-      end
-
-      dst_id = data.unpack( 'n' ).first
-      dst, dst_info = @dst_infos.find{ | _, info | info[ :dst_id ] == dst_id }
-
-      unless dst then
-        # puts "debug dst #{ dst_id } not found"
-        close_btun( btun )
-        return
-      end
-
-      # puts "debug set btun.dst #{ dst_id }"
-      btun_info[ :dst ] = dst
-      btun_info[ :domain ] = dst_info[ :domain ]
-
-      unless dst_info[ :rbuff ].empty? then
-        data2 = ''
-
-        until dst_info[ :rbuff ].empty? do
-          _data = dst_info[ :rbuff ][ 0, CHUNK_SIZE ]
-          data_size = _data.bytesize
-          # puts "debug move dst.rbuff to btun.wbuff"
-          data2 << pack_a_chunk( _data )
-          dst_info[ :rbuff ] = dst_info[ :rbuff ][ data_size..-1 ]
-        end
-
-        add_btun_wbuff( btun, data2 )
-      end
-
-      dst_info[ :btun ] = btun
     end
 
     ##
@@ -1061,7 +1000,7 @@ module Girl
 
       dst_info = @dst_infos[ dst ]
       dst_info[ :connected ] = true
-      atun = dst_info[ :atun ]
+      tun = dst_info[ :tun ]
       data = dst_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1081,7 +1020,7 @@ module Girl
       rescue Exception => e
         # puts "debug write dst #{ e.class }"
         close_write_dst( dst )
-        close_atun( atun )
+        close_read_tun( tun )
         return
       end
 
@@ -1091,24 +1030,24 @@ module Girl
     end
 
     ##
-    # write btun
+    # write tun
     #
-    def write_btun( btun )
-      if btun.closed? then
-        puts "#{ Time.new } write btun but btun closed?"
+    def write_tun( tun )
+      if tun.closed? then
+        puts "#{ Time.new } write tun but tun closed?"
         return
       end
 
-      btun_info = @btun_infos[ btun ]
-      dst = btun_info[ :dst ]
-      data = btun_info[ :wbuff ]
+      tun_info = @tun_infos[ tun ]
+      dst = tun_info[ :dst ]
+      data = tun_info[ :wbuff ]
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if btun_info[ :closing ] then
-          close_btun( btun )
+        if tun_info[ :closing_write ] then
+          close_write_tun( tun )
         else
-          @writes.delete( btun )
+          @writes.delete( tun )
         end
 
         return
@@ -1116,17 +1055,17 @@ module Girl
 
       # 写入
       begin
-        written = btun.write_nonblock( data )
+        written = tun.write_nonblock( data )
       rescue Exception => e
-        # puts "debug write btun #{ e.class }"
-        close_btun( btun )
+        # puts "debug write tun #{ e.class }"
+        close_tun( tun )
         close_read_dst( dst )
         return
       end
 
       data = data[ written..-1 ]
-      btun_info[ :wbuff ] = data
-      @traffs[ btun_info[ :im ] ][ :out ] += written
+      tun_info[ :wbuff ] = data
+      @traffs[ tun_info[ :im ] ][ :out ] += written
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]

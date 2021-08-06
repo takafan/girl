@@ -14,17 +14,15 @@ module Girl
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
-      @roles = {}                      # sock => :dotr / :redir / :ctl / :src / :dst / :atun / :btun / :dns
-      @resolv_caches = {}              # domain => [ ip, created_at ]
-      @is_direct_caches = {}           # ip => true / false
-      @src_infos = ConcurrentHash.new  # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
-                                       #          :is_connect, :rbuff, :dst, :dst_created_at, :dst_connected, :dst_id, :ctl, :atun, :btun,
-                                       #          :new_tuns_at, :btun_responded, :renew_tuns_times, :wbuff,
-                                       #          :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
-      @dst_infos = ConcurrentHash.new  # dst => { :src, :domain, :wbuff, :closing_write, :paused }
-      @atun_infos = ConcurrentHash.new # atun => { :src, :domain, :wbuff, :closing }
-      @btun_infos = ConcurrentHash.new # btun => { :src, :domain, :wbuff, :rbuff, :paused }
-      @dns_infos = ConcurrentHash.new  # dns => { :domain, :src, :created_at, :closing }
+      @roles = {}                     # sock => :dotr / :redir / :ctl / :src / :dst / :tun / :dns
+      @resolv_caches = {}             # domain => [ ip, created_at ]
+      @is_direct_caches = {}          # ip => true / false
+      @src_infos = ConcurrentHash.new # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
+                                      #          :is_connect, :rbuff, :dst, :dst_created_at, :dst_connected, :dst_id, :ctl, :tun, :renew_tun_times,
+                                      #          :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
+      @dst_infos = ConcurrentHash.new # dst => { :src, :domain, :wbuff, :closing_write, :paused }
+      @tun_infos = ConcurrentHash.new # tun => { :src, :domain, :wbuff, :rbuff, :closing, :paused }
+      @dns_infos = ConcurrentHash.new # dns => { :domain, :src, :created_at, :closing }
       @local_addrinfos = Socket.ip_address_list
 
       new_a_pipe
@@ -57,10 +55,8 @@ module Girl
             read_src( sock )
           when :dst then
             read_dst( sock )
-          when :atun then
-            read_atun( sock )
-          when :btun then
-            read_btun( sock )
+          when :tun then
+            read_tun( sock )
           else
             puts "#{ Time.new } read unknown role #{ role }"
             close_sock( sock )
@@ -75,10 +71,8 @@ module Girl
             write_src( sock )
           when :dst then
             write_dst( sock )
-          when :atun then
-            write_atun( sock )
-          when :btun then
-            write_btun( sock )
+          when :tun then
+            write_tun( sock )
           else
             puts "#{ Time.new } write unknown role #{ role }"
             close_sock( sock )
@@ -105,38 +99,14 @@ module Girl
     # add a new source
     #
     def add_a_new_source( src )
+      return if @ctl.nil? || @ctl.closed? || @ctl_info[ :tund_addrs ].nil?
       src_info = @src_infos[ src ]
-
-      if @ctl && !@ctl.closed? && @ctl_info[ :atund_addr ] then
-        destination_domain = src_info[ :destination_domain ]
-        destination_port = src_info[ :destination_port ]
-        domain_port = [ destination_domain, destination_port ].join( ':' )
-        puts "#{ Time.new } add a new source #{ src_info[ :src_id ] } #{ domain_port }"
-        key = [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' )
-        add_ctlmsg( key, "#{ domain_port }/#{ @im }" )
-      end
-    end
-
-    ##
-    # add atun wbuff
-    #
-    def add_atun_wbuff( atun, data )
-      return if atun.nil? || atun.closed?
-      atun_info = @atun_infos[ atun ]
-      return if atun_info[ :closing ]
-      atun_info[ :wbuff ] << data
-      add_write( atun )
-
-      if atun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        src = atun_info[ :src ]
-
-        if src then
-          src_info = @src_infos[ src ]
-          puts "#{ Time.new } pause remote src #{ src_info[ :destination_domain ].inspect }"
-          @reads.delete( src )
-          src_info[ :paused ] = true
-        end
-      end
+      destination_domain = src_info[ :destination_domain ]
+      destination_port = src_info[ :destination_port ]
+      domain_port = [ destination_domain, destination_port ].join( ':' )
+      puts "#{ Time.new } add a new source #{ src_info[ :src_id ] } #{ domain_port }"
+      key = [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' )
+      add_ctlmsg( key, "#{ domain_port }/#{ @im }" )
     end
 
     ##
@@ -162,9 +132,31 @@ module Girl
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         src = dst_info[ :src ]
 
-        if src then
+        if src && !src.closed? then
           src_info = @src_infos[ src ]
           puts "#{ Time.new } pause direct src #{ src_info[ :destination_domain ].inspect }"
+          @reads.delete( src )
+          src_info[ :paused ] = true
+        end
+      end
+    end
+
+    ##
+    # add tun wbuff
+    #
+    def add_tun_wbuff( tun, data )
+      return if tun.nil? || tun.closed?
+      tun_info = @tun_infos[ tun ]
+      return if tun_info[ :closing ]
+      tun_info[ :wbuff ] << data
+      add_write( tun )
+
+      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        src = tun_info[ :src ]
+
+        if src && !src.closed? then
+          src_info = @src_infos[ src ]
+          puts "#{ Time.new } pause remote src #{ src_info[ :destination_domain ].inspect }"
           @reads.delete( src )
           src_info[ :paused ] = true
         end
@@ -245,15 +237,15 @@ module Girl
             dst_info[ :paused ] = true
           end
         else
-          btun = src_info[ :btun ]
+          tun = src_info[ :tun ]
 
-          if btun then
-            btun_info = @btun_infos[ btun ]
+          if tun then
+            tun_info = @tun_infos[ tun ]
 
-            if btun_info then
-              puts "#{ Time.new } pause btun #{ btun_info[ :domain ].inspect }"
-              @reads.delete( btun )
-              btun_info[ :paused ] = true
+            if tun_info then
+              puts "#{ Time.new } pause tun #{ tun_info[ :domain ].inspect }"
+              @reads.delete( tun )
+              tun_info[ :paused ] = true
             end
           end
         end
@@ -276,26 +268,6 @@ module Girl
       last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
       last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
       ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
-    end
-
-    ##
-    # close atun
-    #
-    def close_atun( atun )
-      return if atun.nil? || atun.closed?
-      # puts "debug close atun"
-      close_sock( atun )
-      @atun_infos.delete( atun )
-    end
-
-    ##
-    # close btun
-    #
-    def close_btun( btun )
-      return if btun.nil? || btun.closed?
-      # puts "debug close btun"
-      close_sock( btun )
-      @btun_infos.delete( btun )
     end
 
     ##
@@ -351,7 +323,7 @@ module Girl
       @reads.delete( src )
       src_info = @src_infos[ src ]
 
-      if src_info[ :atun ] then
+      if src_info[ :tun ] then
         send_src_closed_read( src_info[ :src_id ] )
       end
 
@@ -360,6 +332,23 @@ module Girl
         @writes.delete( src )
         @roles.delete( src )
         @src_infos.delete( src )
+      end
+    end
+
+    ##
+    # close read tun
+    #
+    def close_read_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close read tun"
+      tun.close_read
+      @reads.delete( tun )
+
+      if tun.closed? then
+        # puts "debug tun closed"
+        @writes.delete( tun )
+        @roles.delete( tun )
+        @tun_infos.delete( tun )
       end
     end
 
@@ -388,12 +377,21 @@ module Girl
 
         if dst then
           close_dst( dst )
-        elsif src_info[ :atun ] then
-          close_atun( src_info[ :atun ] )
-          close_btun( src_info[ :btun ] )
+        elsif src_info[ :tun ] then
+          close_tun( src_info[ :tun ] )
           send_src_closed( src_info[ :src_id ] )
         end
       end
+    end
+
+    ##
+    # close tun
+    #
+    def close_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close tun"
+      close_sock( tun )
+      @tun_infos.delete( tun )
     end
 
     ##
@@ -423,7 +421,7 @@ module Girl
       @writes.delete( src )
       src_info = @src_infos[ src ]
 
-      if src_info[ :atun ] then
+      if src_info[ :tun ] then
         send_src_closed_write( src_info[ :src_id ] )
       end
 
@@ -432,6 +430,23 @@ module Girl
         @reads.delete( src )
         @roles.delete( src )
         @src_infos.delete( src )
+      end
+    end
+
+    ##
+    # close write tun
+    #
+    def close_write_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close write tun"
+      tun.close_write
+      @writes.delete( tun )
+
+      if tun.closed? then
+        # puts "debug tun closed"
+        @reads.delete( tun )
+        @roles.delete( tun )
+        @tun_infos.delete( tun )
       end
     end
 
@@ -451,7 +466,7 @@ module Girl
               else
                 is_expire = ( now - src_info[ :dst_created_at ] >= EXPIRE_CONNECTING )
               end
-            elsif src_info[ :atun ] then
+            elsif src_info[ :tun ] then
               is_expire = check_has_traffic( src_info, EXPIRE_AFTER )
             else
               is_expire = check_has_traffic( src_info, EXPIRE_NEW )
@@ -474,28 +489,18 @@ module Girl
                   next_tick
                 end
               else
-                atun = src_info[ :atun ]
+                tun = src_info[ :tun ]
 
-                if atun && !atun.closed? then
-                  atun_info = @atun_infos[ atun ]
+                if tun && !tun.closed? then
+                  tun_info = @tun_infos[ tun ]
 
-                  if atun_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  if tun_info[ :wbuff ].bytesize < RESUME_BELOW then
                     puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
                     add_read( src )
                     src_info[ :paused ] = false
                     next_tick
                   end
                 end
-              end
-            elsif src_info[ :btun ] && !src_info[ :btun_responded ] && ( now - src_info[ :new_tuns_at ] >= BTUN_RESPOND_TIMEOUT ) then
-              if src_info[ :renew_tuns_times ] >= RENEW_TUNS_LIMIT then
-                puts "#{ Time.new } renew tuns out of limit #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
-                src_info[ :closing ] = true
-                next_tick
-              elsif @ctl && !@ctl_info[ :need_rehello ] then
-                puts "#{ Time.new } rehello #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
-                @ctl_info[ :need_rehello ] = true
-                next_tick
               end
             end
           end
@@ -515,18 +520,24 @@ module Girl
             end
           end
 
-          @btun_infos.select{ | btun, info | !btun.closed? && info[ :paused ] }.each do | btun, btun_info |
-            src = btun_info[ :src ]
+          @tun_infos.select{ | tun, info | !tun.closed? }.each do | tun, tun_info |
+            if tun_info[ :paused ] then
+              src = tun_info[ :src ]
 
-            if src && !src.closed? then
-              src_info = @src_infos[ src ]
+              if src && !src.closed? then
+                src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "#{ Time.new } resume btun #{ btun_info[ :domain ].inspect }"
-                add_read( btun )
-                btun_info[ :paused ] = false
-                next_tick
+                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "#{ Time.new } resume tun #{ tun_info[ :domain ].inspect }"
+                  add_read( tun )
+                  tun_info[ :paused ] = false
+                  next_tick
+                end
               end
+            elsif !tun_info[ :pong ] && ( now - tun_info[ :created_at ] >= PING_TIMEOUT ) then
+              puts "#{ Time.new } ping timeout #{ tun_info[ :domain ].inspect }"
+              tun_info[ :is_ping_timeout ] = true
+              next_tick
             end
           end
 
@@ -577,15 +588,13 @@ module Girl
       @ctl_info = {
         ctld_addr: ctld_addr, # ctld地址
         resends: [],          # 重传的key
-        atund_addr: nil,      # atund地址
-        btund_addr: nil,      # btund地址
-        need_rehello: false,  # 是否需要重新hello
+        tund_addrs: nil,      # tund地址
         closing: false        # 准备关闭
       }
 
       add_read( ctl, :ctl )
       puts "#{ Time.new } new a ctl #{ ctld_port }"
-      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } atuns #{ @atun_infos.size } btuns #{ @btun_infos.size } dnses #{ @dns_infos.size }"
+      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
       add_hello
     end
 
@@ -636,10 +645,10 @@ module Girl
 
       if src_info[ :proxy_proto ] == :http then
         if src_info[ :is_connect ] then
-          # puts "debug add src.wbuff http ok"
+          # puts "debug add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
         elsif src_info[ :rbuff ] then
-          # puts "debug move src.rbuff to dst.wbuff"
+          # puts "debug move src rbuff to dst wbuff"
           dst_info[ :wbuff ] << src_info[ :rbuff ]
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
@@ -684,9 +693,57 @@ module Girl
     #
     def new_a_remote( src )
       return if src.nil? || src.closed?
+
+      if @ctl.nil? || @ctl.closed? then
+        new_a_ctl
+      end
+
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :remote
       add_a_new_source( src )
+    end
+
+    ##
+    # new a tun
+    #
+    def new_a_tun( src )
+      return if src.nil? || src.closed? || @ctl_info[ :tund_addrs ].nil?
+      src_info = @src_infos[ src ]
+      dst_id = src_info[ :dst_id ]
+      return unless dst_id
+
+      tund_addr = @ctl_info[ :tund_addrs ].sample
+      # puts "debug new a tun #{ Addrinfo.new( tund_addr ).inspect }"
+
+      tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+
+      begin
+        tun.connect_nonblock( tund_addr )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "#{ Time.new } connect tund #{ e.class }"
+        tun.close
+        return
+      end
+
+      domain = src_info[ :destination_domain ]
+
+      @tun_infos[ tun ] = {
+        src: src,                                # 对应src
+        domain: src_info[ :destination_domain ], # 目的地
+        rbuff: '',                               # 暂存不满一块的流量
+        wbuff: [ dst_id ].pack( 'n' ),           # 写前
+        created_at: Time.new,                    # 创建时间
+        pong: false,                             # 是否有回应
+        is_ping_timeout: false,                  # ping超时
+        closing: false,                          # 准备关闭
+        paused: false                            # 是否已暂停
+      }
+
+      src_info[ :tun ] = tun
+      add_read( tun, :tun )
+      add_write( tun )
     end
 
     ##
@@ -729,76 +786,6 @@ module Girl
     end
 
     ##
-    # new tuns
-    #
-    def new_tuns( src_id, dst_id )
-      src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) }
-      return if src.nil? || src.closed?
-
-      # puts "debug new atun and btun"
-      atun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      atun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-
-      begin
-        atun.connect_nonblock( @ctl_info[ :atund_addr ] )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "#{ Time.new } connect atund #{ e.class }"
-        atun.close
-        return
-      end
-
-      btun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      btun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-
-      begin
-        btun.connect_nonblock( @ctl_info[ :btund_addr ] )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "#{ Time.new } connect btund #{ e.class }"
-        btun.close
-        return
-      end
-
-      domain = src_info[ :destination_domain ]
-      atun_wbuff = [ dst_id ].pack( 'n' )
-      src_rbuff = src_info[ :rbuff ]
-      idx = 0
-      # puts "debug copy src rbuff #{ src_rbuff.bytesize } to atun wbuff"
-
-      while idx < src_rbuff.bytesize do
-        data = src_rbuff[ idx, CHUNK_SIZE ]
-        atun_wbuff << pack_a_chunk( data )
-        idx += data.bytesize
-      end
-
-      @atun_infos[ atun ] = {
-        src: src,          # 对应src
-        domain: domain,    # 目的地
-        wbuff: atun_wbuff, # 写前
-        closing: false     # 准备关闭
-      }
-
-      btun_wbuff = [ dst_id ].pack( 'n' )
-
-      @btun_infos[ btun ] = {
-        src: src,          # 对应src
-        domain: domain,    # 目的地
-        wbuff: btun_wbuff, # 写前
-        rbuff: '',         # 暂存不满一块的流量
-        paused: false      # 是否已暂停
-      }
-
-      src_info[ :atun ] = atun
-      src_info[ :btun ] = btun
-      src_info[ :new_tuns_at ] = Time.new
-      add_read( atun, :atun )
-      add_read( btun, :btun )
-      add_write( atun )
-      add_write( btun )
-    end
-
-    ##
     # next tick
     #
     def next_tick
@@ -811,6 +798,24 @@ module Girl
     def pack_a_chunk( data )
       data = @custom.encode( data )
       "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
+    end
+
+    ##
+    # renew a tun
+    #
+    def renew_a_tun( tun )
+      tun_info = close_tun( tun )
+      src = tun_info[ :src ]
+      return if src.nil? || src.closed?
+      src_info = @src_infos[ src ]
+
+      if src_info[ :renew_tun_times ] >= RENEW_TUN_LIMIT then
+        puts "#{ Time.new } renew a tun out of limit #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
+        close_src( src )
+      else
+        new_a_tun( src )
+        src_info[ :renew_tun_times ] += 1
+      end
     end
 
     ##
@@ -934,18 +939,6 @@ module Girl
     end
 
     ##
-    # set atun closing
-    #
-    def set_atun_closing( atun )
-      return if atun.nil? || atun.closed?
-      atun_info = @atun_infos[ atun ]
-      return if atun_info[ :closing ]
-      # puts "debug set atun closing"
-      atun_info[ :closing ] = true
-      add_write( atun )
-    end
-
-    ##
     # set ctl closing
     #
     def set_ctl_closing
@@ -978,23 +971,65 @@ module Girl
     end
 
     ##
+    # set tun closing write
+    #
+    def set_tun_closing_write( tun )
+      return if tun.nil? || tun.closed?
+      tun_info = @tun_infos[ tun ]
+      return if tun_info[ :closing ] || tun_info[ :closing_write ]
+      tun_info[ :closing_write ] = true
+      add_write( tun )
+    end
+
+    ##
+    # set tun info pong
+    #
+    def set_tun_info_pong( tun, src )
+      tun_info = @tun_infos[ tun ]
+      tun_info[ :pong ] = true
+      src_info = @src_infos[ src ]
+
+      unless src_info[ :pong ] then
+        if src_info[ :proxy_proto ] == :http then
+          if src_info[ :is_connect ] then
+            # puts "debug add src wbuff http ok"
+            add_src_wbuff( src, HTTP_OK )
+          end
+        elsif src_info[ :proxy_proto ] == :socks5 then
+          add_socks5_conn_reply( src )
+        end
+
+        src_info[ :pong ] = true
+      end
+
+      unless src_info[ :rbuff ].empty? then
+        data = ''
+
+        until src_info[ :rbuff ].empty? do
+          # puts "debug move src rbuff to tun wbuff #{ src_info[ :rbuff ].bytesize }"
+          chunk_data = src_info[ :rbuff ][ 0, CHUNK_SIZE ]
+          data << pack_a_chunk( chunk_data )
+          src_info[ :rbuff ] = src_info[ :rbuff ][ chunk_data.bytesize..-1 ]
+        end
+
+        add_tun_wbuff( tun, data )
+      end
+    end
+
+    ##
     # read dotr
     #
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
       @dns_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dns | close_dns( dns ) }
 
-      if @ctl && !@ctl.closed? then
-        if @ctl_info[ :closing ] then
-          send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
-          close_ctl( @ctl )
-        elsif @ctl_info[ :need_rehello ] then
-          add_hello
-          @ctl_info[ :need_rehello ] = false
-        end
+      if @ctl && !@ctl.closed? && @ctl_info[ :closing ] then
+        send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
+        close_ctl( @ctl )
       end
 
       @src_infos.select{ | _, info | info[ :closing ] }.keys.each{ | src | close_src( src ) }
+      @tun_infos.select{ | _, info | info[ :is_ping_timeout ] }.keys.each{ | tun | renew_a_tun( tun ) }
     end
 
     ##
@@ -1025,12 +1060,10 @@ module Girl
         dst_connected: false,    # :direct的场合，对应的dst是否已连接
         dst_id: nil,             # :remote的场合，远端dst id
         ctl: nil,                # :remote的场合，对应的ctl
-        atun: nil,               # :remote的场合，对应的atun
-        btun: nil,               # :remote的场合，对应的btun
-        new_tuns_at: nil,        # :remote的场合，建atun和btun的时间
-        btun_responded: false,   # :remote的场合，btun有收到流量
-        renew_tuns_times: 0,     # :remote的场合，重建atun和btun次数
-        wbuff: '',               # 从dst/btun读到的流量
+        tun: nil,                # :remote的场合，对应的tun
+        renew_tun_times: 0,      # :remote的场合，重建tun次数
+        pong: false,             # :remote的场合，连接已确认
+        wbuff: '',               # 从dst/tun读到的流量
         created_at: Time.new,    # 创建时间
         last_recv_at: nil,       # 上一次收到新流量（由dst收到，或者由tun收到）的时间
         last_sent_at: nil,       # 上一次发出流量（由dst发出，或者由tun发出）的时间
@@ -1040,10 +1073,6 @@ module Girl
       }
 
       add_read( src, :src )
-
-      if @ctl.nil? || @ctl.closed? then
-        new_a_ctl
-      end
     end
 
     ##
@@ -1105,24 +1134,15 @@ module Girl
       ctl_num = data[ 0 ].unpack( 'C' ).first
 
       case ctl_num
-      when TUND_PORT then
-        return if data.bytesize != 5
-        atund_port, btund_port = data[ 1, 4 ].unpack( 'nn' )
-        puts "#{ Time.new } got tund port #{ atund_port } #{ btund_port }"
+      when TUND_PORTS then
+        return if data.bytesize != 21
+        tund_ports = data[ 1, 20 ].unpack( 'n*' )
+        puts "#{ Time.new } got tund ports #{ tund_ports.inspect }"
         @ctl_info[ :resends ].delete( [ HELLO ].pack( 'C' ) )
-        @ctl_info[ :atund_addr ] = Socket.sockaddr_in( atund_port, @proxyd_host )
-        @ctl_info[ :btund_addr ] = Socket.sockaddr_in( btund_port, @proxyd_host )
+        @ctl_info[ :tund_addrs ] = tund_ports.map{ | tund_port | Socket.sockaddr_in( tund_port, @proxyd_host ) }
         @src_infos.select{ | _, info | ( info[ :proxy_type ] == :remote ) && !info[ :dst_id ] }.keys.each{ | src | add_a_new_source( src ) }
-
-        @src_infos.select{ | _, info | info[ :btun ] && !info[ :btun_responded ] }.values.each do | src_info |
-          puts "#{ Time.new } renew tuns #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
-          close_atun( src_info[ :atun ] )
-          close_btun( src_info[ :btun ] )
-          new_tuns( src_info[ :src_id ], src_info[ :dst_id ] )
-          src_info[ :renew_tuns_times ] += 1
-        end
       when PAIRED then
-        return if data.bytesize != 11 || @ctl_info[ :atund_addr ].nil? || @ctl_info[ :btund_addr ].nil?
+        return if data.bytesize != 11 || @ctl_info[ :tund_addrs ].nil?
         src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
         src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) && info[ :dst_id ].nil? }
         return if src.nil? || src.closed?
@@ -1130,16 +1150,7 @@ module Girl
         # puts "debug got paired #{ src_id } #{ dst_id }"
         src_info[ :dst_id ] = dst_id
         @ctl_info[ :resends ].delete( [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) )
-        new_tuns( src_id, dst_id )
-
-        if src_info[ :proxy_proto ] == :http then
-          if src_info[ :is_connect ] then
-            # puts "debug add src.wbuff http ok"
-            add_src_wbuff( src, HTTP_OK )
-          end
-        elsif src_info[ :proxy_proto ] == :socks5 then
-          add_socks5_conn_reply( src )
-        end
+        new_a_tun( src )
       when UNKNOWN_CTL_ADDR then
         puts "#{ Time.new } got unknown ctl addr"
         close_ctl( ctl )
@@ -1168,7 +1179,7 @@ module Girl
         if dst then
           set_dst_closing_write( dst )
         else
-          set_atun_closing( src_info[ :atun ] )
+          set_tun_closing_write( src_info[ :tun ] )
         end
 
         return
@@ -1322,12 +1333,12 @@ module Girl
           close_src( src )
         end
       when :remote then
-        atun = src_info[ :atun ]
+        tun = src_info[ :tun ]
 
-        if atun then
-          add_atun_wbuff( atun, pack_a_chunk( data ) )
+        if tun then
+          add_tun_wbuff( tun, pack_a_chunk( data ) )
         else
-          # puts "debug add src.rbuff #{ data.bytesize }"
+          # puts "debug add src rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
         end
       when :direct then
@@ -1367,60 +1378,60 @@ module Girl
     end
 
     ##
-    # read atun
+    # read tun
     #
-    def read_atun( atun )
-      if atun.closed? then
-        puts "#{ Time.new } read atun but atun closed?"
+    def read_tun( tun )
+      if tun.closed? then
+        puts "#{ Time.new } read tun but tun closed?"
         return
       end
 
-      atun_info = @atun_infos[ atun ]
-      src = atun_info[ :src ]
+      tun_info = @tun_infos[ tun ]
+      src = tun_info[ :src ]
 
-      begin
-        data = atun.read_nonblock( READ_SIZE )
-      rescue Exception => e
-        # puts "debug read atun #{ e.class }"
-        close_atun( atun )
-        close_read_src( src )
+      if src.closed? then
+        close_tun( tun )
         return
-      end
-
-      # puts "debug unexpect data?"
-    end
-
-    ##
-    # read btun
-    #
-    def read_btun( btun )
-      if btun.closed? then
-        puts "#{ Time.new } read btun but btun closed?"
-        return
-      end
-
-      btun_info = @btun_infos[ btun ]
-      src = btun_info[ :src ]
-
-      unless src.closed? then
-        src_info = @src_infos[ src ]
-        src_info[ :btun_responded ] = true
       end
 
       begin
-        data = btun.read_nonblock( READ_SIZE )
+        data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "debug read btun #{ e.class }"
-        close_btun( btun )
+        # puts "debug read tun #{ e.class }"
+        close_read_tun( tun )
         set_src_closing_write( src )
         return
       end
 
-      data = "#{ btun_info[ :rbuff ] }#{ data }"
+      unless tun_info[ :pong ] then
+        if data.bytesize < 8 then
+          puts "#{ Time.new } pong length less than 8?"
+          close_tun( tun )
+          return
+        end
+
+        src_info = @src_infos[ src ]
+
+        if data[ 0, 8 ].unpack( 'Q>' ).first != src_info[ :src_id ] then
+          puts "#{ Time.new } invalid pong?"
+          close_tun( tun )
+          return
+        end
+
+        # puts "debug got pong #{ data.bytesize }"
+        set_tun_info_pong( tun, src )
+        data = data[ 8..-1 ]
+
+        if data.empty? then
+          return
+        end
+      end
+
+      data = "#{ tun_info[ :rbuff ] }#{ data }"
 
       loop do
         if data.bytesize <= 2 then
-          btun_info[ :rbuff ] = data
+          tun_info[ :rbuff ] = data
           break
         end
 
@@ -1428,7 +1439,7 @@ module Girl
 
         if len == 0 then
           puts "#{ Time.new } zero traffic len?"
-          close_btun( btun )
+          close_tun( tun )
           close_src( src )
           return
         end
@@ -1436,7 +1447,7 @@ module Girl
         chunk = data[ 2, len ]
 
         if chunk.bytesize < len then
-          btun_info[ :rbuff ] = data
+          tun_info[ :rbuff ] = data
           break
         end
 
@@ -1480,7 +1491,7 @@ module Girl
         if dst then
           close_read_dst( dst )
         else
-          close_btun( src_info[ :btun ] )
+          close_read_tun( src_info[ :tun ] )
         end
 
         return
@@ -1539,24 +1550,24 @@ module Girl
     end
 
     ##
-    # write atun
+    # write tun
     #
-    def write_atun( atun )
-      if atun.closed? then
-        puts "#{ Time.new } write atun but atun closed?"
+    def write_tun( tun )
+      if tun.closed? then
+        puts "#{ Time.new } write tun but tun closed?"
         return
       end
 
-      atun_info = @atun_infos[ atun ]
-      src = atun_info[ :src ]
-      data = atun_info[ :wbuff ]
+      tun_info = @tun_infos[ tun ]
+      src = tun_info[ :src ]
+      data = tun_info[ :wbuff ]
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if atun_info[ :closing ] then
-          close_atun( atun )
+        if tun_info[ :closing_write ] then
+          close_write_tun( tun )
         else
-          @writes.delete( atun )
+          @writes.delete( tun )
         end
 
         return
@@ -1564,47 +1575,22 @@ module Girl
 
       # 写入
       begin
-        written = atun.write_nonblock( data )
+        written = tun.write_nonblock( data )
       rescue Exception => e
-        # puts "debug write atun #{ e.class }"
-        close_atun( atun )
+        # puts "debug write tun #{ e.class }"
+        close_write_tun( tun )
         close_read_src( src )
         return
       end
 
+      # puts "debug write tun #{ written }"
       data = data[ written..-1 ]
-      atun_info[ :wbuff ] = data
+      tun_info[ :wbuff ] = data
 
       if src && !src.closed? then
         src_info = @src_infos[ src ]
         src_info[ :last_sent_at ] = Time.new
       end
-    end
-
-    ##
-    # write btun
-    #
-    def write_btun( btun )
-      if btun.closed? then
-        puts "#{ Time.new } write btun but btun closed?"
-        return
-      end
-
-      btun_info = @btun_infos[ btun ]
-      data = btun_info[ :wbuff ]
-
-      # 写入dst id
-      begin
-        written = btun.write( data )
-      rescue Exception => e
-        # puts "debug write btun #{ e.class }"
-        src = btun_info[ :src ]
-        close_btun( btun )
-        close_src( src )
-        return
-      end
-
-      @writes.delete( btun )
     end
 
   end

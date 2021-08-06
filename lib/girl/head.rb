@@ -12,8 +12,8 @@ module Girl
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
   RESEND_LIMIT          = 5                # ctlmsg重传次数
   RESEND_INTERVAL       = 1                # ctlmsg重传间隔
-  BTUN_RESPOND_TIMEOUT  = 2                # btun建立连接后多久没有响应，超时
-  RENEW_TUNS_LIMIT      = 3                # 重建atun和btun次数
+  PING_TIMEOUT          = 2                # tun建立连接后多久没有响应，超时
+  RENEW_TUN_LIMIT       = 3                # 重建tun次数
   RENEW_CTL_INTERVAL    = 10               # p1心跳间隔
   ROOM_TITLE_LIMIT      = 16               # 房间名称字数
   HELLO                 = 1
@@ -43,6 +43,7 @@ module Girl
   SOURCE_CLOSED         = 25
   SOURCE_CLOSED_READ    = 26
   SOURCE_CLOSED_WRITE   = 27
+  TUND_PORTS            = 28
   TRAFF_INFOS           = 101
   HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
   RESERVED_ROUTE = <<EOF
