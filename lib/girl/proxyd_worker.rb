@@ -12,9 +12,9 @@ module Girl
       @ctl_infos = {}                 # im => { :ctl_addr, :ctld, :tunds }
       @tund_infos = {}                # tund => { :im }
       @resolv_caches = {}             # domain => [ ip, created_at ]
-      @dst_infos = ConcurrentHash.new # dst => { :dst_id, :im, :domain, :connected, :rbuff, :tun, :wbuff, :src_id,
-                                      #          :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
-      @tun_infos = ConcurrentHash.new # tun => { :im, :dst, :domain, :rbuff, :wbuff, :paused, :closing }
+      @dst_infos = ConcurrentHash.new # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id,
+                                      #          :created_at, :connected, :last_add_wbuff_at, :closing_write, :closing, :paused }
+      @tun_infos = ConcurrentHash.new # tun => { :im, :dst, :domain, :rbuff, :wbuff, :created_at, :last_add_wbuff_at, :closing, :paused }
       @dns_infos = ConcurrentHash.new # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
       @traffs = ConcurrentHash.new    # im => { :in, :out }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
@@ -89,31 +89,6 @@ module Girl
     private
 
     ##
-    # add tun wbuff
-    #
-    def add_tun_wbuff( tun, data )
-      return if tun.nil? || tun.closed?
-      tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing ]
-      tun_info[ :wbuff ] << data
-      add_write( tun )
-
-      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        dst = tun_info[ :dst ]
-
-        if dst then
-          dst_info = @dst_infos[ dst ]
-
-          if dst_info then
-            puts "#{ Time.new } pause dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
-            @reads.delete( dst )
-            dst_info[ :paused ] = true
-          end
-        end
-      end
-    end
-
-    ##
     # add dst rbuff
     #
     def add_dst_rbuff( dst, data )
@@ -136,7 +111,7 @@ module Girl
       dst_info = @dst_infos[ dst ]
       return if dst_info[ :closing ]
       dst_info[ :wbuff ] << data
-      dst_info[ :last_recv_at ] = Time.new
+      dst_info[ :last_add_wbuff_at ] = Time.new
       add_write( dst )
 
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
@@ -167,31 +142,37 @@ module Girl
     end
 
     ##
+    # add tun wbuff
+    #
+    def add_tun_wbuff( tun, data )
+      return if tun.nil? || tun.closed?
+      tun_info = @tun_infos[ tun ]
+      return if tun_info[ :closing ]
+      tun_info[ :wbuff ] << data
+      tun_info[ :last_add_wbuff_at ] = Time.new
+      add_write( tun )
+
+      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        dst = tun_info[ :dst ]
+
+        if dst then
+          dst_info = @dst_infos[ dst ]
+
+          if dst_info then
+            puts "#{ Time.new } pause dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+            @reads.delete( dst )
+            dst_info[ :paused ] = true
+          end
+        end
+      end
+    end
+
+    ##
     # add write
     #
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
-    end
-
-    ##
-    # close tun
-    #
-    def close_tun( tun )
-      return if tun.nil? || tun.closed?
-      # puts "debug close tun"
-      close_sock( tun )
-      @tun_infos.delete( tun )
-    end
-
-    ##
-    # close tund
-    #
-    def close_tund( tund )
-      return if tund.nil? || tund.closed?
-      # puts "debug close tund"
-      close_sock( tund )
-      @tund_infos.delete( tund )
     end
 
     ##
@@ -201,13 +182,6 @@ module Girl
       return if dns.nil? || dns.closed?
       close_sock( dns )
       @dns_infos.delete( dns )
-    end
-
-    ##
-    # close dsts
-    #
-    def close_dsts( im )
-      @dst_infos.select{ | _, info | info[ :im ] == im }.keys.each{ | dst | close_dst( dst ) }
     end
 
     ##
@@ -222,6 +196,13 @@ module Girl
       if dst_info then
         close_tun( dst_info[ :tun ] )
       end
+    end
+
+    ##
+    # close dsts
+    #
+    def close_dsts( im )
+      @dst_infos.select{ | _, info | info[ :im ] == im }.keys.each{ | dst | close_dst( dst ) }
     end
 
     ##
@@ -270,6 +251,26 @@ module Girl
     end
 
     ##
+    # close tun
+    #
+    def close_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close tun"
+      close_sock( tun )
+      @tun_infos.delete( tun )
+    end
+
+    ##
+    # close tund
+    #
+    def close_tund( tund )
+      return if tund.nil? || tund.closed?
+      # puts "debug close tund"
+      close_sock( tund )
+      @tund_infos.delete( tund )
+    end
+
+    ##
     # close write dst
     #
     def close_write_dst( dst )
@@ -314,9 +315,7 @@ module Girl
 
           @dst_infos.select{ | dst, _ | !dst.closed? }.each do | dst, dst_info |
             if dst_info[ :connected ] then
-              last_recv_at = dst_info[ :last_recv_at ] || dst_info[ :created_at ]
-              last_sent_at = dst_info[ :last_sent_at ] || dst_info[ :created_at ]
-              is_expire = ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER )
+              is_expire = ( now - ( dst_info[ :last_add_wbuff_at ] || dst_info[ :created_at ] ) >= EXPIRE_AFTER )
             else
               is_expire = ( now - dst_info[ :created_at ] >= EXPIRE_CONNECTING )
             end
@@ -341,17 +340,23 @@ module Girl
             end
           end
 
-          @tun_infos.select{ | tun, info | !tun.closed? && info[ :paused ] }.each do | tun, tun_info |
-            dst = tun_info[ :dst ]
+          @tun_infos.select{ | tun, info | !tun.closed? }.each do | tun, tun_info |
+            if now - ( tun_info[ :last_add_wbuff_at ] || tun_info[ :created_at ] ) >= EXPIRE_AFTER then
+              puts "#{ Time.new } expire tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+              tun_info[ :closing ] = true
+              next_tick
+            elsif tun_info[ :paused ] then
+              dst = tun_info[ :dst ]
 
-            if dst && !dst.closed? then
-              dst_info = @dst_infos[ dst ]
+              if dst && !dst.closed? then
+                dst_info = @dst_infos[ dst ]
 
-              if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
-                add_read( tun )
-                tun_info[ :paused ] = false
-                next_tick
+                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+                  add_read( tun )
+                  tun_info[ :paused ] = false
+                  next_tick
+                end
               end
             end
           end
@@ -412,20 +417,19 @@ module Girl
       dst_id = dst.local_address.ip_port
 
       @dst_infos[ dst ] = {
-        dst_id: dst_id,       # dst_id
-        im: im,               # 标识
-        domain: domain,       # 目的地
-        connected: false,     # 是否已连接
-        rbuff: '',            # 对应的tun没准备好，暂存读到的流量
-        tun: nil,             # 对应的tun
-        wbuff: '',            # 从tun读到的流量
-        src_id: src_id,       # 近端src id
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到新流量（由tun收到）的时间
-        last_sent_at: nil,    # 上一次发出流量（由tun发出）的时间
-        closing_write: false, # 准备关闭写
-        closing: false,       # 准备关闭
-        paused: false         # 已暂停
+        dst_id: dst_id,         # dst_id
+        im: im,                 # 标识
+        domain: domain,         # 目的地
+        rbuff: '',              # 对应的tun没准备好，暂存读到的流量
+        tun: nil,               # 对应的tun
+        wbuff: '',              # 从tun读到的流量
+        src_id: src_id,         # 近端src id
+        created_at: Time.new,   # 创建时间
+        connected: false,       # 是否已连接
+        last_add_wbuff_at: nil, # 上一次加写前的时间
+        closing_write: false,   # 准备关闭写
+        closing: false,         # 准备关闭
+        paused: false           # 已暂停
       }
 
       add_read( dst, :dst )
@@ -633,6 +637,7 @@ module Girl
       dotr.read_nonblock( READ_SIZE )
       @dns_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dns | close_dns( dns ) }
       @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
+      @tun_infos.select{ | _, info | info[ :closing ] }.keys.each{ | tun | close_tun( tun ) }
     end
 
     ##
@@ -888,13 +893,15 @@ module Girl
       # puts "debug accept a tun"
 
       @tun_infos[ tun ] = {
-        im: tund_info[ :im ], # 标识
-        dst: nil,             # 对应dst
-        domain: nil,          # 目的地
-        rbuff: '',            # 暂存不满一块的流量
-        wbuff: '',            # 写前
-        closing: false,       # 准备关闭
-        paused: false         # 是否暂停
+        im: tund_info[ :im ],   # 标识
+        dst: nil,               # 对应dst
+        domain: nil,            # 目的地
+        rbuff: '',              # 暂存不满一块的流量
+        wbuff: '',              # 写前
+        created_at: Time.new,   # 创建时间
+        last_add_wbuff_at: nil, # 上一次加写前的时间
+        closing: false,         # 准备关闭
+        paused: false           # 是否暂停
       }
 
       add_read( tun, :tun )
@@ -1066,11 +1073,6 @@ module Girl
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
       @traffs[ tun_info[ :im ] ][ :out ] += written
-
-      if dst && !dst.closed? then
-        dst_info = @dst_infos[ dst ]
-        dst_info[ :last_sent_at ] = Time.new
-      end
     end
 
   end

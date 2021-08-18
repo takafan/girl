@@ -18,10 +18,10 @@ module Girl
       @roles = {}                      # sock => :dotr / :resolv / :rsv / :redir / :proxy / :src / :dst / :tun
       @is_direct_caches = {}           # ip => true / false
       @src_infos = ConcurrentHash.new  # src => { :src_id, :addrinfo, :proxy_type, :destination_domain, :destination_port,
-                                       #          :rbuff, :dst, :dst_created_at, :dst_connected, :dst_id, :ctl, :tun, :renew_tuns_times,
-                                       #          :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing_write, :closing, :paused }
-      @dst_infos = ConcurrentHash.new  # dst => { :src, :domain, :wbuff, :closing_write, :paused }
-      @tun_infos = ConcurrentHash.new # tun => { :src, :domain, :wbuff, :rbuff, :closing, :paused }
+                                       #          :rbuff, :dst, :dst_id, :ctl, :tun, :renew_tuns_times,
+                                       #          :wbuff, :created_at, :closing_write, :closing, :paused }
+      @dst_infos = ConcurrentHash.new  # dst => { :src, :domain, :wbuff, :created_at, :connected, :closing_write, :paused }
+      @tun_infos = ConcurrentHash.new # tun => { :src, :domain, :wbuff, :rbuff, :created_at, :pong, :is_ping_timeout, :closing, :paused }
       @rsv_infos = ConcurrentHash.new  # rsv => { :src_addr, :created_at }
       @local_addrinfos = Socket.ip_address_list
 
@@ -145,28 +145,6 @@ module Girl
     end
 
     ##
-    # add tun wbuff
-    #
-    def add_tun_wbuff( tun, data )
-      return if tun.nil? || tun.closed?
-      tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing ]
-      tun_info[ :wbuff ] << data
-      add_write( tun )
-
-      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        src = tun_info[ :src ]
-
-        if src && !src.closed? then
-          src_info = @src_infos[ src ]
-          puts "#{ Time.new } pause remote src #{ src_info[ :destination_domain ].inspect }"
-          @reads.delete( src )
-          src_info[ :paused ] = true
-        end
-      end
-    end
-
-    ##
     # add hello
     #
     def add_hello
@@ -210,7 +188,6 @@ module Girl
       src_info = @src_infos[ src ]
       return if src_info[ :closing ]
       src_info[ :wbuff ] << data
-      src_info[ :last_recv_at ] = Time.new
       add_write( src )
 
       if src_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
@@ -241,21 +218,33 @@ module Girl
     end
 
     ##
+    # add tun wbuff
+    #
+    def add_tun_wbuff( tun, data )
+      return if tun.nil? || tun.closed?
+      tun_info = @tun_infos[ tun ]
+      return if tun_info[ :closing ]
+      tun_info[ :wbuff ] << data
+      add_write( tun )
+
+      if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        src = tun_info[ :src ]
+
+        if src && !src.closed? then
+          src_info = @src_infos[ src ]
+          puts "#{ Time.new } pause remote src #{ src_info[ :destination_domain ].inspect }"
+          @reads.delete( src )
+          src_info[ :paused ] = true
+        end
+      end
+    end
+
+    ##
     # add write
     #
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
-    end
-
-    ##
-    # check has traffic
-    #
-    def check_has_traffic( src_info, expire_after )
-      now = Time.new
-      last_recv_at = src_info[ :last_recv_at ] || src_info[ :created_at ]
-      last_sent_at = src_info[ :last_sent_at ] || src_info[ :created_at ]
-      ( now - last_recv_at >= expire_after ) && ( now - last_sent_at >= expire_after )
     end
 
     ##
@@ -272,7 +261,11 @@ module Girl
     def close_dst( dst )
       return if dst.nil? || dst.closed?
       close_sock( dst )
-      @dst_infos.delete( dst )
+      dst_info = @dst_infos.delete( dst )
+
+      if dst_info then
+        close_src( dst_info[ :src ] )
+      end
     end
 
     ##
@@ -438,63 +431,51 @@ module Girl
           sleep CHECK_STATE_INTERVAL
           now = Time.new
 
-          @src_infos.select{ | src, _ | !src.closed? }.each do | src, src_info |
-            if src_info[ :dst ] then
-              if src_info[ :dst_connected ] then
-                is_expire = check_has_traffic( src_info, EXPIRE_AFTER )
-              else
-                is_expire = ( now - src_info[ :dst_created_at ] >= EXPIRE_CONNECTING )
+          @src_infos.select{ | src, info | !src.closed? && info[ :paused ] }.each do | src, src_info |
+            dst = src_info[ :dst ]
+
+            if dst then
+              dst_info = @dst_infos[ dst ]
+
+              if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
+                puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
+                add_read( src )
+                src_info[ :paused ] = false
+                next_tick
               end
-            elsif src_info[ :tun ] then
-              is_expire = check_has_traffic( src_info, EXPIRE_AFTER )
             else
-              is_expire = check_has_traffic( src_info, EXPIRE_NEW )
-            end
+              tun = src_info[ :tun ]
 
-            if is_expire then
-              puts "#{ Time.new } expire src #{ src_info[ :addrinfo ].inspect } #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
-              src_info[ :closing ] = true
-              next_tick
-            elsif src_info[ :paused ] then
-              dst = src_info[ :dst ]
+              if tun && !tun.closed? then
+                tun_info = @tun_infos[ tun ]
 
-              if dst then
-                dst_info = @dst_infos[ dst ]
-
-                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
+                if tun_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
                   add_read( src )
                   src_info[ :paused ] = false
                   next_tick
-                end
-              else
-                tun = src_info[ :tun ]
-
-                if tun && !tun.closed? then
-                  tun_info = @tun_infos[ tun ]
-
-                  if tun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                    puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
-                    add_read( src )
-                    src_info[ :paused ] = false
-                    next_tick
-                  end
                 end
               end
             end
           end
 
-          @dst_infos.select{ | dst, info | !dst.closed? && info[ :paused ] }.each do | dst, dst_info |
-            src = dst_info[ :src ]
+          @dst_infos.select{ | dst, info | !dst.closed? }.each do | dst, dst_info |
+            if !dst_info[ :connected ] && ( now - dst_info[ :created_at ] >= EXPIRE_CONNECTING ) then
+              puts "#{ Time.new } expire dst #{ dst_info[ :domain ].inspect }"
+              dst_info[ :closing ] = true
+              next_tick
+            elsif dst_info[ :paused ] then
+              src = dst_info[ :src ]
 
-            if src && !src.closed? then
-              src_info = @src_infos[ src ]
+              if src && !src.closed? then
+                src_info = @src_infos[ src ]
 
-              if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
-                add_read( dst )
-                dst_info[ :paused ] = false
-                next_tick
+                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
+                  puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
+                  add_read( dst )
+                  dst_info[ :paused ] = false
+                  next_tick
+                end
               end
             end
           end
@@ -613,14 +594,16 @@ module Girl
         src: src,             # 对应src
         domain: domain,       # 目的地
         wbuff: '',            # 写前
+        created_at: Time.new, # 创建时间
+        connected: false,     # 是否已连接
         closing_write: false, # 准备关闭写
+        closing: false,       # 准备关闭
         paused: false         # 是否已暂停
       }
 
       @dst_infos[ dst ] = dst_info
       src_info[ :proxy_type ] = :direct
       src_info[ :dst ] = dst
-      src_info[ :dst_created_at ] = Time.new
 
       if src_info[ :rbuff ] then
         # puts "debug move src.rbuff to dst.wbuff"
@@ -968,7 +951,7 @@ module Girl
         close_ctl( @ctl )
       end
 
-      @src_infos.select{ | _, info | info[ :closing ] }.keys.each{ | src | close_src( src ) }
+      @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
       @tun_infos.select{ | _, info | info[ :is_ping_timeout ] }.keys.each{ | tun | renew_a_tun( tun ) }
     end
 
@@ -1044,8 +1027,6 @@ module Girl
         destination_port: dest_port, # 目的地端口
         rbuff: '',                   # 读到的流量
         dst: nil,                    # :direct的场合，对应的dst
-        dst_created_at: nil,         # :direct的场合，对应的dst的创建时间
-        dst_connected: false,        # :direct的场合，对应的dst是否已连接
         dst_id: nil,                 # 远端dst id
         ctl: nil,                    # :tunnel的场合，对应的ctl
         tun: nil,                    # :remote的场合，对应的tun
@@ -1053,8 +1034,6 @@ module Girl
         pong: false,                 # :remote的场合，连接已确认
         wbuff: '',                   # 从dst/tun读到的流量
         created_at: Time.new,        # 创建时间
-        last_recv_at: nil,           # 上一次收到新流量（由dst收到，或者由tun收到）的时间
-        last_sent_at: nil,           # 上一次发出流量（由dst发出，或者由tun发出）的时间
         closing_write: false,        # 准备关闭写
         closing: false,              # 准备关闭
         paused: false                # 是否暂停
@@ -1324,13 +1303,8 @@ module Girl
       end
 
       dst_info = @dst_infos[ dst ]
+      dst_info[ :connected ] = true
       src = dst_info[ :src ]
-      src_info = @src_infos[ src ]
-
-      if src && !src.closed? then
-        src_info[ :dst_connected ] = true
-      end
-
       data = dst_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1359,10 +1333,6 @@ module Girl
 
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
-
-      if src && !src.closed? then
-        src_info[ :last_sent_at ] = Time.new
-      end
     end
 
     ##
@@ -1402,11 +1372,6 @@ module Girl
       # puts "debug write tun #{ written }"
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
-
-      if src && !src.closed? then
-        src_info = @src_infos[ src ]
-        src_info[ :last_sent_at ] = Time.new
-      end
     end
 
   end
