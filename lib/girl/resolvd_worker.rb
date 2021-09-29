@@ -8,8 +8,8 @@ module Girl
       @custom = Girl::ResolvCustom.new
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @reads = []
-      @roles = {}                     # sock => :dotr / :resolvd / :dst
-      @dst_infos = ConcurrentHash.new # dst => { :resolvd, :src_addr, :created_at, :closing }
+      @roles = {}     # sock => :dotr / :resolvd / :dst
+      @dst_infos = {} # dst => { :resolvd, :src_addr, :created_at, :closing }
 
       new_a_pipe
       new_resolvds( resolvd_port )
@@ -20,7 +20,6 @@ module Girl
     #
     def looping
       puts "#{ Time.new } looping"
-      loop_check_state
 
       loop do
         rs, _ = IO.select( @reads )
@@ -88,24 +87,6 @@ module Girl
     end
 
     ##
-    # loop check state
-    #
-    def loop_check_state
-      Thread.new do
-        loop do
-          sleep CHECK_STATE_INTERVAL
-          now = Time.new
-
-          @dst_infos.select{ | dst, info | !dst.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dst_info |
-            puts "#{ Time.new } expire dst"
-            dst_info[ :closing ] = true
-            next_tick
-          end
-        end
-      end
-    end
-
-    ##
     # new a dst
     #
     def new_a_dst( resolvd, src_addr, data )
@@ -113,15 +94,28 @@ module Girl
       dst.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
 
       # puts "debug new a dst"
-      @dst_infos[ dst ] = {
+      dst_info = {
         resolvd: resolvd,
         src_addr: src_addr,
         created_at: Time.new,
         closing: false
       }
 
+      @dst_infos[ dst ] = dst_info
       add_read( dst, :dst )
       send_data( dst, @nameserver_addr, data )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        @mutex.synchronize do
+          if dst && !dst.closed? then
+            puts "#{ Time.new } expire dst"
+            dst_info[ :closing ] = true
+            next_tick
+          end
+        end
+      end
     end
 
     ##

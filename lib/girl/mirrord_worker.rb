@@ -12,7 +12,7 @@ module Girl
       @room_infos = {}               # im => { :mirrord, :p1_addrinfo, :updated_at, :p1d, :p2d }
       @p1d_infos = {}                # p1d => { :im }
       @p2d_infos = {}                # p2d => { :im }
-      @p1_infos = ConcurrentHash.new # p1 => { :addrinfo, :im, :p2, :wbuff, :closing_write, :paused }
+      @p1_infos = {}                 # p1 => { :addrinfo, :im, :p2, :wbuff, :closing_write, :paused }
       @p2_infos = ConcurrentHash.new # p2 => { :addrinfo, :im, :p1, :rbuff, :wbuff, :created_at,
                                      #         :last_recv_at, :last_sent_at, :closing, :closing_write, :paused }
 
@@ -27,7 +27,7 @@ module Girl
     #
     def looping
       puts "#{ Time.new } looping"
-      loop_check_state
+      loop_check_expire
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -305,15 +305,15 @@ module Girl
     end
 
     ##
-    # loop check state
+    # loop check expire
     #
-    def loop_check_state
+    def loop_check_expire
       Thread.new do
         loop do
-          sleep CHECK_STATE_INTERVAL
+          sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          @p2_infos.select{ | p2, _ | !p2.closed? }.each do | p2, p2_info |
+          @p2_infos.select{ | p2, _ | !p2.closed? }.values.each do | p2_info |
             last_recv_at = p2_info[ :last_recv_at ] || p2_info[ :created_at ]
             last_sent_at = p2_info[ :last_sent_at ] || p2_info[ :created_at ]
             is_expire = ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER )
@@ -322,34 +322,6 @@ module Girl
               puts "#{ Time.new } expire p2 #{ p2_info[ :im ].inspect } #{ p2_info[ :addrinfo ].inspect }"
               p2_info[ :closing ] = true
               next_tick
-            elsif p2_info[ :paused ] then
-              p1 = p2_info[ :p1 ]
-
-              if p1 && !p1.closed? then
-                p1_info = @p1_infos[ p1 ]
-
-                if p1_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume p2 #{ p2_info[ :im ].inspect } #{ p2_info[ :addrinfo ].inspect }"
-                  add_read( p2 )
-                  p2_info[ :paused ] = false
-                  next_tick
-                end
-              end
-            end
-          end
-
-          @p1_infos.select{ | p1, info | !p1.closed? && info[ :paused ] }.each do | p1, p1_info |
-            p2 = p1_info[ :p2 ]
-
-            if p2 && !p2.closed? then
-              p2_info = @p2_infos[ p2 ]
-
-              if p2_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "#{ Time.new } resume p1 #{ p1_info[ :im ].inspect } #{ p1_info[ :addrinfo ].inspect }"
-                add_read( p1 )
-                p1_info[ :paused ] = false
-                next_tick
-              end
             end
           end
         end
@@ -733,6 +705,13 @@ module Girl
 
       if p2 && !p2.closed? then
         p2_info = @p2_infos[ p2 ]
+
+        if p2_info[ :paused ] && ( p1_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume p2 #{ p2_info[ :im ].inspect } #{ p2_info[ :addrinfo ].inspect }"
+          add_read( p2 )
+          p2_info[ :paused ] = false
+        end
+
         p2_info[ :last_sent_at ] = Time.new
       end
     end
@@ -747,6 +726,7 @@ module Girl
       end
 
       p2_info = @p2_infos[ p2 ]
+      p1 = p2_info[ :p1 ]
       data = p2_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -766,12 +746,22 @@ module Girl
       rescue Exception => e
         # puts "debug write p2 #{ e.class }"
         close_write_p2( p2 )
-        close_read_p1( p2_info[ :p1 ] )
+        close_read_p1( p1 )
         return
       end
 
       data = data[ written..-1 ]
       p2_info[ :wbuff ] = data
+
+      if p1 && !p1.closed? then
+        p1_info = @p1_infos[ p1 ]
+
+        if p1_info[ :paused ] && ( p2_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume p1 #{ p1_info[ :im ].inspect } #{ p1_info[ :addrinfo ].inspect }"
+          add_read( p1 )
+          p1_info[ :paused ] = false
+        end
+      end
     end
   end
 end

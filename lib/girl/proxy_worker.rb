@@ -14,16 +14,17 @@ module Girl
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
-      @roles = {}                     # sock => :dotr / :redir / :ctl / :src / :dst / :tun / :dns
-      @resolv_caches = {}             # domain => [ ip, created_at ]
-      @is_direct_caches = {}          # ip => true / false
-      @src_infos = ConcurrentHash.new # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
-                                      #          :is_connect, :rbuff, :dst, :dst_id, :ctl, :tun, :renew_tun_times,
-                                      #          :wbuff, :created_at, :closing_write, :closing, :paused }
-      @dst_infos = ConcurrentHash.new # dst => { :src, :domain, :wbuff, :created_at, :connected, :closing_write, :closing, :paused }
-      @tun_infos = ConcurrentHash.new # tun => { :src, :domain, :wbuff, :rbuff, :created_at, :pong, :is_ping_timeout, :closing, :paused }
-      @dns_infos = ConcurrentHash.new # dns => { :domain, :src, :created_at, :closing }
+      @roles = {}            # sock => :dotr / :redir / :ctl / :src / :dst / :tun / :dns
+      @resolv_caches = {}    # domain => [ ip, created_at ]
+      @is_direct_caches = {} # ip => true / false
+      @src_infos = {}        # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
+                             #          :is_connect, :rbuff, :dst, :dst_id, :ctl, :tun, :renew_tun_times,
+                             #          :wbuff, :created_at, :closing_write, :closing, :paused }
+      @dst_infos = {}        # dst => { :src, :domain, :wbuff, :created_at, :connected, :closing_write, :closing, :paused }
+      @tun_infos = {}        # tun => { :src, :domain, :wbuff, :rbuff, :created_at, :pong, :is_ping_timeout, :closing, :paused }
+      @dns_infos = {}        # dns => { :domain, :src, :created_at, :closing }
       @local_addrinfos = Socket.ip_address_list
+      @mutex = Mutex.new
 
       new_a_pipe
       new_a_redir( redir_port )
@@ -34,7 +35,6 @@ module Girl
     #
     def looping
       puts "#{ Time.new } looping"
-      loop_check_state
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -105,19 +105,20 @@ module Girl
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
       puts "#{ Time.new } add a new source #{ src_info[ :src_id ] } #{ domain_port }"
-      key = [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' )
-      add_ctlmsg( key, "#{ domain_port }/#{ @im }" )
-    end
-
-    ##
-    # add ctlmsg
-    #
-    def add_ctlmsg( key, data )
-      return if @ctl.nil? || @ctl.closed?
-      ctlmsg = "#{ key }#{ data }"
+      ctlmsg = "#{ [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ domain_port }/#{ @im }"
       send_ctlmsg( ctlmsg )
-      @ctl_info[ :resends ] << key
-      loop_resend_ctlmsg( key, ctlmsg )
+
+      Thread.new do
+        RESEND_LIMIT.times do
+          sleep RESEND_INTERVAL
+          break if src_info && src_info[ :dst_id ]
+
+          @mutex.synchronize do
+            puts "#{ Time.new } resend #{ ctlmsg.inspect }"
+            send_ctlmsg( ctlmsg )
+          end
+        end
+      end
     end
 
     ##
@@ -147,7 +148,20 @@ module Girl
     def add_hello
       hello = @custom.hello
       puts "#{ Time.new } hello i'm #{ hello.inspect }"
-      add_ctlmsg( [ HELLO ].pack( 'C' ), hello )
+      ctlmsg = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
+      send_ctlmsg( ctlmsg )
+
+      Thread.new do
+        RESEND_LIMIT.times do
+          sleep RESEND_INTERVAL
+          break if @ctl.nil? || @ctl.closed? || @ctl_info[ :tund_addrs ]
+
+          @mutex.synchronize do
+            puts "#{ Time.new } resend #{ ctlmsg.inspect }"
+            send_ctlmsg( ctlmsg )
+          end
+        end
+      end
     end
 
     ##
@@ -444,120 +458,6 @@ module Girl
     end
 
     ##
-    # loop check state
-    #
-    def loop_check_state
-      Thread.new do
-        loop do
-          sleep CHECK_STATE_INTERVAL
-          now = Time.new
-
-          @src_infos.select{ | src, info | !src.closed? && info[ :paused ] }.each do | src, src_info |
-            dst = src_info[ :dst ]
-
-            if dst then
-              dst_info = @dst_infos[ dst ]
-
-              if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
-                add_read( src )
-                src_info[ :paused ] = false
-                next_tick
-              end
-            else
-              tun = src_info[ :tun ]
-
-              if tun && !tun.closed? then
-                tun_info = @tun_infos[ tun ]
-
-                if tun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
-                  add_read( src )
-                  src_info[ :paused ] = false
-                  next_tick
-                end
-              end
-            end
-          end
-
-          @dst_infos.select{ | dst, info | !dst.closed? }.each do | dst, dst_info |
-            if !dst_info[ :connected ] && ( now - dst_info[ :created_at ] >= EXPIRE_CONNECTING ) then
-              puts "#{ Time.new } expire dst #{ dst_info[ :domain ].inspect }"
-              dst_info[ :closing ] = true
-              next_tick
-            elsif dst_info[ :paused ] then
-              src = dst_info[ :src ]
-
-              if src && !src.closed? then
-                src_info = @src_infos[ src ]
-
-                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
-                  add_read( dst )
-                  dst_info[ :paused ] = false
-                  next_tick
-                end
-              end
-            end
-          end
-
-          @tun_infos.select{ | tun, info | !tun.closed? }.each do | tun, tun_info |
-            if tun_info[ :paused ] then
-              src = tun_info[ :src ]
-
-              if src && !src.closed? then
-                src_info = @src_infos[ src ]
-
-                if src_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume tun #{ tun_info[ :domain ].inspect }"
-                  add_read( tun )
-                  tun_info[ :paused ] = false
-                  next_tick
-                end
-              end
-            elsif !tun_info[ :pong ] && ( now - tun_info[ :created_at ] >= PING_TIMEOUT ) then
-              puts "#{ Time.new } ping timeout #{ tun_info[ :domain ].inspect }"
-              tun_info[ :is_ping_timeout ] = true
-              next_tick
-            end
-          end
-
-          @dns_infos.select{ | dns, info | !dns.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
-            puts "#{ Time.new } expire dns #{ dns_info[ :domain ].inspect }"
-            dns_info[ :closing ] = true
-            next_tick
-          end
-        end
-      end
-    end
-
-    ##
-    # loop resend ctlmsg
-    #
-    def loop_resend_ctlmsg( key, ctlmsg )
-      Thread.new do
-        resending = true
-
-        RESEND_LIMIT.times do
-          sleep RESEND_INTERVAL
-
-          if @ctl && !@ctl.closed? && @ctl_info[ :resends ].include?( key ) then
-            puts "#{ Time.new } resend #{ ctlmsg.inspect }"
-            send_ctlmsg( ctlmsg )
-          else
-            resending = false
-          end
-
-          break unless resending
-        end
-
-        if resending then
-          set_ctl_closing
-        end
-      end
-    end
-
-    ##
     # new a ctl
     #
     def new_a_ctl
@@ -568,7 +468,6 @@ module Girl
 
       @ctl_info = {
         ctld_addr: ctld_addr, # ctld地址
-        resends: [],          # 重传的key
         tund_addrs: nil,      # tund地址
         closing: false        # 准备关闭
       }
@@ -640,6 +539,18 @@ module Girl
 
       add_read( dst, :dst )
       add_write( dst )
+
+      Thread.new do
+        sleep EXPIRE_CONNECTING
+
+        @mutex.synchronize do
+          if dst && !dst.closed? && !dst_info[ :connected ] then
+            puts "#{ Time.new } expire dst #{ dst_info[ :domain ].inspect }"
+            dst_info[ :closing ] = true
+            next_tick
+          end
+        end
+      end
     end
 
     ##
@@ -712,11 +623,11 @@ module Girl
 
       domain = src_info[ :destination_domain ]
 
-      @tun_infos[ tun ] = {
+      tun_info = {
         src: src,                                # 对应src
         domain: src_info[ :destination_domain ], # 目的地
         rbuff: '',                               # 暂存不满一块的流量
-        wbuff: [ dst_id ].pack( 'n' ),           # 写前
+        wbuff: [ dst_id ].pack( 'Q>' ),          # 写前
         created_at: Time.new,                    # 创建时间
         pong: false,                             # 是否有回应
         is_ping_timeout: false,                  # ping超时
@@ -724,9 +635,22 @@ module Girl
         paused: false                            # 是否已暂停
       }
 
+      @tun_infos[ tun ] = tun_info
       src_info[ :tun ] = tun
       add_read( tun, :tun )
       add_write( tun )
+
+      Thread.new do
+        sleep PING_TIMEOUT
+
+        @mutex.synchronize do
+          if tun && !tun.closed? && !tun_info[ :pong ] then
+            puts "#{ Time.new } ping timeout #{ tun_info[ :domain ].inspect }"
+            tun_info[ :is_ping_timeout ] = true
+            next_tick
+          end
+        end
+      end
     end
 
     ##
@@ -868,22 +792,35 @@ module Girl
         return
       end
 
-      @dns_infos[ dns ] = {
+      dns_info = {
         domain: domain,
         src: src,
         created_at: Time.new,
         closing: false
       }
 
+      @dns_infos[ dns ] = dns_info
       add_read( dns, :dns )
       src_info[ :proxy_type ] = :checking
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        @mutex.synchronize do
+          if dns && !dns.closed? then
+            puts "#{ Time.new } expire dns #{ dns_info[ :domain ].inspect }"
+            dns_info[ :closing ] = true
+            next_tick
+          end
+        end
+      end
     end
 
     ##
     # send ctlmsg
     #
     def send_ctlmsg( data )
-      return if @ctl.nil? || @ctl.closed?
+      return if @ctl.nil? || @ctl.closed? || data.nil?
       data = @custom.encode( data )
 
       begin
@@ -1117,18 +1054,16 @@ module Girl
         return if data.bytesize != 21
         tund_ports = data[ 1, 20 ].unpack( 'n*' )
         puts "#{ Time.new } got tund ports #{ tund_ports.inspect }"
-        @ctl_info[ :resends ].delete( [ HELLO ].pack( 'C' ) )
         @ctl_info[ :tund_addrs ] = tund_ports.map{ | tund_port | Socket.sockaddr_in( tund_port, @proxyd_host ) }
         @src_infos.select{ | _, info | ( info[ :proxy_type ] == :remote ) && !info[ :dst_id ] }.keys.each{ | src | add_a_new_source( src ) }
       when PAIRED then
-        return if data.bytesize != 11 || @ctl_info[ :tund_addrs ].nil?
-        src_id, dst_id = data[ 1, 10 ].unpack( 'Q>n' )
+        return if data.bytesize != 17 || @ctl_info[ :tund_addrs ].nil?
+        src_id, dst_id = data[ 1, 16 ].unpack( 'Q>Q>' )
         src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) && info[ :dst_id ].nil? }
         return if src.nil? || src.closed?
 
         # puts "debug got paired #{ src_id } #{ dst_id }"
         src_info[ :dst_id ] = dst_id
-        @ctl_info[ :resends ].delete( [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) )
         new_a_tun( src )
       when UNKNOWN_CTL_ADDR then
         puts "#{ Time.new } got unknown ctl addr"
@@ -1447,6 +1382,7 @@ module Girl
 
       src_info = @src_infos[ src ]
       dst = src_info[ :dst ]
+      tun = src_info[ :tun ]
       data = src_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -1469,8 +1405,8 @@ module Girl
 
         if dst then
           close_read_dst( dst )
-        else
-          close_read_tun( src_info[ :tun ] )
+        elsif tun then
+          close_read_tun( tun )
         end
 
         return
@@ -1478,6 +1414,24 @@ module Girl
 
       data = data[ written..-1 ]
       src_info[ :wbuff ] = data
+
+      if dst && !dst.closed? then
+        dst_info = @dst_infos[ dst ]
+
+        if dst_info[ :paused ] && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
+          add_read( dst )
+          dst_info[ :paused ] = false
+        end
+      elsif tun && !tun.closed? then
+        tun_info = @tun_infos[ tun ]
+
+        if tun_info[ :paused ] && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume tun #{ tun_info[ :domain ].inspect }"
+          add_read( tun )
+          tun_info[ :paused ] = false
+        end
+      end
     end
 
     ##
@@ -1517,6 +1471,16 @@ module Girl
 
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
+
+      if src && !src.closed? then
+        src_info = @src_infos[ src ]
+
+        if src_info[ :paused ] && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
+          add_read( src )
+          src_info[ :paused ] = false
+        end
+      end
     end
 
     ##
@@ -1556,6 +1520,16 @@ module Girl
       # puts "debug write tun #{ written }"
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
+
+      if src && !src.closed? then
+        src_info = @src_infos[ src ]
+
+        if src_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
+          add_read( src )
+          src_info[ :paused ] = false
+        end
+      end
     end
 
   end

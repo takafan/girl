@@ -12,8 +12,9 @@ module Girl
       @reads = []
       @writes = []
       @roles = {} # sock => :dotr / :ctl / :p1 / :app
-      @p1_infos = ConcurrentHash.new
+      @p1_infos = {}
       @app_infos = ConcurrentHash.new
+      @mutex = Mutex.new
 
       new_a_pipe
       new_a_ctl
@@ -25,7 +26,7 @@ module Girl
     def looping
       puts "#{ Time.new } looping"
       loop_renew_ctl
-      loop_check_state
+      loop_check_expire
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -252,15 +253,15 @@ module Girl
     end
 
     ##
-    # loop check state
+    # loop check expire
     #
-    def loop_check_state
+    def loop_check_expire
       Thread.new do
         loop do
-          sleep CHECK_STATE_INTERVAL
+          sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          @app_infos.select{ | app, _ | !app.closed? }.each do | app, app_info |
+          @app_infos.select{ | app, _ | !app.closed? }.values.each do | app_info |
             last_recv_at = app_info[ :last_recv_at ] || app_info[ :created_at ]
             last_sent_at = app_info[ :last_sent_at ] || app_info[ :created_at ]
             is_expire = ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER )
@@ -269,34 +270,6 @@ module Girl
               puts "#{ Time.new } expire app"
               app_info[ :closing ] = true
               next_tick
-            elsif app_info[ :paused ] then
-              p1 = app_info[ :p1 ]
-
-              unless p1.closed? then
-                p1_info = @p1_infos[ p1 ]
-
-                if p1_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume app"
-                  add_read( app )
-                  app_info[ :paused ] = false
-                  next_tick
-                end
-              end
-            end
-          end
-
-          @p1_infos.select{ | p1, info | !p1.closed? && info[ :paused ] }.each do | p1, p1_info |
-            app = p1_info[ :app ]
-
-            unless app.closed? then
-              app_info = @app_infos[ app ]
-
-              if app_info[ :wbuff ].bytesize < RESUME_BELOW then
-                puts "#{ Time.new } resume p1"
-                add_read( p1 )
-                p1_info[ :paused ] = false
-                next_tick
-              end
             end
           end
         end
@@ -311,9 +284,11 @@ module Girl
         loop do
           sleep RENEW_CTL_INTERVAL
 
-          if @ctl && !@ctl.closed? && !@ctl_info[ :closing ] then
-            @ctl_info[ :closing ] = true
-            next_tick
+          @mutex.synchronize do
+            if @ctl && !@ctl.closed? && !@ctl_info[ :closing ] then
+              @ctl_info[ :closing ] = true
+              next_tick
+            end
           end
         end
       end
@@ -566,8 +541,15 @@ module Girl
       data = data[ written..-1 ]
       p1_info[ :wbuff ] = data
 
-      unless app.closed? then
+      if app && !app.closed? then
         app_info = @app_infos[ app ]
+
+        if app_info[ :paused ] && ( p1_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume app"
+          add_read( app )
+          app_info[ :paused ] = false
+        end
+
         app_info[ :last_sent_at ] = Time.new
       end
     end
@@ -582,6 +564,7 @@ module Girl
       end
 
       app_info = @app_infos[ app ]
+      p1 = app_info[ :p1 ]
       data = app_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -601,12 +584,22 @@ module Girl
       rescue Exception => e
         puts "#{ Time.new } write app #{ e.class }"
         close_write_app( app )
-        close_read_p1( app_info[ :p1 ] )
+        close_read_p1( p1 )
         return
       end
 
       data = data[ written..-1 ]
       app_info[ :wbuff ] = data
+
+      if p1 && !p1.closed? then
+        p1_info = @p1_infos[ p1 ]
+
+        if p1_info[ :paused ] && ( app_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume p1"
+          add_read( p1 )
+          p1_info[ :paused ] = false
+        end
+      end
     end
   end
 end

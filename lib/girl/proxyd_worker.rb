@@ -15,9 +15,10 @@ module Girl
       @dst_infos = ConcurrentHash.new # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id,
                                       #          :created_at, :connected, :last_add_wbuff_at, :closing_write, :closing, :paused }
       @tun_infos = ConcurrentHash.new # tun => { :im, :dst, :domain, :rbuff, :wbuff, :created_at, :last_add_wbuff_at, :closing, :paused }
-      @dns_infos = ConcurrentHash.new # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
+      @dns_infos = {}                 # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
       @traffs = ConcurrentHash.new    # im => { :in, :out }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
+      @mutex = Mutex.new
 
       new_a_pipe
       new_ctlds( proxyd_port )
@@ -29,7 +30,7 @@ module Girl
     #
     def looping
       puts "#{ Time.new } looping"
-      loop_check_state
+      loop_check_expire
       loop_check_traff
 
       loop do
@@ -305,65 +306,23 @@ module Girl
     end
 
     ##
-    # loop check state
+    # loop check expire
     #
-    def loop_check_state
+    def loop_check_expire
       Thread.new do
         loop do
-          sleep CHECK_STATE_INTERVAL
+          sleep CHECK_EXPIRE_INTERVAL
           now = Time.new
 
-          @dst_infos.select{ | dst, _ | !dst.closed? }.each do | dst, dst_info |
-            if dst_info[ :connected ] then
-              is_expire = ( now - ( dst_info[ :last_add_wbuff_at ] || dst_info[ :created_at ] ) >= EXPIRE_AFTER )
-            else
-              is_expire = ( now - dst_info[ :created_at ] >= EXPIRE_CONNECTING )
-            end
-
-            if is_expire then
-              puts "#{ Time.new } expire dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
-              dst_info[ :closing ] = true
-              next_tick
-            elsif dst_info[ :paused ] then
-              tun = dst_info[ :tun ]
-
-              if tun && !tun.closed? then
-                tun_info = @tun_infos[ tun ]
-
-                if tun_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
-                  add_read( dst )
-                  dst_info[ :paused ] = false
-                  next_tick
-                end
-              end
-            end
+          @dst_infos.select{ | dst, info | !dst.closed? && info[ :connected ] && ( now - ( info[ :last_add_wbuff_at ] || info[ :created_at ] ) >= EXPIRE_AFTER ) }.values.each do | dst_info |
+            puts "#{ Time.new } expire dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+            dst_info[ :closing ] = true
+            next_tick
           end
 
-          @tun_infos.select{ | tun, info | !tun.closed? }.each do | tun, tun_info |
-            if now - ( tun_info[ :last_add_wbuff_at ] || tun_info[ :created_at ] ) >= EXPIRE_AFTER then
-              puts "#{ Time.new } expire tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
-              tun_info[ :closing ] = true
-              next_tick
-            elsif tun_info[ :paused ] then
-              dst = tun_info[ :dst ]
-
-              if dst && !dst.closed? then
-                dst_info = @dst_infos[ dst ]
-
-                if dst_info[ :wbuff ].bytesize < RESUME_BELOW then
-                  puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
-                  add_read( tun )
-                  tun_info[ :paused ] = false
-                  next_tick
-                end
-              end
-            end
-          end
-
-          @dns_infos.select{ | dns, info | !dns.closed? && ( now - info[ :created_at ] >= EXPIRE_NEW ) }.values.each do | dns_info |
-            puts "#{ Time.new } expire dns #{ dns_info[ :im ].inspect } #{ dns_info[ :domain ].inspect }"
-            dns_info[ :closing ] = true
+          @tun_infos.select{ | tun, info | !tun.closed? && ( now - ( info[ :last_add_wbuff_at ] || info[ :created_at ] ) >= EXPIRE_AFTER ) }.values.each do | tun, tun_info |
+            puts "#{ Time.new } expire tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+            tun_info[ :closing ] = true
             next_tick
           end
         end
@@ -414,9 +373,9 @@ module Girl
         return
       end
 
-      dst_id = dst.local_address.ip_port
+      dst_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
-      @dst_infos[ dst ] = {
+      dst_info = {
         dst_id: dst_id,         # dst_id
         im: im,                 # 标识
         domain: domain,         # 目的地
@@ -432,12 +391,25 @@ module Girl
         paused: false           # 已暂停
       }
 
+      @dst_infos[ dst ] = dst_info
       add_read( dst, :dst )
       add_write( dst )
 
-      data = [ PAIRED, src_id, dst_id ].pack( 'CQ>n' )
+      data = [ PAIRED, src_id, dst_id ].pack( 'CQ>Q>' )
       # puts "debug add ctlmsg paired #{ im.inspect } #{ src_id } #{ dst_id }"
       send_ctlmsg( ctld, data, ctl_addr )
+
+      Thread.new do
+        sleep EXPIRE_CONNECTING
+
+        @mutex.synchronize do
+          if dst && !dst.closed? && !dst_info[ :connected ] then
+            puts "#{ Time.new } expire dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+            dst_info[ :closing ] = true
+            next_tick
+          end
+        end
+      end
     end
 
     ##
@@ -552,7 +524,7 @@ module Girl
         return
       end
 
-      @dns_infos[ dns ] = {
+      dns_info = {
         im: im,
         src_id: src_id,
         domain: domain,
@@ -561,7 +533,20 @@ module Girl
         closing: false
       }
 
+      @dns_infos[ dns ] = dns_info
       add_read( dns, :dns )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        @mutex.synchronize do
+          if dns && !dns.closed? then
+            puts "#{ Time.new } expire dns #{ dns_info[ :domain ].inspect }"
+            dns_info[ :closing ] = true
+            next_tick
+          end
+        end
+      end
     end
 
     ##
@@ -775,7 +760,7 @@ module Girl
 
         if dst_info then
           # puts "debug dst info exist, send ctlmsg paired #{ src_id } #{ dst_info[ :dst_id ] }"
-          data2 = [ PAIRED, src_id, dst_info[ :dst_id ] ].pack( 'CQ>n' )
+          data2 = [ PAIRED, src_id, dst_info[ :dst_id ] ].pack( 'CQ>Q>' )
           send_ctlmsg( ctld, data2, ctl_addr )
           return
         end
@@ -947,7 +932,7 @@ module Girl
           return
         end
 
-        dst_id = data[ 0, 2 ].unpack( 'n' ).first
+        dst_id = data[ 0, 8 ].unpack( 'Q>' ).first
         dst, dst_info = @dst_infos.find{ | _, info | info[ :dst_id ] == dst_id }
 
         unless dst then
@@ -959,7 +944,7 @@ module Girl
         tun_info[ :dst ] = dst
         tun_info[ :domain ] = dst_info[ :domain ]
         set_dst_info_tun( dst_info, tun )
-        data = data[ 2..-1 ]
+        data = data[ 8..-1 ]
 
         if data.empty? then
           return
@@ -1034,6 +1019,16 @@ module Girl
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
       @traffs[ dst_info[ :im ] ][ :out ] += written
+
+      if tun && !tun.closed? then
+        tun_info = @tun_infos[ tun ]
+
+        if tun_info[ :paused ] && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+          add_read( tun )
+          tun_info[ :paused ] = false
+        end
+      end
     end
 
     ##
@@ -1073,6 +1068,16 @@ module Girl
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
       @traffs[ tun_info[ :im ] ][ :out ] += written
+
+      if dst && !dst.closed? then
+        dst_info = @dst_infos[ dst ]
+
+        if dst_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+          puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+          add_read( dst )
+          dst_info[ :paused ] = false
+        end
+      end
     end
 
   end

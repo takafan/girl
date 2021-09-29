@@ -8,7 +8,7 @@ module Girl
   EXPIRE_AFTER          = 86400            # 多久没有新流量，过期
   RESET_TRAFF_DAY       = 1                # 流量计数重置日，0为不重置
   CHECK_TRAFF_INTERVAL  = 86400            # 检查今天是否是流量计数重置日间隔
-  CHECK_STATE_INTERVAL  = 1                # 检查过期，恢复读
+  CHECK_EXPIRE_INTERVAL = 3600             # 检查过期间隔
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
   RESEND_LIMIT          = 5                # ctlmsg重传次数
   RESEND_INTERVAL       = 1                # ctlmsg重传间隔
