@@ -112,14 +112,21 @@ module Girl
       send_ctlmsg( ctlmsg )
 
       Thread.new do
+        count = 0
+
         RESEND_LIMIT.times do
           sleep RESEND_INTERVAL
           break if src_info && src_info[ :dst_id ]
 
           @mutex.synchronize do
-            puts "#{ Time.new } resend #{ ctlmsg.inspect }"
+            count += 1
+            puts "#{ Time.new } resend #{ ctlmsg.inspect } #{ count }"
             send_ctlmsg( ctlmsg )
           end
+        end
+
+        if count == RESEND_LIMIT then
+          set_ctl_closing
         end
       end
     end
@@ -155,14 +162,21 @@ module Girl
       send_ctlmsg( ctlmsg )
 
       Thread.new do
+        count = 0
+
         RESEND_LIMIT.times do
           sleep RESEND_INTERVAL
           break if @ctl.nil? || @ctl.closed? || @ctl_info[ :tund_addrs ]
 
           @mutex.synchronize do
-            puts "#{ Time.new } resend #{ ctlmsg.inspect }"
+            count += 1
+            puts "#{ Time.new } resend #{ ctlmsg.inspect } #{ count }"
             send_ctlmsg( ctlmsg )
           end
+        end
+
+        if count == RESEND_LIMIT then
+          set_ctl_closing
         end
       end
     end
