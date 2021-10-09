@@ -10,8 +10,8 @@ module Girl
   CHECK_TRAFF_INTERVAL  = 86400            # 检查今天是否是流量计数重置日间隔
   CHECK_EXPIRE_INTERVAL = 3600             # 检查过期间隔
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
-  RESEND_LIMIT          = 5                # ctlmsg重传次数
-  RESEND_INTERVAL       = 1                # ctlmsg重传间隔
+  RESEND_LIMIT          = 3                # ctlmsg重传次数
+  RESEND_INTERVAL       = 2                # ctlmsg重传间隔
   PING_TIMEOUT          = 2                # tun建立连接后多久没有响应，超时
   RENEW_TUN_LIMIT       = 3                # 重建tun次数
   RENEW_CTL_INTERVAL    = 10               # p1心跳间隔

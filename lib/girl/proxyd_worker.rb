@@ -15,10 +15,9 @@ module Girl
       @dst_infos = ConcurrentHash.new # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id,
                                       #          :created_at, :connected, :last_add_wbuff_at, :closing_write, :closing, :paused }
       @tun_infos = ConcurrentHash.new # tun => { :im, :dst, :domain, :rbuff, :wbuff, :created_at, :last_add_wbuff_at, :closing, :paused }
-      @dns_infos = {}                 # dns => { :im, :src_id, :domain, :port, :created_at, :closing }
+      @dns_infos = {}                 # dns => { :im, :src_id, :domain, :port, :closing }
       @traffs = ConcurrentHash.new    # im => { :in, :out }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
-      @mutex = Mutex.new
 
       new_a_pipe
       new_ctlds( proxyd_port )
@@ -402,12 +401,10 @@ module Girl
       Thread.new do
         sleep EXPIRE_CONNECTING
 
-        @mutex.synchronize do
-          if dst && !dst.closed? && !dst_info[ :connected ] then
-            puts "#{ Time.new } expire dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
-            dst_info[ :closing ] = true
-            next_tick
-          end
+        if dst && !dst.closed? && !dst_info[ :connected ] then
+          puts "#{ Time.new } expire dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+          dst_info[ :closing ] = true
+          next_tick
         end
       end
     end
@@ -529,7 +526,6 @@ module Girl
         src_id: src_id,
         domain: domain,
         port: port,
-        created_at: Time.new,
         closing: false
       }
 
@@ -539,12 +535,10 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        @mutex.synchronize do
-          if dns && !dns.closed? then
-            puts "#{ Time.new } expire dns #{ dns_info[ :domain ].inspect }"
-            dns_info[ :closing ] = true
-            next_tick
-          end
+        if dns && !dns.closed? then
+          puts "#{ Time.new } expire dns #{ dns_info[ :domain ].inspect }"
+          dns_info[ :closing ] = true
+          next_tick
         end
       end
     end
@@ -726,7 +720,7 @@ module Girl
           @ctl_infos[ im ] = ctl_info
         end
 
-        puts "#{ Time.new } got hello #{ addrinfo.ip_unpack.inspect } #{ im.inspect }"
+        puts "#{ Time.new } got hello #{ im.inspect } #{ addrinfo.ip_unpack.inspect }"
         print "ctls #{ @ctl_infos.size } tunds #{ @tund_infos.size }"
         puts " dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
         send_tund_ports( ctl_info )
@@ -734,27 +728,14 @@ module Girl
         return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         domain_port, im = data[ 9..-1 ].split( '/' )
+        ctl_info = @ctl_infos[ im ]
 
-        if im then
-          ctl_info = @ctl_infos[ im ]
-
-          unless ctl_info then
-            puts "#{ Time.new } got a new source but unknown im #{ im.inspect }"
-            send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), ctl_addr )
-            return
-          end
-
-          ctl_info[ :ctl_addr ] = ctl_addr
-        else
-          im, ctl_info = @ctl_infos.find{ | _, info | info[ :ctl_addr ] == ctl_addr }
-
-          unless im then
-            puts "#{ Time.new } got a new source but unknown ctl addr"
-            send_ctlmsg( ctld, [ UNKNOWN_CTL_ADDR ].pack( 'C' ), ctl_addr )
-            return
-          end
+        unless ctl_info then
+          puts "#{ Time.new } got a new source but unknown im #{ im.inspect }"
+          return
         end
 
+        ctl_info[ :ctl_addr ] = ctl_addr
         ctl_info[ :ctld ] = ctld
         dst_info = @dst_infos.values.find{ | info | info[ :src_id ] == src_id }
 
@@ -765,21 +746,14 @@ module Girl
           return
         end
 
-        # puts "debug got a new source #{ src_id } #{ domain_port.inspect } #{ im.inspect }"
+        # puts "debug got a new source #{ src_id } #{ domain_port.inspect } #{ im.inspect } #{ addrinfo.ip_unpack.inspect }"
         resolve_domain_port( domain_port, src_id, im, ctl_info[ :ctld ], ctl_info[ :ctl_addr ] )
-      when CTL_FIN then
-        im, _ = @ctl_infos.find{ | _, info | info[ :ctl_addr ] == ctl_addr }
-        return unless im
-        # puts "debug got ctl fin #{ im.inspect }"
-        close_dsts( im )
-        ctl_info = @ctl_infos.delete( im )
-        ctl_info[ :tunds ].each{ | tund | close_tund( tund ) }
       when SOURCE_CLOSED then
         return if data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         im = data[ 9..-1 ]
         return unless @ctl_infos.include?( im )
-        # puts "debug got src closed #{ src_id } #{ im.inspect }"
+        # puts "debug got src closed #{ src_id } #{ im.inspect } #{ addrinfo.ip_unpack.inspect }"
         dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
         close_dst( dst )
       when SOURCE_CLOSED_READ then
@@ -787,7 +761,7 @@ module Girl
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         im = data[ 9..-1 ]
         return unless @ctl_infos.include?( im )
-        # puts "debug got src closed read #{ src_id } #{ im.inspect }"
+        # puts "debug got src closed read #{ src_id } #{ im.inspect } #{ addrinfo.ip_unpack.inspect }"
         dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
         set_dst_closing_write( dst )
       when SOURCE_CLOSED_WRITE then
@@ -795,7 +769,7 @@ module Girl
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         im = data[ 9..-1 ]
         return unless @ctl_infos.include?( im )
-        # puts "debug got src closed write #{ src_id } #{ im.inspect }"
+        # puts "debug got src closed write #{ src_id } #{ im.inspect } #{ addrinfo.ip_unpack.inspect }"
         dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
         close_read_dst( dst )
       end

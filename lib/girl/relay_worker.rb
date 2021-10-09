@@ -12,23 +12,27 @@ module Girl
       @proxyd_port = proxyd_port
       @directs = directs
       @remotes = remotes
+      @im = im
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
       @roles = {}            # sock => :dotr / :resolv / :rsv / :redir / :proxy / :src / :dst / :tun
       @is_direct_caches = {} # ip => true / false
+      @ctl_infos = {}        # ctl => { :ctld_addr, :closing }
       @src_infos = {}        # src => { :src_id, :addrinfo, :proxy_type, :destination_domain, :destination_port,
                              #          :rbuff, :dst, :dst_id, :ctl, :tun, :renew_tuns_times,
-                             #          :wbuff, :created_at, :closing_write, :closing, :paused }
-      @dst_infos = {}        # dst => { :src, :domain, :wbuff, :created_at, :connected, :closing_write, :paused }
-      @tun_infos = {}        # tun => { :src, :domain, :wbuff, :rbuff, :created_at, :pong, :is_ping_timeout, :closing, :paused }
-      @rsv_infos = {}        # rsv => { :src_addr, :created_at }
+                             #          :wbuff, :closing_write, :closing, :paused }
+      @dst_infos = {}        # dst => { :src, :domain, :wbuff, :connected, :closing_write, :paused }
+      @tun_infos = {}        # tun => { :src, :domain, :wbuff, :rbuff, :pong, :is_ping_timeout, :closing, :paused }
+      @rsv_infos = {}        # rsv => { :src_addr }
       @local_addrinfos = Socket.ip_address_list
-      @mutex = Mutex.new
+      @tund_addrs = nil
+      @ctlmsgs = []
 
       new_a_pipe
       new_a_resolv( resolv_port )
       new_a_redir( redir_port )
+      add_hello
     end
 
     ##
@@ -92,7 +96,6 @@ module Girl
     #
     def quit!
       # puts "debug exit"
-      send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
       exit
     end
 
@@ -102,33 +105,41 @@ module Girl
     # add a new source
     #
     def add_a_new_source( src )
-      return if @ctl.nil? || @ctl.closed? || @ctl_info[ :tund_addrs ].nil?
       src_info = @src_infos[ src ]
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
       puts "#{ Time.new } add a new source #{ src_info[ :src_id ] } #{ domain_port }"
-      ctlmsg = "#{ [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ domain_port }/#{ @im }"
-      send_ctlmsg( ctlmsg )
+      data = "#{ [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ domain_port }/#{ @im }"
+      add_ctlmsg( data )
 
       Thread.new do
-        count = 0
-
-        RESEND_LIMIT.times do
+        ( RESEND_LIMIT + 1 ).times do | i |
           sleep RESEND_INTERVAL
-          break if src_info && src_info[ :dst_id ]
 
-          @mutex.synchronize do
-            count += 1
-            puts "#{ Time.new } resend #{ ctlmsg.inspect } #{ count }"
-            send_ctlmsg( ctlmsg )
+          if src_info && src_info[ :dst_id ] then
+            break
+          end
+
+          if i == RESEND_LIMIT then
+            puts "#{ Time.new } resend a new source out of limit #{ src_info[ :src_id ] } #{ domain_port }"
+            src_info[ :closing ] = true
+            next_tick
+          else
+            puts "#{ Time.new } resend #{ data.inspect } #{ i + 1 }"
+            add_ctlmsg( data )
           end
         end
-
-        if count == RESEND_LIMIT then
-          set_ctl_closing
-        end
       end
+    end
+
+    ##
+    # add ctlmsg
+    #
+    def add_ctlmsg( data )
+      return if @ctlmsgs.include?( data )
+      @ctlmsgs << data
+      next_tick
     end
 
     ##
@@ -157,28 +168,9 @@ module Girl
     #
     def add_hello
       hello = @custom.hello
+      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
       puts "#{ Time.new } hello i'm #{ hello.inspect }"
-      ctlmsg = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
-      send_ctlmsg( ctlmsg )
-
-      Thread.new do
-        count = 0
-
-        RESEND_LIMIT.times do
-          sleep RESEND_INTERVAL
-          break if @ctl.nil? || @ctl.closed? || @ctl_info[ :tund_addrs ]
-
-          @mutex.synchronize do
-            count += 1
-            puts "#{ Time.new } resend #{ ctlmsg.inspect } #{ count }"
-            send_ctlmsg( ctlmsg )
-          end
-        end
-
-        if count == RESEND_LIMIT then
-          set_ctl_closing
-        end
-      end
+      add_ctlmsg( data )
     end
 
     ##
@@ -191,6 +183,8 @@ module Girl
       if role then
         @roles[ sock ] = role
       end
+
+      next_tick
     end
 
     ##
@@ -280,7 +274,10 @@ module Girl
     #
     def close_ctl( ctl )
       return if ctl.nil? || ctl.closed?
+      # puts "debug close ctl"
       close_sock( ctl )
+      @ctl_infos.delete( ctl )
+      # puts "debug ctl infos size #{ @ctl_infos.size }"
     end
 
     ##
@@ -288,8 +285,10 @@ module Girl
     #
     def close_dst( dst )
       return if dst.nil? || dst.closed?
+      # puts "debug close dst"
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
+      # puts "debug dst infos size #{ @dst_infos.size }"
 
       if dst_info then
         close_src( dst_info[ :src ] )
@@ -310,6 +309,7 @@ module Girl
         @writes.delete( dst )
         @roles.delete( dst )
         @dst_infos.delete( dst )
+        # puts "debug dst infos size #{ @dst_infos.size }"
       end
     end
 
@@ -324,7 +324,8 @@ module Girl
       src_info = @src_infos[ src ]
 
       if src_info[ :tun ] then
-        send_src_closed_read( src_info[ :src_id ] )
+        data = "#{ [ SOURCE_CLOSED_READ, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
+        add_ctlmsg( data )
       end
 
       if src.closed? then
@@ -332,6 +333,7 @@ module Girl
         @writes.delete( src )
         @roles.delete( src )
         @src_infos.delete( src )
+        # puts "debug src infos size #{ @src_infos.size }"
       end
     end
 
@@ -349,6 +351,7 @@ module Girl
         @writes.delete( tun )
         @roles.delete( tun )
         @tun_infos.delete( tun )
+        # puts "debug tun infos size #{ @tun_infos.size }"
       end
     end
 
@@ -360,6 +363,7 @@ module Girl
       # puts "debug close rsv"
       close_sock( rsv )
       @rsv_infos.delete( rsv )
+      # puts "debug rsv infos size #{ @rsv_infos.size }"
     end
 
     ##
@@ -381,6 +385,7 @@ module Girl
       # puts "debug close src"
       close_sock( src )
       src_info = @src_infos.delete( src )
+      # puts "debug src infos size #{ @src_infos.size }"
 
       if src_info then
         dst = src_info[ :dst ]
@@ -389,8 +394,24 @@ module Girl
           close_dst( dst )
         elsif src_info[ :tun ] then
           close_tun( src_info[ :tun ] )
-          send_src_closed( src_info[ :src_id ] )
+          data = "#{ [ SOURCE_CLOSED, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
+          add_ctlmsg( data )
         end
+      end
+    end
+
+    ##
+    # close tun
+    #
+    def close_tun( tun )
+      return if tun.nil? || tun.closed?
+      # puts "debug close tun"
+      close_sock( tun )
+      tun_info = @tun_infos.delete( tun )
+      # puts "debug tun infos size #{ @tun_infos.size }"
+
+      if tun_info then
+        close_src( tun_info[ :src ] )
       end
     end
 
@@ -408,6 +429,7 @@ module Girl
         @reads.delete( dst )
         @roles.delete( dst )
         @dst_infos.delete( dst )
+        # puts "debug dst infos size #{ @dst_infos.size }"
       end
     end
 
@@ -422,7 +444,8 @@ module Girl
       src_info = @src_infos[ src ]
 
       if src_info[ :tun ] then
-        send_src_closed_write( src_info[ :src_id ] )
+        data = "#{ [ SOURCE_CLOSED_WRITE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
+        add_ctlmsg( data )
       end
 
       if src.closed? then
@@ -430,6 +453,7 @@ module Girl
         @reads.delete( src )
         @roles.delete( src )
         @src_infos.delete( src )
+        # puts "debug src infos size #{ @src_infos.size }"
       end
     end
 
@@ -447,28 +471,8 @@ module Girl
         @reads.delete( tun )
         @roles.delete( tun )
         @tun_infos.delete( tun )
+        # puts "debug tun infos size #{ @tun_infos.size }"
       end
-    end
-
-    ##
-    # new a ctl
-    #
-    def new_a_ctl
-      ctl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      ctld_port = @proxyd_port + 10.times.to_a.sample
-      ctld_addr = Socket.sockaddr_in( ctld_port, @proxyd_host )
-      @ctl = ctl
-
-      @ctl_info = {
-        ctld_addr: ctld_addr, # ctld地址
-        tund_addrs: nil,      # tund地址
-        closing: false        # 准备关闭
-      }
-
-      add_read( ctl, :ctl )
-      puts "#{ Time.new } new a ctl #{ ctld_port }"
-      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } rsvs #{ @rsv_infos.size }"
-      add_hello
     end
 
     ##
@@ -507,7 +511,6 @@ module Girl
         src: src,             # 对应src
         domain: domain,       # 目的地
         wbuff: '',            # 写前
-        created_at: Time.new, # 创建时间
         connected: false,     # 是否已连接
         closing_write: false, # 准备关闭写
         closing: false,       # 准备关闭
@@ -529,12 +532,10 @@ module Girl
       Thread.new do
         sleep EXPIRE_CONNECTING
 
-        @mutex.synchronize do
-          if dst && !dst.closed? && !dst_info[ :connected ] then
-            puts "#{ Time.new } expire dst #{ dst_info[ :domain ].inspect }"
-            dst_info[ :closing ] = true
-            next_tick
-          end
+        if dst && !dst.closed? && !dst_info[ :connected ] then
+          puts "#{ Time.new } expire dst #{ dst_info[ :domain ].inspect }"
+          dst_info[ :closing ] = true
+          next_tick
         end
       end
     end
@@ -569,11 +570,6 @@ module Girl
     #
     def new_a_remote( src )
       return if src.nil? || src.closed?
-
-      if @ctl.nil? || @ctl.closed? then
-        new_a_ctl
-      end
-
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :remote
       add_a_new_source( src )
@@ -610,7 +606,6 @@ module Girl
 
       rsv_info = {
         src_addr: src_addr,
-        created_at: Time.new,
         closing: false
       }
 
@@ -621,12 +616,10 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        @mutex.synchronize do
-          if rsv && !rsv.closed? then
-            puts "#{ Time.new } expire rsv"
-            rsv_info[ :closing ] = true
-            next_tick
-          end
+        if rsv && !rsv.closed? then
+          puts "#{ Time.new } expire rsv"
+          rsv_info[ :closing ] = true
+          next_tick
         end
       end
     end
@@ -634,13 +627,12 @@ module Girl
     ##
     # new a tun
     #
-    def new_a_tun( src )
-      return if src.nil? || src.closed? || @ctl_info[ :tund_addrs ].nil?
-      src_info = @src_infos[ src ]
-      dst_id = src_info[ :dst_id ]
-      return unless dst_id
-
-      tund_addr = @ctl_info[ :tund_addrs ].sample
+    def new_a_tun( src_id, dst_id )
+      return unless @tund_addrs
+      src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) && info[ :dst_id ].nil? }
+      return if src.nil? || src.closed?
+      src_info[ :dst_id ] = dst_id
+      tund_addr = @tund_addrs.sample
       # puts "debug new a tun #{ Addrinfo.new( tund_addr ).inspect }"
 
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
@@ -652,6 +644,8 @@ module Girl
       rescue Exception => e
         puts "#{ Time.new } connect tund #{ e.class }"
         tun.close
+        close_src( src )
+        add_hello
         return
       end
 
@@ -662,9 +656,7 @@ module Girl
         domain: src_info[ :destination_domain ], # 目的地
         rbuff: '',                               # 暂存不满一块的流量
         wbuff: [ dst_id ].pack( 'Q>' ),          # 写前
-        created_at: Time.new,                    # 创建时间
         pong: false,                             # 是否有回应
-        is_ping_timeout: false,                  # ping超时
         closing: false,                          # 准备关闭
         paused: false                            # 是否已暂停
       }
@@ -677,12 +669,10 @@ module Girl
       Thread.new do
         sleep PING_TIMEOUT
 
-        @mutex.synchronize do
-          if tun && !tun.closed? && !tun_info[ :pong ] then
-            puts "#{ Time.new } ping timeout #{ tun_info[ :domain ].inspect }"
-            tun_info[ :is_ping_timeout ] = true
-            next_tick
-          end
+        if tun && !tun.closed? && !tun_info[ :pong ] then
+          puts "#{ Time.new } ping timeout #{ tun_info[ :domain ].inspect }"
+          tun_info[ :closing ] = true
+          next_tick
         end
       end
     end
@@ -742,35 +732,41 @@ module Girl
     end
 
     ##
-    # renew a tun
-    #
-    def renew_a_tun( tun )
-      tun_info = close_tun( tun )
-      src = tun_info[ :src ]
-      return if src.nil? || src.closed?
-      src_info = @src_infos[ src ]
-
-      if src_info[ :renew_tun_times ] >= RENEW_TUN_LIMIT then
-        puts "#{ Time.new } renew a tun out of limit #{ src_info[ :destination_domain ].inspect } #{ src_info[ :destination_port ] }"
-        close_src( src )
-      else
-        new_a_tun( src )
-        src_info[ :renew_tun_times ] += 1
-      end
-    end
-
-    ##
     # send ctlmsg
     #
     def send_ctlmsg( data )
-      return if @ctl.nil? || @ctl.closed?
+      return unless data
+
+      ctl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      ctld_port = @proxyd_port + 10.times.to_a.sample
+      ctld_addr = Socket.sockaddr_in( ctld_port, @proxyd_host )
+      # puts "debug send ctlmsg #{ data.inspect } #{ ctld_port }"
       data = @custom.encode( data )
 
       begin
-        @ctl.sendmsg_nonblock( data, 0, @ctl_info[ :ctld_addr ] )
+        ctl.sendmsg_nonblock( data, 0, ctld_addr )
       rescue Exception => e
         puts "#{ Time.new } ctl sendmsg #{ e.class }"
-        set_ctl_closing
+        ctl.close
+        return
+      end
+
+      ctl_info = {
+        ctld_addr: ctld_addr, # ctld地址
+        closing: false        # 准备关闭
+      }
+
+      @ctl_infos[ ctl ] = ctl_info
+      add_read( ctl, :ctl )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        if ctl && !ctl.closed? then
+          # puts "debug expire ctl"
+          ctl_info[ :closing ] = true
+          next_tick
+        end
       end
     end
 
@@ -783,42 +779,6 @@ module Girl
       rescue Exception => e
         puts "#{ Time.new } sendmsg #{ e.class } #{ to_addr.inspect }"
       end
-    end
-
-    ##
-    # send src closed
-    #
-    def send_src_closed( src_id )
-      return if @ctl.nil? || @ctl.closed?
-      data = "#{ [ SOURCE_CLOSED, src_id ].pack( 'CQ>' ) }#{ @im }"
-      send_ctlmsg( data )
-    end
-
-    ##
-    # send src closed read
-    #
-    def send_src_closed_read( src_id )
-      return if @ctl.nil? || @ctl.closed?
-      data = "#{ [ SOURCE_CLOSED_READ, src_id ].pack( 'CQ>' ) }#{ @im }"
-      send_ctlmsg( data )
-    end
-
-    ##
-    # send src closed write
-    #
-    def send_src_closed_write( src_id )
-      return if @ctl.nil? || @ctl.closed?
-      data = "#{ [ SOURCE_CLOSED_WRITE, src_id ].pack( 'CQ>' ) }#{ @im }"
-      send_ctlmsg( data )
-    end
-
-    ##
-    # set ctl closing
-    #
-    def set_ctl_closing
-      return if @ctl.nil? || @ctl.closed? || @ctl_info[ :closing ]
-      @ctl_info[ :closing ] = true
-      next_tick
     end
 
     ##
@@ -896,14 +856,27 @@ module Girl
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
       @rsv_infos.select{ | _, info | info[ :closing ] }.keys.each{ | rsv | close_rsv( rsv ) }
+      @ctl_infos.select{ | _, info | info[ :closing ] }.keys.each{ | ctl | close_ctl( ctl ) }
+      @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
 
-      if @ctl && !@ctl.closed? && @ctl_info[ :closing ] then
-        send_ctlmsg( [ CTL_FIN ].pack( 'C' ) )
-        close_ctl( @ctl )
+      srcs = @src_infos.select{ | _, info | info[ :closing ] }.keys
+
+      srcs.each do | src |
+        close_src( src )
       end
 
-      @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
-      @tun_infos.select{ | _, info | info[ :is_ping_timeout ] }.keys.each{ | tun | renew_a_tun( tun ) }
+      tuns = @tun_infos.select{ | _, info | info[ :closing ] }.keys
+
+      tuns.each do | tun |
+        close_tun( tun )
+      end
+
+      if srcs.any? || tuns.any? then
+        add_hello
+      end
+
+      @ctlmsgs.each{ | data | send_ctlmsg( data ) }
+      @ctlmsgs.clear
     end
 
     ##
@@ -984,18 +957,12 @@ module Girl
         renew_tun_times: 0,          # :remote的场合，重建tun次数
         pong: false,                 # :remote的场合，连接已确认
         wbuff: '',                   # 从dst/tun读到的流量
-        created_at: Time.new,        # 创建时间
         closing_write: false,        # 准备关闭写
         closing: false,              # 准备关闭
         paused: false                # 是否暂停
       }
 
       add_read( src, :src )
-
-      if @ctl.nil? || @ctl.closed? then
-        new_a_ctl
-      end
-
       new_a_tunnel( dest_addrinfo, src )
     end
 
@@ -1019,22 +986,17 @@ module Girl
         return if data.bytesize != 21
         tund_ports = data[ 1, 20 ].unpack( 'n*' )
         puts "#{ Time.new } got tund ports #{ tund_ports.inspect }"
-        @ctl_info[ :tund_addrs ] = tund_ports.map{ | tund_port | Socket.sockaddr_in( tund_port, @proxyd_host ) }
+        @tund_addrs = tund_ports.map{ | tund_port | Socket.sockaddr_in( tund_port, @proxyd_host ) }
         @src_infos.select{ | _, info | ( info[ :proxy_type ] == :remote ) && !info[ :dst_id ] }.keys.each{ | src | add_a_new_source( src ) }
       when PAIRED then
-        return if data.bytesize != 17 || @ctl_info[ :tund_addrs ].nil?
+        return if data.bytesize != 17
         src_id, dst_id = data[ 1, 16 ].unpack( 'Q>Q>' )
-        src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) && info[ :dst_id ].nil? }
-        return if src.nil? || src.closed?
-
+        return if src_id.nil? || dst_id.nil?
         # puts "debug got paired #{ src_id } #{ dst_id }"
-        src_info[ :dst_id ] = dst_id
-        new_a_tun( src )
-      when UNKNOWN_CTL_ADDR then
-        puts "#{ Time.new } got unknown ctl addr"
-        close_ctl( ctl )
-        new_a_ctl
+        new_a_tun( src_id, dst_id )
       end
+
+      close_ctl( ctl )
     end
 
     ##
