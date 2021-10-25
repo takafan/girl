@@ -108,12 +108,10 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        @mutex.synchronize do
-          if dst && !dst.closed? then
-            puts "#{ Time.new } expire dst"
-            dst_info[ :closing ] = true
-            next_tick
-          end
+        if dst && !dst.closed? && !dst_info[ :closing ] then
+          # puts "debug expire dst"
+          dst_info[ :closing ] = true
+          next_tick
         end
       end
     end

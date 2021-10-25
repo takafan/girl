@@ -616,8 +616,8 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        if rsv && !rsv.closed? then
-          puts "#{ Time.new } expire rsv"
+        if rsv && !rsv.closed? && !rsv_info[ :closing ] then
+          # puts "debug expire rsv"
           rsv_info[ :closing ] = true
           next_tick
         end
@@ -762,7 +762,7 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        if ctl && !ctl.closed? then
+        if ctl && !ctl.closed? && !ctl_info[ :closing ] then
           # puts "debug expire ctl"
           ctl_info[ :closing ] = true
           next_tick

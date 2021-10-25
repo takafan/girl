@@ -784,8 +784,8 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        if dns && !dns.closed? then
-          puts "#{ Time.new } expire dns #{ dns_info[ :domain ].inspect }"
+        if dns && !dns.closed? && !dns_info[ :closing ] then
+          # puts "debug expire dns #{ dns_info[ :domain ].inspect }"
           dns_info[ :closing ] = true
           next_tick
         end
@@ -823,7 +823,7 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        if ctl && !ctl.closed? then
+        if ctl && !ctl.closed? && !ctl_info[ :closing ] then
           # puts "debug expire ctl"
           ctl_info[ :closing ] = true
           next_tick

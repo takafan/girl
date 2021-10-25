@@ -14,7 +14,6 @@ module Girl
       @roles = {} # sock => :dotr / :ctl / :p1 / :app
       @p1_infos = {}
       @app_infos = ConcurrentHash.new
-      @mutex = Mutex.new
 
       new_a_pipe
       new_a_ctl
@@ -284,11 +283,9 @@ module Girl
         loop do
           sleep RENEW_CTL_INTERVAL
 
-          @mutex.synchronize do
-            if @ctl && !@ctl.closed? && !@ctl_info[ :closing ] then
-              @ctl_info[ :closing ] = true
-              next_tick
-            end
+          if @ctl && !@ctl.closed? && !@ctl_info[ :closing ] then
+            @ctl_info[ :closing ] = true
+            next_tick
           end
         end
       end
