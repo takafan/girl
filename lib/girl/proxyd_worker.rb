@@ -319,7 +319,7 @@ module Girl
             next_tick
           end
 
-          @tun_infos.select{ | tun, info | !tun.closed? && ( now - ( info[ :last_add_wbuff_at ] || info[ :created_at ] ) >= EXPIRE_AFTER ) }.values.each do | tun, tun_info |
+          @tun_infos.select{ | tun, info | !tun.closed? && ( now - ( info[ :last_add_wbuff_at ] || info[ :created_at ] ) >= EXPIRE_AFTER ) }.values.each do | tun_info |
             puts "#{ Time.new } expire tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
             tun_info[ :closing ] = true
             next_tick
