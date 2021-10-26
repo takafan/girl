@@ -271,7 +271,7 @@ iptables -t nat -A PREROUTING -p tcp -j REDIRECT --to-ports 1066
 
 ## 连回家
 
-反过来，妹子也支持从外面连进家。
+反过来，妹子支持从外面连进家。
 
 ```
           mirrord
