@@ -1,6 +1,6 @@
 module Girl
   READ_SIZE             = 1024 * 1024      # 一次读多少
-  WBUFF_LIMIT           = 50 * 1024 * 1024 # 写前上限，超过上限暂停读
+  WBUFF_LIMIT           = 20 * 1024 * 1024 # 写前上限，超过上限暂停读
   RESUME_BELOW          = WBUFF_LIMIT / 2  # 降到多少以下恢复读
   CHUNK_SIZE            = 65535            # 按块加解密，块尺寸上限，不超过65535
   EXPIRE_NEW            = 5                # 多久没有建立通道，过期
