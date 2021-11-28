@@ -636,6 +636,8 @@ module Girl
         return
       end
 
+      return if data.empty?
+
       # puts "debug recv dns #{ data.inspect }"
       dns_info = @dns_infos[ dns ]
       im = dns_info[ :im ]
@@ -674,6 +676,8 @@ module Girl
     #
     def read_ctld( ctld )
       data, addrinfo, rflags, *controls = ctld.recvmsg
+      return if data.empty?
+
       data = @custom.decode( data )
       ctl_num = data[ 0 ].unpack( 'C' ).first
       ctl_addr = addrinfo.to_sockaddr
@@ -780,6 +784,8 @@ module Girl
     #
     def read_infod( infod )
       data, addrinfo, rflags, *controls = infod.recvmsg
+      return if data.empty?
+      
       ctl_num = data[ 0 ].unpack( 'C' ).first
       # puts "debug infod got #{ ctl_num } #{ addrinfo.ip_unpack.inspect }"
 

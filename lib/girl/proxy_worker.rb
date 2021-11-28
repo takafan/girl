@@ -983,6 +983,8 @@ module Girl
         return
       end
 
+      return if data.empty?
+
       # puts "debug recv dns #{ data.inspect }"
       begin
         packet = Net::DNS::Packet::parse( data )
@@ -1021,6 +1023,8 @@ module Girl
         return
       end
 
+      return if data.empty?
+      
       data = @custom.decode( data )
       ctl_num = data[ 0 ].unpack( 'C' ).first
 

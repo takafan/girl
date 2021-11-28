@@ -446,7 +446,8 @@ module Girl
     #
     def read_mirrord( mirrord )
       data, addrinfo, rflags, *controls = mirrord.recvmsg
-      return if ( data.size > ROOM_TITLE_LIMIT ) || data =~ /\r|\n/
+      return if data.empty? || ( data.size > ROOM_TITLE_LIMIT ) || data =~ /\r|\n/
+
       im = data
       room_info = @room_infos[ im ]
 
@@ -489,6 +490,7 @@ module Girl
     #
     def read_infod( infod )
       data, addrinfo, rflags, *controls = infod.recvmsg
+      return if data.empty?
 
       data2 = @room_infos.sort_by{ | _, info | info[ :updated_at ] }.reverse.map do | im, info |
         [

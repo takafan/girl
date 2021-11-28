@@ -884,6 +884,8 @@ module Girl
     #
     def read_resolv( resolv )
       data, addrinfo, rflags, *controls = resolv.recvmsg
+      return if data.empty?
+
       # puts "debug resolv recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       new_a_rsv( addrinfo, data )
     end
@@ -904,6 +906,8 @@ module Girl
         close_rsv( rsv )
         return
       end
+
+      return if data.empty?
 
       # puts "debug rsv recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
 
@@ -977,6 +981,8 @@ module Girl
         close_ctl( ctl )
         return
       end
+
+      return if data.empty?
 
       data = @custom.decode( data )
       ctl_num = data[ 0 ].unpack( 'C' ).first

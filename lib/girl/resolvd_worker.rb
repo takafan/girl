@@ -171,6 +171,8 @@ module Girl
     #
     def read_resolvd( resolvd )
       data, addrinfo, rflags, *controls = resolvd.recvmsg
+      return if data.empty?
+
       # puts "debug resolvd recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       data = @custom.decode( data )
       new_a_dst( resolvd, addrinfo, data )
@@ -192,6 +194,8 @@ module Girl
         close_dst( dst )
         return
       end
+
+      return if data.empty?
 
       # puts "debug dst recvmsg #{ addrinfo.ip_unpack.inspect } #{ data.inspect }"
       dst_info = @dst_infos[ dst ]

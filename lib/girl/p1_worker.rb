@@ -443,6 +443,7 @@ module Girl
       end
 
       data, addrinfo, rflags, *controls = ctl.recvmsg
+      return if data.empty?
 
       if addrinfo.to_sockaddr != @ctl_info[ :mirrord_addr ] then
         puts "#{ Time.new } mirrord addr not match #{ addrinfo.inspect }"
