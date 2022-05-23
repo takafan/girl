@@ -6,12 +6,11 @@ module Girl
   EXPIRE_NEW            = 5                # 多久没有建立通道，过期
   EXPIRE_CONNECTING     = 2                # 连接中，多久没连上过期
   EXPIRE_AFTER          = 86400            # 多久没有新流量，过期
+  EXPIRE_TCP            = 60               # 多久没有收到控制流量，在A_NEW_SOURCE超时时过期tcp
   RESET_TRAFF_DAY       = 1                # 流量计数重置日，0为不重置
   CHECK_TRAFF_INTERVAL  = 86400            # 检查今天是否是流量计数重置日间隔
   CHECK_EXPIRE_INTERVAL = 3600             # 检查过期间隔
   RESOLV_CACHE_EXPIRE   = 300              # dns查询结果缓存多久过期
-  RESEND_LIMIT          = 3                # ctlmsg重传次数
-  RESEND_INTERVAL       = 2                # ctlmsg重传间隔
   PING_TIMEOUT          = 2                # tun建立连接后多久没有响应，超时
   RENEW_CTL_INTERVAL    = 10               # p1心跳间隔
   ROOM_TITLE_LIMIT      = 16               # 房间名称字数

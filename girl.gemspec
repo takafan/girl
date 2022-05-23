@@ -30,11 +30,6 @@ lib/girl/proxy.rb
 lib/girl/proxyd_custom.rb
 lib/girl/proxyd_worker.rb
 lib/girl/proxyd.rb
-lib/girl/relay_worker.rb
-lib/girl/relay.rb
-lib/girl/resolv_custom.rb
-lib/girl/resolvd_worker.rb
-lib/girl/resolvd.rb
 lib/girl/version.rb
   ]
 

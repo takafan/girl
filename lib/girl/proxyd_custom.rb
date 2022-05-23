@@ -4,7 +4,7 @@ module Girl
   class ProxydCustom
     include Custom
 
-    def check( data, addrinfo )
+    def check( data )
       :success
     end
 

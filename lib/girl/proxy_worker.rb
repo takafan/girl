@@ -14,23 +14,22 @@ module Girl
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
-      @roles = {}            # sock => :dotr / :redir / :ctl / :src / :dst / :tun / :dns
+      @roles = {}            # sock => :dotr / :redir / :tcp / :src / :dst / :tun / :dns
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
-      @ctl_infos = {}        # ctl => { :ctld_addr, :closing }
+      @tcp_infos = {}        # tcp => { :rbuff, :wbuff, :created_at, :last_recv_at, :closing }
       @src_infos = {}        # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
-                             #          :is_connect, :rbuff, :dst, :dst_id, :ctl, :tun,
+                             #          :is_connect, :rbuff, :dst, :dst_id, :tcp, :tun,
                              #          :wbuff, :closing_write, :closing, :paused }
       @dst_infos = {}        # dst => { :src, :domain, :wbuff, :connected, :closing_write, :closing, :paused }
       @tun_infos = {}        # tun => { :src, :domain, :wbuff, :rbuff, :pong, :closing, :paused }
       @dns_infos = {}        # dns => { :domain, :src, :closing }
       @local_addrinfos = Socket.ip_address_list
       @tund_addrs = nil
-      @ctlmsgs = []
 
       new_a_pipe
       new_a_redir( redir_port )
-      add_hello
+      new_the_tcp
     end
 
     ##
@@ -52,8 +51,8 @@ module Girl
             read_redir( sock )
           when :dns then
             read_dns( sock )
-          when :ctl then
-            read_ctl( sock )
+          when :tcp then
+            read_tcp( sock )
           when :src then
             read_src( sock )
           when :dst then
@@ -70,6 +69,8 @@ module Girl
           role = @roles[ sock ]
 
           case role
+          when :tcp then
+            write_tcp( sock )
           when :src then
             write_src( sock )
           when :dst then
@@ -106,36 +107,25 @@ module Girl
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
       puts "#{ Time.new } add a new source #{ src_info[ :src_id ] } #{ domain_port }"
-      data = "#{ [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ domain_port }/#{ @im }"
-      add_ctlmsg( data )
+      data = "#{ [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ domain_port }"
+      add_tcp_wbuff( pack_a_chunk( data ) )
 
       Thread.new do
-        ( RESEND_LIMIT + 1 ).times do | i |
-          sleep RESEND_INTERVAL
+        sleep EXPIRE_NEW
 
-          if src_info && src_info[ :dst_id ] then
-            break
+        if src_info && src_info[ :dst_id ].nil? then
+          puts "#{ Time.new } a new source expired #{ src_info[ :src_id ] } #{ domain_port }"
+          src_info[ :closing ] = true
+          tcp_info =  @tcp_infos[ @tcp ]
+
+          if tcp_info && !tcp_info[ :closing ] && ( Time.new - ( tcp_info[ :last_recv_at ] || tcp_info[ :created_at ] ) >= EXPIRE_TCP ) then
+            puts "#{ Time.new } tcp expired"
+            tcp_info[ :closing ] = true
           end
 
-          if i == RESEND_LIMIT then
-            puts "#{ Time.new } resend a new source out of limit #{ src_info[ :src_id ] } #{ domain_port }"
-            src_info[ :closing ] = true
-            next_tick
-          else
-            puts "#{ Time.new } resend #{ data.inspect } #{ i + 1 }"
-            add_ctlmsg( data )
-          end
+          next_tick
         end
       end
-    end
-
-    ##
-    # add ctlmsg
-    #
-    def add_ctlmsg( data )
-      return if @ctlmsgs.include?( data )
-      @ctlmsgs << data
-      next_tick
     end
 
     ##
@@ -157,16 +147,6 @@ module Girl
           src_info[ :paused ] = true
         end
       end
-    end
-
-    ##
-    # add hello
-    #
-    def add_hello
-      hello = @custom.hello
-      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
-      puts "#{ Time.new } hello i'm #{ hello.inspect }"
-      add_ctlmsg( data )
     end
 
     ##
@@ -251,6 +231,16 @@ module Girl
     end
 
     ##
+    # add tcp wbuff
+    #
+    def add_tcp_wbuff( data )
+      return if @tcp.nil? || @tcp.closed?
+      tcp_info = @tcp_infos[ @tcp ]
+      tcp_info[ :wbuff ] << data
+      add_write( @tcp )
+    end
+
+    ##
     # add tun wbuff
     #
     def add_tun_wbuff( tun, data )
@@ -278,17 +268,6 @@ module Girl
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
-    end
-
-    ##
-    # close ctl
-    #
-    def close_ctl( ctl )
-      return if ctl.nil? || ctl.closed?
-      # puts "debug close ctl"
-      close_sock( ctl )
-      @ctl_infos.delete( ctl )
-      # puts "debug ctl infos size #{ @ctl_infos.size }"
     end
 
     ##
@@ -346,8 +325,8 @@ module Girl
       src_info = @src_infos[ src ]
 
       if src_info[ :tun ] then
-        data = "#{ [ SOURCE_CLOSED_READ, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
-        add_ctlmsg( data )
+        data = "#{ [ SOURCE_CLOSED_READ, src_info[ :src_id ] ].pack( 'CQ>' ) }"
+        add_tcp_wbuff( pack_a_chunk( data ) )
       end
 
       if src.closed? then
@@ -406,9 +385,20 @@ module Girl
         elsif src_info[ :tun ] then
           close_tun( src_info[ :tun ] )
           data = "#{ [ SOURCE_CLOSED, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
-          add_ctlmsg( data )
+          add_tcp_wbuff( pack_a_chunk( data ) )
         end
       end
+    end
+
+    ##
+    # close tcp
+    #
+    def close_tcp( tcp )
+      return if tcp.nil? || tcp.closed?
+      # puts "debug close tcp"
+      close_sock( tcp )
+      @tcp_infos.delete( tcp )
+      new_the_tcp
     end
 
     ##
@@ -456,7 +446,7 @@ module Girl
 
       if src_info[ :tun ] then
         data = "#{ [ SOURCE_CLOSED_WRITE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
-        add_ctlmsg( data )
+        add_tcp_wbuff( pack_a_chunk( data ) )
       end
 
       if src.closed? then
@@ -618,7 +608,6 @@ module Girl
         puts "#{ Time.new } connect tund #{ e.class }"
         tun.close
         close_src( src )
-        add_hello
         return
       end
 
@@ -687,6 +676,44 @@ module Girl
         # puts "debug go remote #{ ip }"
         new_a_remote( src )
       end
+    end
+
+    ##
+    # new the tcp
+    #
+    def new_the_tcp
+      tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+
+      tcpd_port = @proxyd_port + 10.times.to_a.sample
+      tcpd_addr = Socket.sockaddr_in( tcpd_port, @proxyd_host )
+
+      begin
+        tcp.connect_nonblock( tcpd_addr )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "#{ Time.new } connect tcpd #{ e.class }"
+        tcp.close
+        return
+      end
+
+      tcp_info = {
+        rbuff: '',            # 暂存不满一块的流量
+        wbuff: '',            # 写前
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil,    # 上一次收到控制流量时间
+        closing: false        # 准备关闭
+      }
+
+      @tcp_infos[ tcp ] = tcp_info
+      add_read( tcp, :tcp )
+      @tcp = tcp
+
+      hello = @custom.hello
+      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
+      puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
+      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
+      add_tcp_wbuff( pack_a_chunk( data ) )
     end
 
     ##
@@ -793,45 +820,6 @@ module Girl
     end
 
     ##
-    # send ctlmsg
-    #
-    def send_ctlmsg( data )
-      return unless data
-
-      ctl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      ctld_port = @proxyd_port + 10.times.to_a.sample
-      ctld_addr = Socket.sockaddr_in( ctld_port, @proxyd_host )
-      # puts "debug send ctlmsg #{ data.inspect } #{ ctld_port }"
-      data = @custom.encode( data )
-
-      begin
-        ctl.sendmsg_nonblock( data, 0, ctld_addr )
-      rescue Exception => e
-        puts "#{ Time.new } ctl sendmsg #{ e.class }"
-        ctl.close
-        return
-      end
-
-      ctl_info = {
-        ctld_addr: ctld_addr, # ctld地址
-        closing: false        # 准备关闭
-      }
-
-      @ctl_infos[ ctl ] = ctl_info
-      add_read( ctl, :ctl )
-
-      Thread.new do
-        sleep EXPIRE_NEW
-
-        if ctl && !ctl.closed? && !ctl_info[ :closing ] then
-          # puts "debug expire ctl"
-          ctl_info[ :closing ] = true
-          next_tick
-        end
-      end
-    end
-
-    ##
     # set dst closing write
     #
     def set_dst_closing_write( dst )
@@ -905,8 +893,8 @@ module Girl
     #
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
+
       @dns_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dns | close_dns( dns ) }
-      @ctl_infos.select{ | _, info | info[ :closing ] }.keys.each{ | ctl | close_ctl( ctl ) }
       @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
 
       srcs = @src_infos.select{ | _, info | info[ :closing ] }.keys
@@ -921,12 +909,11 @@ module Girl
         close_tun( tun )
       end
 
-      if srcs.any? || tuns.any? then
-        add_hello
-      end
+      tcp_info = @tcp_infos[ @tcp ]
 
-      @ctlmsgs.each{ | data | send_ctlmsg( data ) }
-      @ctlmsgs.clear
+      if tcp_info[ :closing ] then
+        close_tcp( @tcp )
+      end
     end
 
     ##
@@ -954,7 +941,6 @@ module Girl
         rbuff: '',               # 读到的流量
         dst: nil,                # :direct的场合，对应的dst
         dst_id: nil,             # :remote的场合，远端dst id
-        ctl: nil,                # :remote的场合，对应的ctl
         tun: nil,                # :remote的场合，对应的tun
         pong: false,             # :remote的场合，连接已确认
         wbuff: '',               # 从dst/tun读到的流量
@@ -1012,20 +998,59 @@ module Girl
     end
 
     ##
-    # read ctl
+    # read tcp
     #
-    def read_ctl( ctl )
-      begin
-        data, addrinfo, rflags, *controls = ctl.recvmsg
-      rescue Exception => e
-        puts "#{ Time.new } ctl recvmsg #{ e.class }"
-        close_ctl( ctl )
+    def read_tcp( tcp )
+      if tcp.closed? then
+        puts "#{ Time.new } read tcp but tcp closed?"
         return
       end
 
-      return if data.empty?
-      
-      data = @custom.decode( data )
+      begin
+        data = tcp.read_nonblock( READ_SIZE )
+      rescue Exception => e
+        # puts "debug read tcp #{ e.class }"
+        close_tcp( tcp )
+        return
+      end
+
+      tcp_info = @tcp_infos[ tcp ]
+      data = "#{ tcp_info[ :rbuff ] }#{ data }"
+
+      loop do
+        if data.bytesize <= 2 then
+          tcp_info[ :rbuff ] = data
+          break
+        end
+
+        len = data[ 0, 2 ].unpack( 'n' ).first
+
+        if len == 0 then
+          puts "#{ Time.new } read tcp zero traffic len?"
+          close_tcp( tcp )
+          return
+        end
+
+        chunk = data[ 2, len ]
+
+        if chunk.bytesize < len then
+          tcp_info[ :rbuff ] = data
+          break
+        end
+
+        data2 = @custom.decode( chunk )
+        deal_ctlmsg( data2, tcp )
+        data = data[ ( 2 + len )..-1 ]
+      end
+    end
+
+    ##
+    # deal ctlmsg
+    #
+    def deal_ctlmsg( data, tcp )
+      return if data.nil? || data.empty?
+      tcp_info = @tcp_infos[ tcp ]
+      tcp_info[ :last_recv_at ] = Time.new
       ctl_num = data[ 0 ].unpack( 'C' ).first
 
       case ctl_num
@@ -1034,7 +1059,6 @@ module Girl
         tund_ports = data[ 1, 20 ].unpack( 'n*' )
         puts "#{ Time.new } got tund ports #{ tund_ports.inspect }"
         @tund_addrs = tund_ports.map{ | tund_port | Socket.sockaddr_in( tund_port, @proxyd_host ) }
-        @src_infos.select{ | _, info | ( info[ :proxy_type ] == :remote ) && !info[ :dst_id ] }.keys.each{ | src | add_a_new_source( src ) }
       when PAIRED then
         return if data.bytesize != 17
         src_id, dst_id = data[ 1, 16 ].unpack( 'Q>Q>' )
@@ -1042,8 +1066,6 @@ module Girl
         # puts "debug got paired #{ src_id } #{ dst_id }"
         new_a_tun( src_id, dst_id )
       end
-
-      close_ctl( ctl )
     end
 
     ##
@@ -1343,6 +1365,37 @@ module Girl
         add_src_wbuff( src, chunk )
         data = data[ ( 2 + len )..-1 ]
       end
+    end
+
+    ##
+    # write tcp
+    #
+    def write_tcp( tcp )
+      if tcp.closed? then
+        puts "#{ Time.new } write tcp but tcp closed?"
+        return
+      end
+
+      tcp_info = @tcp_infos[ tcp ]
+      data = tcp_info[ :wbuff ]
+
+      # 写前为空，处理关闭写
+      if data.empty? then
+        @writes.delete( tcp )
+        return
+      end
+
+      # 写入
+      begin
+        written = tcp.write_nonblock( data )
+      rescue Exception => e
+        # puts "debug write tcp #{ e.class }"
+        close_tcp( tcp )
+        return
+      end
+
+      data = data[ written..-1 ]
+      tcp_info[ :wbuff ] = data
     end
 
     ##
