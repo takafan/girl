@@ -12,6 +12,25 @@
 
 自定义传输，回避邪恶。
 
+## 邪恶细节
+
+1. dns查询得到错误的ip。
+2. tcp流量无法到达特定ip。
+3. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。
+
+例如：
+
+```text
+CONNECT google.com HTTP/1.1\r\n\r\n
+```
+
+4. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
+5. 出国tcp，若为tls握手，后续流量稍微多一点，来源端口被封，后续流量无法到达。
+
+妹子是针对以上5点的极简解。
+
+6. udp和tcp分开触发，被偷偷限速在200K，重启vps恢复。
+
 ## 完整的路线图
 
 ```
@@ -140,25 +159,6 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 ```
 
 妹子同时支持http和socks5代理。
-
-## 邪恶细节
-
-1. dns查询得到错误的ip。
-2. tcp流量无法到达特定ip。
-3. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。
-
-例如：
-
-```text
-CONNECT google.com HTTP/1.1\r\n\r\n
-```
-
-4. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
-5. 出国tcp，若为tls握手，后续流量稍微多一点，来源端口被封，后续流量无法到达。
-
-妹子是针对以上5点的极简解。
-
-6. udp和tcp分开触发，被偷偷限速在200K，重启vps恢复。
 
 ## docker
 
