@@ -1,13 +1,13 @@
 # girl
 
 ```
-流量 -> 代理 -----> vps（代理服务端） -> 目的地
+流量 -> 代理 ---!---> vps -> 目的地
 ```
 
 代理，不论http，https，socks5，会受到邪恶阻拦。
 
 ```
-流量 -> 代理 -> 本机/路由器（近端） ----- 自定义传输 -----> vps（远端）-> 目的地
+流量 -> 代理 -> 本机/路由器（自定义传输） ------> vps -> 目的地
 ```
 
 自定义传输，回避邪恶。
@@ -37,18 +37,6 @@ end
 ```
 
 可以改它。
-
-如果某一天，邪恶褪去了，可以改成：
-
-```ruby
-def encode( data )
-  data
-end
-
-def decode( data )
-  data
-end
-```
 
 ## 使用
 
@@ -98,9 +86,6 @@ girl.conf.json的格式：
     "remote_path": "girl.remote.txt",   // 交给远端解析（并中转流量）的域名列表
     "nameserver": "114.114.114.114",    // 域名列表之外的域名就近查询，国内的dns服务器
     "im": "girl",                       // 标识，用来识别近端
-    "resolv_port": 1053,                // 透明中转，近端接收dns查询流量的端口
-    "resolvd_port": 5353,               // 透明中转，远端dns查询中继端口
-    "relay_port": 1066,                 // 透明中转，近端接收tcp流量的端口
     "mirrord_port": 7070,               // 镜子服务端口
     "mirrord_infod_port": 7080,         // 镜子服务查询端口，供本地调用
     "p2d_ports": [ [ "girl", 2222 ] ],  // 镜子服务，标识对应影子端口
@@ -158,14 +143,9 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 
 ## 邪恶细节
 
-邪恶使得：
-
-1. dns查询得到错误的ip
-2. tcp流量无法到达特定ip
-
-1和2，办法是中转。但是，中转仍将碰见邪恶：
-
-3. 若流量含有特定域名，且形似http头或者证书，会吃到一个reset
+1. dns查询得到错误的ip。
+2. tcp流量无法到达特定ip。
+3. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。
 
 例如：
 
@@ -173,25 +153,12 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 CONNECT google.com HTTP/1.1\r\n\r\n
 ```
 
-4. 回程流量引起，ping不通vps，3分钟后恢复
+4. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
+5. 出国tcp，若为tls握手，后续流量稍微多一点，来源端口被封，后续流量无法到达。
 
-3和4，办法是混淆流量。
+妹子是针对以上5点的极简解。
 
-还没结束：
-
-5. 一旦目的地（远端）ip被收集，任何tcp建立连接后，来源（近端）端口被封，后续流量无法到达
-6. 一旦目的地（远端）ip被收集，任何udp第一段流量后，来源（近端）端口被封，后续流量无法到达
-7. udp和tcp分开触发，被偷偷限速在200K，重启vps恢复
-
-办法小结：
-
-1. 中转
-2. 中转
-3. 混淆域名（可以自定义）
-4. 混淆流量（可以自定义）
-5. 不停的向vps建https连接或者socks5连接（包括shadowsocks）即可提高被收集几率。而不使用这两个协议，则没发现被收集的情况。
-6. udp则不看任何流量内容，直接被收集，流量越频繁被收集几率越高，因此，不心跳，降低频率，每发一个udp就换一个新端口。
-7. 气死
+6. udp和tcp分开触发，被偷偷限速在200K，重启vps恢复。
 
 ## docker
 
@@ -224,52 +191,6 @@ android: 设置 > WLAN > 长按一个连接 > 修改网络 > 显示高级选项 
 ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线 > 自订 > 选择一个连接 > 一路默认到Proxy伺服器 > 使用 > 填近端的地址和端口 > 继续
 
 switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
-
-## 代理之外
-
-代理设在那里，但应用程序可以选择不走。例如switch版的youtube。
-
-妹子支持透明中转，可以借助iptables把dns查询和全部tcp流量引给妹子。
-
-远端，多启一个dns查询中继：
-
-```ruby
-# resolvd.rb
-require 'girl/resolvd'
-
-Girl::Resolvd.new '/etc/girl.conf.json'
-```
-
-```bash
-ruby resolvd.rb
-```
-
-近端：
-
-```ruby
-# relay.rb
-require 'girl/relay'
-
-Girl::Relay.new '/boot/girl.conf.json'
-```
-
-```bash
-ruby relay.rb
-```
-
-iptables配置：
-
-```bash
-iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 1053
-iptables -t nat -A PREROUTING -d 127.0.0.1 -j RETURN
-iptables -t nat -A PREROUTING -d 192.168.1.59 -j RETURN
-iptables -t nat -A PREROUTING -d 192.168.59.1 -j RETURN
-iptables -t nat -A PREROUTING -p tcp -d 1.2.3.4 --match multiport --dports 80,443 -j REDIRECT --to-ports 1066
-iptables -t nat -A PREROUTING -p tcp -d 1.2.3.4 -j RETURN
-iptables -t nat -A PREROUTING -p tcp -j REDIRECT --to-ports 1066
-```
-
-连近端wifi，打开youtube。
 
 ## 连回家
 
