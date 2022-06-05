@@ -4,7 +4,7 @@ module Girl
     ##
     # initialize
     #
-    def initialize( proxyd_port, infod_port, nameserver )
+    def initialize( proxyd_port, nameserver )
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
@@ -21,7 +21,7 @@ module Girl
 
       new_a_pipe
       new_tcpds( proxyd_port )
-      new_a_infod( infod_port )
+      new_a_infod( proxyd_port )
     end
 
     ##
@@ -446,11 +446,11 @@ module Girl
     ##
     # new a infod
     #
-    def new_a_infod( infod_port )
+    def new_a_infod( proxyd_port )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      infod.bind( Socket.sockaddr_in( infod_port, '127.0.0.1' ) )
-      puts "#{ Time.new } infod bind on #{ infod_port }"
+      infod.bind( Socket.sockaddr_in( proxyd_port, '127.0.0.1' ) )
+      puts "#{ Time.new } infod bind on #{ proxyd_port }"
       add_read( infod, :infod )
     end
 
@@ -487,7 +487,7 @@ module Girl
         tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
         tcpd.bind( Socket.sockaddr_in( tcpd_port, '0.0.0.0' ) )
         tcpd.listen( 127 )
-        puts "#{ Time.new } tcpd bind on #{ tcpd_port }"
+        puts "#{ Time.new } tcpd listen on #{ tcpd_port }"
         add_read( tcpd, :tcpd )
       end
     end
@@ -685,7 +685,7 @@ module Girl
     # deal ctlmsg
     #
     def deal_ctlmsg( data, tcp )
-      return if data.nil? || data.empty?
+      return if data.nil? || data.empty? || tcp.nil? || tcp.closed?
       tcp_info = @tcp_infos[ tcp ]
       tcp_info[ :last_recv_at ] = Time.new
       ctl_num = data[ 0 ].unpack( 'C' ).first
@@ -842,22 +842,33 @@ module Girl
       data, addrinfo, rflags, *controls = infod.recvmsg
       return if data.empty?
 
-      ctl_num = data[ 0 ].unpack( 'C' ).first
-      # puts "debug infod got #{ ctl_num } #{ addrinfo.ip_unpack.inspect }"
+      im_infos = []
 
-      case ctl_num
-      when TRAFF_INFOS then
-        data2 = [ TRAFF_INFOS ].pack( 'C' )
+      @im_infos.sort.map do | im, _info |
+        im_infos << {
+          im: im,
+          in: _info[ :in ],
+          out: _info[ :out ]
+        }
+      end
 
-        @im_infos.sort.each do | im, info |
-          data2 << [ [ im.bytesize ].pack( 'C' ), im, [ info[ :in ], info[ :out ] ].pack( 'Q>Q>' ) ].join
-        end
+      report = {
+        sizes: {
+          im_infos: @im_infos.size,
+          tcp_infos: @tcp_infos.size,
+          tund_infos: @tund_infos.size,
+          dst_infos: @dst_infos.size,
+          tun_infos: @tun_infos.size,
+          dns_infos: @dns_infos.size,
+          resolv_caches: @resolv_caches.size
+        },
+        im_infos: im_infos
+      }
 
-        begin
-          infod.sendmsg_nonblock( data2, 0, addrinfo )
-        rescue Exception => e
-          puts "#{ Time.new } infod sendmsg to #{ e.class } #{ addrinfo.ip_unpack.inspect }"
-        end
+      begin
+        infod.sendmsg_nonblock( JSON.generate( report ), 0, addrinfo )
+      rescue Exception => e
+        puts "#{ Time.new } infod sendmsg to #{ e.class } #{ addrinfo.ip_unpack.inspect }"
       end
     end
 

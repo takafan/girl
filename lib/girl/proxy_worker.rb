@@ -911,7 +911,7 @@ module Girl
 
       tcp_info = @tcp_infos[ @tcp ]
 
-      if tcp_info[ :closing ] then
+      if tcp_info && tcp_info[ :closing ] then
         close_tcp( @tcp )
       end
     end
@@ -1048,7 +1048,7 @@ module Girl
     # deal ctlmsg
     #
     def deal_ctlmsg( data, tcp )
-      return if data.nil? || data.empty?
+      return if data.nil? || data.empty? || tcp.nil? || tcp.closed?
       tcp_info = @tcp_infos[ tcp ]
       tcp_info[ :last_recv_at ] = Time.new
       ctl_num = data[ 0 ].unpack( 'C' ).first
