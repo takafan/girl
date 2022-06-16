@@ -14,21 +14,21 @@ module Girl
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
-      @roles = {}            # sock => :dotr / :redir / :tcp / :src / :dst / :tun / :dns
+      @roles = {}            # sock => :redir / :infod / :tcp / :src / :dst / :tun / :dns
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
-      @tcp_infos = {}        # tcp => { :rbuff, :wbuff, :created_at, :last_recv_at, :closing }
+      @tcp_infos = {}        # tcp => { :rbuff, :wbuff, :created_at, :last_recv_at }
       @src_infos = {}        # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
                              #          :is_connect, :rbuff, :dst, :dst_id, :tcp, :tun,
-                             #          :wbuff, :closing_write, :closing, :paused }
-      @dst_infos = {}        # dst => { :src, :domain, :wbuff, :connected, :closing_write, :closing, :paused }
-      @tun_infos = {}        # tun => { :src, :domain, :wbuff, :rbuff, :pong, :closing, :paused }
-      @dns_infos = {}        # dns => { :domain, :src, :closing }
+                             #          :wbuff, :closing_write, :paused }
+      @dst_infos = {}        # dst => { :dst_id, :src, :domain, :wbuff, :created_at, :connected, :last_add_wbuff_at, :closing_write, :paused }
+      @tun_infos = {}        # tun => { :tun_id, :src, :domain, :wbuff, :rbuff, :created_at, :pong, :last_add_wbuff_at, :paused }
+      @dns_infos = {}        # dns => { :dns_id, :domain, :src }
       @local_addrinfos = Socket.ip_address_list
       @tund_addrs = nil
 
-      new_a_pipe
       new_a_redir( redir_port )
+      new_a_infod( redir_port )
       new_the_tcp
     end
 
@@ -37,6 +37,7 @@ module Girl
     #
     def looping
       puts "#{ Time.new } looping"
+      loop_check_expire
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -45,10 +46,10 @@ module Girl
           role = @roles[ sock ]
 
           case role
-          when :dotr then
-            read_dotr( sock )
           when :redir then
             read_redir( sock )
+          when :infod then
+            read_infod( sock )
           when :dns then
             read_dns( sock )
           when :tcp then
@@ -103,28 +104,23 @@ module Girl
     #
     def add_a_new_source( src )
       src_info = @src_infos[ src ]
+      src_id = src_info[ :src_id ]
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
-      puts "#{ Time.new } add a new source #{ src_info[ :src_id ] } #{ domain_port }"
-      data = "#{ [ A_NEW_SOURCE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ domain_port }"
+      puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
+      data = "#{ [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) }#{ domain_port }"
       add_tcp_wbuff( pack_a_chunk( data ) )
 
       Thread.new do
         sleep EXPIRE_NEW
 
-        if src_info && src_info[ :dst_id ].nil? then
-          puts "#{ Time.new } a new source expired #{ src_info[ :src_id ] } #{ domain_port }"
-          src_info[ :closing ] = true
-          tcp_info =  @tcp_infos[ @tcp ]
+        msg = {
+          message_type: 'check-src-paired',
+          src_id: src_id
+        }
 
-          if tcp_info && !tcp_info[ :closing ] && ( Time.new - ( tcp_info[ :last_recv_at ] || tcp_info[ :created_at ] ) >= EXPIRE_TCP ) then
-            puts "#{ Time.new } tcp expired"
-            tcp_info[ :closing ] = true
-          end
-
-          next_tick
-        end
+        send_msg_to_infod( msg )
       end
     end
 
@@ -135,6 +131,7 @@ module Girl
       return if dst.nil? || dst.closed?
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
+      dst_info[ :last_add_wbuff_at ] = Time.new
       add_write( dst )
 
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
@@ -159,8 +156,6 @@ module Girl
       if role then
         @roles[ sock ] = role
       end
-
-      next_tick
     end
 
     ##
@@ -184,7 +179,6 @@ module Girl
     def add_src_rbuff( src, data )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
-      return if src_info[ :closing ]
       src_info[ :rbuff ] << data
 
       if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
@@ -199,7 +193,6 @@ module Girl
     def add_src_wbuff( src, data )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
-      return if src_info[ :closing ]
       src_info[ :wbuff ] << data
       add_write( src )
 
@@ -246,8 +239,8 @@ module Girl
     def add_tun_wbuff( tun, data )
       return if tun.nil? || tun.closed?
       tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing ]
       tun_info[ :wbuff ] << data
+      tun_info[ :last_add_wbuff_at ] = Time.new
       add_write( tun )
 
       if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
@@ -477,6 +470,23 @@ module Girl
     end
 
     ##
+    # loop check expire
+    #
+    def loop_check_expire
+      Thread.new do
+        loop do
+          sleep CHECK_EXPIRE_INTERVAL
+
+          msg = {
+            message_type: 'check-expire'
+          }
+
+          send_msg_to_infod( msg )
+        end
+      end
+    end
+
+    ##
     # new a dst
     #
     def new_a_dst( ipaddr, src )
@@ -507,14 +517,18 @@ module Girl
         return
       end
 
-      # puts "debug a new dst #{ dst.local_address.inspect }"
+      dst_id = rand( ( 2 ** 64 ) - 2 ) + 1
+      # puts "debug a new dst #{ dst.local_address.inspect } #{ dst_id }"
+
       dst_info = {
+        dst_id: dst_id,         # dst id
         src: src,               # 对应src
         domain: domain,         # 目的地
         wbuff: '',              # 写前
+        created_at: Time.new,   # 创建时间
         connected: false,       # 是否已连接
+        last_add_wbuff_at: nil, # 上一次加写前的时间
         closing_write: false,   # 准备关闭写
-        closing: false,         # 准备关闭
         paused: false           # 是否已暂停
       }
 
@@ -540,21 +554,33 @@ module Girl
       Thread.new do
         sleep EXPIRE_CONNECTING
 
-        if dst && !dst.closed? && !dst_info[ :connected ] then
-          puts "#{ Time.new } expire dst #{ dst_info[ :domain ].inspect }"
-          dst_info[ :closing ] = true
-          next_tick
-        end
+        msg = {
+          message_type: 'check-dst-connected',
+          dst_id: dst_id
+        }
+
+        send_msg_to_infod( msg )
       end
     end
 
     ##
-    # new a pipe
+    # new a infod
     #
-    def new_a_pipe
-      dotr, dotw = IO.pipe
-      @dotw = dotw
-      add_read( dotr, :dotr )
+    def new_a_infod( infod_port )
+      infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
+      infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      end
+      
+      infod.bind( infod_addr )
+      puts "#{ Time.new } infod bind on #{ infod_port }"
+      add_read( infod, :infod )
+      info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      @infod_addr = infod_addr
+      @infod = infod
+      @info = info
     end
 
     ##
@@ -596,8 +622,6 @@ module Girl
       return if src.nil? || src.closed?
       src_info[ :dst_id ] = dst_id
       tund_addr = @tund_addrs.sample
-      # puts "debug new a tun #{ Addrinfo.new( tund_addr ).inspect }"
-
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
@@ -612,15 +636,19 @@ module Girl
       end
 
       domain = src_info[ :destination_domain ]
+      tun_id = rand( ( 2 ** 64 ) - 2 ) + 1
+      # puts "debug new a tun #{ tun_id } #{ Addrinfo.new( tund_addr ).inspect } #{ domain }"
 
       tun_info = {
-        src: src,                                # 对应src
-        domain: src_info[ :destination_domain ], # 目的地
-        rbuff: '',                               # 暂存不满一块的流量
-        wbuff: [ dst_id ].pack( 'Q>' ),          # 写前
-        pong: false,                             # 是否有回应
-        closing: false,                          # 准备关闭
-        paused: false                            # 是否已暂停
+        tun_id: tun_id,                 # tun id
+        src: src,                       # 对应src
+        domain: domain,                 # 目的地
+        rbuff: '',                      # 暂存不满一块的流量
+        wbuff: [ dst_id ].pack( 'Q>' ), # 写前
+        created_at: Time.new,           # 创建时间
+        pong: false,                    # 是否有回应
+        last_add_wbuff_at: nil,         # 上一次加写前的时间
+        paused: false                   # 是否已暂停
       }
 
       @tun_infos[ tun ] = tun_info
@@ -631,11 +659,12 @@ module Girl
       Thread.new do
         sleep PING_TIMEOUT
 
-        if tun && !tun.closed? && !tun_info[ :pong ] then
-          puts "#{ Time.new } ping timeout #{ tun_info[ :domain ].inspect }"
-          tun_info[ :closing ] = true
-          next_tick
-        end
+        msg = {
+          message_type: 'check-tun-pong',
+          tun_id: tun_id
+        }
+
+        send_msg_to_infod( msg )
       end
     end
 
@@ -701,8 +730,7 @@ module Girl
         rbuff: '',            # 暂存不满一块的流量
         wbuff: '',            # 写前
         created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到控制流量时间
-        closing: false        # 准备关闭
+        last_recv_at: nil     # 上一次收到控制流量时间
       }
 
       @tcp_infos[ tcp ] = tcp_info
@@ -714,13 +742,6 @@ module Girl
       puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
       puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
       add_tcp_wbuff( pack_a_chunk( data ) )
-    end
-
-    ##
-    # next tick
-    #
-    def next_tick
-      @dotw.write( '.' )
     end
 
     ##
@@ -798,10 +819,12 @@ module Girl
         return
       end
 
+      dns_id = rand( ( 2 ** 64 ) - 2 ) + 1
+
       dns_info = {
+        dns_id: dns_id,
         domain: domain,
-        src: src,
-        closing: false
+        src: src
       }
 
       @dns_infos[ dns ] = dns_info
@@ -811,11 +834,34 @@ module Girl
       Thread.new do
         sleep EXPIRE_NEW
 
-        if dns && !dns.closed? && !dns_info[ :closing ] then
-          # puts "debug expire dns #{ dns_info[ :domain ].inspect }"
-          dns_info[ :closing ] = true
-          next_tick
-        end
+        msg = {
+          message_type: 'check-dns-closed',
+          dns_id: dns_id
+        }
+
+        send_msg_to_infod( msg )
+      end
+    end
+
+    ##
+    # send msg to client
+    #
+    def send_msg_to_client( msg, addrinfo )
+      begin
+        @infod.sendmsg_nonblock( JSON.generate( msg ), 0, addrinfo )
+      rescue Exception => e
+        puts "#{ Time.new } send msg to client #{ e.class } #{ addrinfo.ip_unpack.inspect }"
+      end
+    end
+
+    ##
+    # send msg to infod
+    #
+    def send_msg_to_infod( msg )
+      begin
+        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
+      rescue Exception => e
+        puts "#{ Time.new } send msg to infod #{ e.class }"
       end
     end
 
@@ -837,7 +883,7 @@ module Girl
     def set_src_closing_write( src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
-      return if src_info[ :closing ] || src_info[ :closing_write ]
+      return if src_info[ :closing_write ]
       src_info[ :closing_write ] = true
       add_write( src )
     end
@@ -848,7 +894,7 @@ module Girl
     def set_tun_closing_write( tun )
       return if tun.nil? || tun.closed?
       tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing ] || tun_info[ :closing_write ]
+      return if tun_info[ :closing_write ]
       tun_info[ :closing_write ] = true
       add_write( tun )
     end
@@ -889,34 +935,6 @@ module Girl
     end
 
     ##
-    # read dotr
-    #
-    def read_dotr( dotr )
-      dotr.read_nonblock( READ_SIZE )
-
-      @dns_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dns | close_dns( dns ) }
-      @dst_infos.select{ | _, info | info[ :closing ] }.keys.each{ | dst | close_dst( dst ) }
-
-      srcs = @src_infos.select{ | _, info | info[ :closing ] }.keys
-
-      srcs.each do | src |
-        close_src( src )
-      end
-
-      tuns = @tun_infos.select{ | _, info | info[ :closing ] }.keys
-
-      tuns.each do | tun |
-        close_tun( tun )
-      end
-
-      tcp_info = @tcp_infos[ @tcp ]
-
-      if tcp_info && tcp_info[ :closing ] then
-        close_tcp( @tcp )
-      end
-    end
-
-    ##
     # read redir
     #
     def read_redir( redir )
@@ -945,11 +963,91 @@ module Girl
         pong: false,             # :remote的场合，连接已确认
         wbuff: '',               # 从dst/tun读到的流量
         closing_write: false,    # 准备关闭写
-        closing: false,          # 准备关闭
         paused: false            # 是否暂停
       }
 
       add_read( src, :src )
+    end
+
+    ##
+    # read infod
+    #
+    def read_infod( infod )
+      data, addrinfo, rflags, *controls = infod.recvmsg
+      return if data.empty?
+
+      msg = JSON.parse( data, symbolize_names: true )
+      message_type = msg[ :message_type ]
+
+      case message_type
+      when 'check-src-paired' then
+        src_id = msg[ :src_id ]
+        src, src_info = @src_infos.find{ | _, _src_info | ( _src_info[ :src_id ] == src_id ) && _src_info[ :dst_id ].nil? }
+
+        if src then
+          puts "#{ Time.new } src pair timeout #{ src_id } #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }"
+          close_src( src )
+
+          if @tcp then
+            tcp_info = @tcp_infos[ @tcp ]
+
+            if tcp_info && ( Time.new - ( tcp_info[ :last_recv_at ] || tcp_info[ :created_at ] ) >= EXPIRE_TCP ) then
+              puts "#{ Time.new } tcp expired"
+              close_tcp( @tcp )
+            end
+          else
+            new_the_tcp
+          end
+        end
+      when 'check-dst-connected' then
+        dst_id = msg[ :dst_id ]
+        dst, dst_info = @dst_infos.find{ | _, _dst_info | ( _dst_info[ :dst_id ] == dst_id ) && !_dst_info[ :connected ] }
+
+        if dst then
+          puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ].inspect }"
+          close_dst( dst )
+        end
+      when 'check-tun-pong' then
+        tun_id = msg[ :tun_id ]
+        tun, tun_info = @tun_infos.find{ | _, _tun_info | ( _tun_info[ :tun_id ] == tun_id ) && !_tun_info[ :pong ] }
+
+        if tun then
+          puts "#{ Time.new } tun ping timeout #{ tun_info[ :tun_id ] } #{ tun_info[ :domain ].inspect }"
+          close_tun( tun )
+        end
+      when 'check-dns-closed' then
+        dns_id = msg[ :dns_id ]
+        dns, dns_info = @dns_infos.find{ | _, _dns_info | ( _dns_info[ :dns_id ] == dns_id ) }
+
+        if dns then
+          puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ].inspect }"
+          close_dns( dns )
+        end
+      when 'check-expire' then
+        now = Time.new
+
+        @dst_infos.select{ | _, _dst_info | now - ( _dst_info[ :last_add_wbuff_at ] || _dst_info[ :created_at ] ) >= EXPIRE_AFTER }.each do | dst, dst_info |
+          puts "#{ Time.new } expire dst #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ].inspect }"
+          close_dst( dst )
+        end
+
+        @tun_infos.select{ | _, _tun_info | ( now - _tun_info[ :last_add_wbuff_at ] || _tun_info[ :created_at ] ) >= EXPIRE_AFTER }.each do | tun, tun_info |
+          puts "#{ Time.new } expire tun #{ tun_info[ :tun_id ] } #{ tun_info[ :domain ].inspect }"
+          close_tun( tun )
+        end
+      when 'memory-info' then
+        msg2 = {
+          sizes: {
+            src_infos: @src_infos.size,
+            dst_infos: @dst_infos.size,
+            tun_infos: @tun_infos.size,
+            dns_infos: @dns_infos.size,
+            resolv_caches: @resolv_caches.size
+          }
+        }
+
+        send_msg_to_client( msg2, addrinfo )
+      end
     end
 
     ##
