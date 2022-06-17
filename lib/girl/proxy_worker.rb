@@ -573,7 +573,7 @@ module Girl
       if RUBY_PLATFORM.include?( 'linux' ) then
         infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       end
-      
+
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
@@ -1031,7 +1031,7 @@ module Girl
           close_dst( dst )
         end
 
-        @tun_infos.select{ | _, _tun_info | ( now - _tun_info[ :last_add_wbuff_at ] || _tun_info[ :created_at ] ) >= EXPIRE_AFTER }.each do | tun, tun_info |
+        @tun_infos.select{ | _, _tun_info | now - ( _tun_info[ :last_add_wbuff_at ] || _tun_info[ :created_at ] ) >= EXPIRE_AFTER }.each do | tun, tun_info |
           puts "#{ Time.new } expire tun #{ tun_info[ :tun_id ] } #{ tun_info[ :domain ].inspect }"
           close_tun( tun )
         end
