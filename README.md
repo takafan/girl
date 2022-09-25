@@ -41,22 +41,6 @@ CONNECT google.com HTTP/1.1\r\n\r\n
                                                                                            `- not hit -----> 远端 -> 目的地
 ```
 
-## 自定义传输
-
-妹子默认的加解密：
-
-```ruby
-def encode( data )
-  data.reverse
-end
-
-def decode( data )
-  data.reverse
-end
-```
-
-可以改它。
-
 ## 使用
 
 分别在两端装：

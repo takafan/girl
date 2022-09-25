@@ -22,7 +22,7 @@ module Girl
                              #          :is_connect, :rbuff, :dst, :dst_id, :tcp, :tun,
                              #          :wbuff, :closing_write, :paused }
       @dst_infos = {}        # dst => { :dst_id, :src, :domain, :wbuff, :created_at, :connected, :last_add_wbuff_at, :closing_write, :paused }
-      @tun_infos = {}        # tun => { :tun_id, :src, :domain, :wbuff, :rbuff, :created_at, :pong, :last_add_wbuff_at, :paused }
+      @tun_infos = {}        # tun => { :tun_id, :src, :domain, :wbuff, :created_at, :pong, :last_add_wbuff_at, :paused }
       @dns_infos = {}        # dns => { :dns_id, :domain, :src }
       @local_addrinfos = Socket.ip_address_list
       @tund_addrs = nil
@@ -643,7 +643,6 @@ module Girl
         tun_id: tun_id,                 # tun id
         src: src,                       # 对应src
         domain: domain,                 # 目的地
-        rbuff: '',                      # 暂存不满一块的流量
         wbuff: [ dst_id ].pack( 'Q>' ), # 写前
         created_at: Time.new,           # 创建时间
         pong: false,                    # 是否有回应
@@ -748,7 +747,7 @@ module Girl
     # pack a chunk
     #
     def pack_a_chunk( data )
-      data = @custom.encode( data )
+      data = @custom.encode2( data )
       "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
     end
 
@@ -921,15 +920,7 @@ module Girl
       end
 
       unless src_info[ :rbuff ].empty? then
-        data = ''
-
-        until src_info[ :rbuff ].empty? do
-          # puts "debug move src rbuff to tun wbuff #{ src_info[ :rbuff ].bytesize }"
-          chunk_data = src_info[ :rbuff ][ 0, CHUNK_SIZE ]
-          data << pack_a_chunk( chunk_data )
-          src_info[ :rbuff ] = src_info[ :rbuff ][ chunk_data.bytesize..-1 ]
-        end
-
+        data = @custom.encode( src_info[ :rbuff ] )
         add_tun_wbuff( tun, data )
       end
     end
@@ -1136,7 +1127,7 @@ module Girl
           break
         end
 
-        data2 = @custom.decode( chunk )
+        data2 = @custom.decode2( chunk )
         deal_ctlmsg( data2, tcp )
         data = data[ ( 2 + len )..-1 ]
       end
@@ -1344,7 +1335,7 @@ module Girl
         tun = src_info[ :tun ]
 
         if tun then
-          add_tun_wbuff( tun, pack_a_chunk( data ) )
+          add_tun_wbuff( tun, @custom.encode( data ) )
         else
           # puts "debug add src rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
@@ -1435,34 +1426,8 @@ module Girl
         end
       end
 
-      data = "#{ tun_info[ :rbuff ] }#{ data }"
-
-      loop do
-        if data.bytesize <= 2 then
-          tun_info[ :rbuff ] = data
-          break
-        end
-
-        len = data[ 0, 2 ].unpack( 'n' ).first
-
-        if len == 0 then
-          puts "#{ Time.new } zero traffic len?"
-          close_tun( tun )
-          close_src( src )
-          return
-        end
-
-        chunk = data[ 2, len ]
-
-        if chunk.bytesize < len then
-          tun_info[ :rbuff ] = data
-          break
-        end
-
-        chunk = @custom.decode( chunk )
-        add_src_wbuff( src, chunk )
-        data = data[ ( 2 + len )..-1 ]
-      end
+      data = @custom.decode( data )
+      add_src_wbuff( src, data )
     end
 
     ##

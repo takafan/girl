@@ -14,7 +14,7 @@ module Girl
       @resolv_caches = {} # domain => [ ip, created_at ]
       @dst_infos = {}     # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id,
                           #          :created_at, :connected, :last_add_wbuff_at, :closing_write, :paused }
-      @tun_infos = {}     # tun => { :im, :dst, :domain, :rbuff, :wbuff, :created_at, :last_add_wbuff_at, :paused }
+      @tun_infos = {}     # tun => { :im, :dst, :domain, :wbuff, :created_at, :last_add_wbuff_at, :paused }
       @dns_infos = {}     # dns => { :dns_id, :im, :src_id, :domain, :port, :tcp }
       @im_infos = {}      # im => { :in, :out, :tund_ports }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
@@ -476,7 +476,7 @@ module Girl
     # pack a chunk
     #
     def pack_a_chunk( data )
-      data = @custom.encode( data )
+      data = @custom.encode2( data )
       "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
     end
 
@@ -522,11 +522,8 @@ module Girl
       # puts "debug add pong #{ dst_info[ :src_id ] }"
       data = [ dst_info[ :src_id ] ].pack( 'Q>' )
 
-      until dst_info[ :rbuff ].empty? do
-        chunk_data = dst_info[ :rbuff ][ 0, CHUNK_SIZE ]
-        # puts "debug move dst rbuff to tun wbuff #{ chunk_data.bytesize }"
-        data << pack_a_chunk( chunk_data )
-        dst_info[ :rbuff ] = dst_info[ :rbuff ][ chunk_data.bytesize..-1 ]
+      unless dst_info[ :rbuff ].empty? then
+        data << @custom.encode( dst_info[ :rbuff ] )
       end
 
       add_tun_wbuff( tun, data )
@@ -658,7 +655,7 @@ module Girl
           break
         end
 
-        data2 = @custom.decode( chunk )
+        data2 = @custom.decode2( chunk )
         deal_ctlmsg( data2, tcp )
         data = data[ ( 2 + len )..-1 ]
       end
@@ -920,7 +917,7 @@ module Girl
       @im_infos[ dst_info[ :im ] ][ :in ] += data.bytesize
 
       if tun && !tun.closed? then
-        add_tun_wbuff( tun, pack_a_chunk( data ) )
+        add_tun_wbuff( tun, @custom.encode( data ) )
       else
         # puts "debug add dst rbuff #{ data.bytesize }"
         add_dst_rbuff( dst, data )
@@ -952,7 +949,6 @@ module Girl
         im: tund_info[ :im ],   # 标识
         dst: nil,               # 对应dst
         domain: nil,            # 目的地
-        rbuff: '',              # 暂存不满一块的流量
         wbuff: '',              # 写前
         created_at: Time.new,   # 创建时间
         last_add_wbuff_at: nil, # 上一次加写前的时间
@@ -1021,34 +1017,8 @@ module Girl
         end
       end
 
-      data = "#{ tun_info[ :rbuff ] }#{ data }"
-
-      loop do
-        if data.bytesize <= 2 then
-          tun_info[ :rbuff ] = data
-          break
-        end
-
-        len = data[ 0, 2 ].unpack( 'n' ).first
-
-        if len == 0 then
-          puts "#{ Time.new } read tun zero traffic len?"
-          close_tun( tun )
-          close_dst( dst )
-          return
-        end
-
-        chunk = data[ 2, len ]
-
-        if chunk.bytesize < len then
-          tun_info[ :rbuff ] = data
-          break
-        end
-
-        chunk = @custom.decode( chunk )
-        add_dst_wbuff( dst, chunk )
-        data = data[ ( 2 + len )..-1 ]
-      end
+      data = @custom.decode( data )
+      add_dst_wbuff( dst, data )
     end
 
     ##
