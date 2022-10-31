@@ -26,7 +26,7 @@ CONNECT google.com HTTP/1.1\r\n\r\n
 
 4. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
 5. 出国tcp，若为代理协议或者tls握手，后续流量稍微多一点，来源端口被封，后续流量无法到达。
-6. 出国tcp无法到达vps，但ping的通，十分钟后恢复。
+6. 出国tcp无法到达vps，但ping的通，10分钟后恢复。
 7. 出国tcp及icmp无法到达vps，udp可以到达，不会恢复。
 
 妹子是针对以上7点的极简解。
