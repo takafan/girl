@@ -9,7 +9,7 @@ module Girl
       @reads = []
       @writes = []
       @roles = {}         # sock => :tcpd / :tcp / :infod / :dst / :tund / :tun / :dns
-      @tcp_infos = {}     # tcp => { :rbuff, :wbuff, :im, :created_at, :last_recv_at }
+      @tcp_infos = {}     # tcp => { :part, :wbuff, :im, :created_at, :last_recv_at }
       @tund_infos = {}    # tund => { :im }
       @resolv_caches = {} # domain => [ ip, created_at ]
       @dst_infos = {}     # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id,
@@ -413,7 +413,7 @@ module Girl
 
       data = [ PAIRED, src_id, dst_id ].pack( 'CQ>Q>' )
       # puts "debug add paired #{ im.inspect } #{ src_id } #{ dst_id } #{ domain }:#{ port }"
-      add_tcp_wbuff( tcp, pack_a_chunk( data ) )
+      add_tcp_wbuff( tcp, @custom.encode_a_msg( data ) )
 
       Thread.new do
         sleep EXPIRE_CONNECTING
@@ -470,14 +470,6 @@ module Girl
         puts "#{ Time.new } tcpd listen on #{ tcpd_port }"
         add_read( tcpd, :tcpd )
       end
-    end
-
-    ##
-    # pack a chunk
-    #
-    def pack_a_chunk( data )
-      data = @custom.encode2( data )
-      "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
     end
 
     ##
@@ -603,7 +595,7 @@ module Girl
       end
 
       @tcp_infos[ tcp ] = {
-        rbuff: '',            # 暂存不满一块的流量
+        part: '',             # 包长+没收全的缓存
         wbuff: '',            # 写前
         im: nil,              # 标识
         created_at: Time.new, # 创建时间
@@ -632,33 +624,11 @@ module Girl
       end
 
       tcp_info = @tcp_infos[ tcp ]
-      data = "#{ tcp_info[ :rbuff ] }#{ data }"
+      data = "#{ tcp_info[ :part ] }#{ data }"
 
-      loop do
-        if data.bytesize <= 2 then
-          tcp_info[ :rbuff ] = data
-          break
-        end
-
-        len = data[ 0, 2 ].unpack( 'n' ).first
-
-        if len == 0 then
-          puts "#{ Time.new } read tcp zero traffic len?"
-          close_tcp( tcp )
-          return
-        end
-
-        chunk = data[ 2, len ]
-
-        if chunk.bytesize < len then
-          tcp_info[ :rbuff ] = data
-          break
-        end
-
-        data2 = @custom.decode2( chunk )
-        deal_ctlmsg( data2, tcp )
-        data = data[ ( 2 + len )..-1 ]
-      end
+      msgs, part = @custom.decode_to_msgs( data )
+      msgs.each{ | msg | deal_ctlmsg( msg, tcp ) }
+      tcp_info[ :part ] = part
     end
 
     ##
@@ -706,7 +676,7 @@ module Girl
 
         puts "#{ Time.new } add tcp wbuff tund ports #{ im_info[ :tund_ports ].inspect }"
         data2 = [ TUND_PORTS, *im_info[ :tund_ports ] ].pack( 'Cn*' )
-        add_tcp_wbuff( tcp, pack_a_chunk( data2 ) )
+        add_tcp_wbuff( tcp, @custom.encode_a_msg( data2 ) )
       when A_NEW_SOURCE then
         return if tcp_info[ :im ].nil? || data.bytesize <= 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -949,6 +919,7 @@ module Girl
         im: tund_info[ :im ],   # 标识
         dst: nil,               # 对应dst
         domain: nil,            # 目的地
+        part: '',               # 包长+没收全的缓存
         wbuff: '',              # 写前
         created_at: Time.new,   # 创建时间
         last_add_wbuff_at: nil, # 上一次加写前的时间
@@ -1017,8 +988,10 @@ module Girl
         end
       end
 
-      data = @custom.decode( data )
+      data = "#{ tun_info[ :part ] }#{ data }"
+      data, part = @custom.decode( data )
       add_dst_wbuff( dst, data )
+      tun_info[ :part ] = part
     end
 
     ##

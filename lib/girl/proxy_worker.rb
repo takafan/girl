@@ -17,7 +17,7 @@ module Girl
       @roles = {}            # sock => :redir / :infod / :tcp / :src / :dst / :tun / :dns
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
-      @tcp_infos = {}        # tcp => { :rbuff, :wbuff, :created_at, :last_recv_at }
+      @tcp_infos = {}        # tcp => { :part, :wbuff, :created_at, :last_recv_at }
       @src_infos = {}        # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
                              #          :is_connect, :rbuff, :dst, :dst_id, :tcp, :tun,
                              #          :wbuff, :closing_write, :paused }
@@ -110,7 +110,7 @@ module Girl
       domain_port = [ destination_domain, destination_port ].join( ':' )
       puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
       data = "#{ [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) }#{ domain_port }"
-      add_tcp_wbuff( pack_a_chunk( data ) )
+      add_tcp_wbuff( @custom.encode_a_msg( data ) )
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -319,7 +319,7 @@ module Girl
 
       if src_info[ :tun ] then
         data = "#{ [ SOURCE_CLOSED_READ, src_info[ :src_id ] ].pack( 'CQ>' ) }"
-        add_tcp_wbuff( pack_a_chunk( data ) )
+        add_tcp_wbuff( @custom.encode_a_msg( data ) )
       end
 
       if src.closed? then
@@ -378,7 +378,7 @@ module Girl
         elsif src_info[ :tun ] then
           close_tun( src_info[ :tun ] )
           data = "#{ [ SOURCE_CLOSED, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
-          add_tcp_wbuff( pack_a_chunk( data ) )
+          add_tcp_wbuff( @custom.encode_a_msg( data ) )
         end
       end
     end
@@ -439,7 +439,7 @@ module Girl
 
       if src_info[ :tun ] then
         data = "#{ [ SOURCE_CLOSED_WRITE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
-        add_tcp_wbuff( pack_a_chunk( data ) )
+        add_tcp_wbuff( @custom.encode_a_msg( data ) )
       end
 
       if src.closed? then
@@ -643,6 +643,7 @@ module Girl
         tun_id: tun_id,                 # tun id
         src: src,                       # 对应src
         domain: domain,                 # 目的地
+        part: '',                       # 包长+没收全的缓存
         wbuff: [ dst_id ].pack( 'Q>' ), # 写前
         created_at: Time.new,           # 创建时间
         pong: false,                    # 是否有回应
@@ -726,7 +727,7 @@ module Girl
       end
 
       tcp_info = {
-        rbuff: '',            # 暂存不满一块的流量
+        part: '',             # 包长+没收全的缓存
         wbuff: '',            # 写前
         created_at: Time.new, # 创建时间
         last_recv_at: nil     # 上一次收到控制流量时间
@@ -740,15 +741,7 @@ module Girl
       data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
       puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
       puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
-      add_tcp_wbuff( pack_a_chunk( data ) )
-    end
-
-    ##
-    # pack a chunk
-    #
-    def pack_a_chunk( data )
-      data = @custom.encode2( data )
-      "#{ [ data.bytesize ].pack( 'n' ) }#{ data }"
+      add_tcp_wbuff( @custom.encode_a_msg( data ) )
     end
 
     ##
@@ -1104,33 +1097,11 @@ module Girl
       end
 
       tcp_info = @tcp_infos[ tcp ]
-      data = "#{ tcp_info[ :rbuff ] }#{ data }"
+      data = "#{ tcp_info[ :part ] }#{ data }"
 
-      loop do
-        if data.bytesize <= 2 then
-          tcp_info[ :rbuff ] = data
-          break
-        end
-
-        len = data[ 0, 2 ].unpack( 'n' ).first
-
-        if len == 0 then
-          puts "#{ Time.new } read tcp zero traffic len?"
-          close_tcp( tcp )
-          return
-        end
-
-        chunk = data[ 2, len ]
-
-        if chunk.bytesize < len then
-          tcp_info[ :rbuff ] = data
-          break
-        end
-
-        data2 = @custom.decode2( chunk )
-        deal_ctlmsg( data2, tcp )
-        data = data[ ( 2 + len )..-1 ]
-      end
+      msgs, part = @custom.decode_to_msgs( data )
+      msgs.each{ | msg | deal_ctlmsg( msg, tcp ) }
+      tcp_info[ :part ] = part
     end
 
     ##
@@ -1426,8 +1397,10 @@ module Girl
         end
       end
 
-      data = @custom.decode( data )
+      data = "#{ tun_info[ :part ] }#{ data }"
+      data, part = @custom.decode( data )
       add_src_wbuff( src, data )
+      tun_info[ :part ] = part
     end
 
     ##
