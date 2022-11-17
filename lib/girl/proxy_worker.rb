@@ -4,12 +4,13 @@ module Girl
     ##
     # initialize
     #
-    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im )
+    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, ports_size, im )
       @proxyd_host = proxyd_host
       @proxyd_port = proxyd_port
       @directs = directs
       @remotes = remotes
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
+      @ports_size = ports_size
       @im = im
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
@@ -714,7 +715,7 @@ module Girl
       tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
-      tcpd_port = @proxyd_port + 10.times.to_a.sample
+      tcpd_port = @proxyd_port + @ports_size.times.to_a.sample
       tcpd_addr = Socket.sockaddr_in( tcpd_port, @proxyd_host )
 
       begin
@@ -1115,8 +1116,9 @@ module Girl
 
       case ctl_num
       when TUND_PORTS then
-        return if data.bytesize != 21
-        tund_ports = data[ 1, 20 ].unpack( 'n*' )
+        len = @ports_size * 2
+        return if data.bytesize != ( 1 + len )
+        tund_ports = data[ 1, len ].unpack( 'n*' )
         puts "#{ Time.new } got tund ports #{ tund_ports.inspect }"
         @tund_addrs = tund_ports.map{ | tund_port | Socket.sockaddr_in( tund_port, @proxyd_host ) }
       when PAIRED then

@@ -39,6 +39,7 @@ module Girl
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
       nameserver = conf[ :nameserver ]
+      ports_size = conf[ :ports_size ]
       im = conf[ :im ]
 
       unless redir_port then
@@ -69,16 +70,20 @@ module Girl
         nameserver = '114.114.114.114'
       end
 
+      unless ports_size then
+        ports_size = 1
+      end
+
       unless im then
         im = 'girl'
       end
 
       puts "girl proxy #{ Girl::VERSION }"
-      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } nameserver #{ nameserver } im #{ im }"
+      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } nameserver #{ nameserver } ports_size #{ ports_size } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
-      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, im )
+      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, ports_size, im )
 
       Signal.trap( :TERM ) do
         puts 'exit'

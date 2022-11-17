@@ -4,7 +4,7 @@ module Girl
     ##
     # initialize
     #
-    def initialize( proxyd_port, nameserver )
+    def initialize( proxyd_port, nameserver, ports_size )
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
@@ -18,6 +18,7 @@ module Girl
       @dns_infos = {}     # dns => { :dns_id, :im, :src_id, :domain, :port, :tcp }
       @im_infos = {}      # im => { :in, :out, :tund_ports }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
+      @ports_size = ports_size
 
       new_tcpds( proxyd_port )
       new_a_infod( proxyd_port )
@@ -460,7 +461,7 @@ module Girl
     # new tcpds
     #
     def new_tcpds( begin_port )
-      10.times do | i |
+      @ports_size.times do | i |
         tcpd_port = begin_port + i
         tcpd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
         tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
@@ -657,7 +658,7 @@ module Girl
         unless im_info then
           tund_ports = []
 
-          10.times do
+          @ports_size.times do
             tund_ports << new_a_tund( im )
           end
 

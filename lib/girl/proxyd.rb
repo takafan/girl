@@ -28,10 +28,15 @@ module Girl
         raise "not found config file #{ config_path }" unless File.exist?( config_path )
         conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
         proxyd_port = conf[ :proxyd_port ]
+        ports_size = conf[ :ports_size ]
       end
 
       unless proxyd_port then
         proxyd_port = 6060
+      end
+
+      unless ports_size then
+        ports_size = 1
       end
 
       text = IO.read( '/etc/resolv.conf' )
@@ -39,9 +44,9 @@ module Girl
       nameserver = match_data ? match_data.to_a.first.split(' ')[ 1 ].strip : '8.8.8.8'
 
       puts "girl proxyd #{ Girl::VERSION }"
-      puts "proxyd #{ proxyd_port } nameserver #{ nameserver }"
+      puts "proxyd #{ proxyd_port } nameserver #{ nameserver } ports_size #{ ports_size }"
 
-      worker = Girl::ProxydWorker.new( proxyd_port, nameserver )
+      worker = Girl::ProxydWorker.new( proxyd_port, nameserver, ports_size )
 
       Signal.trap( :TERM ) do
         puts 'exit'
