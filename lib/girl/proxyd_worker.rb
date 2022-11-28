@@ -432,6 +432,7 @@ module Girl
     def new_a_tund( tund_port )
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+      tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
       tund.bind( Socket.sockaddr_in( tund_port, '0.0.0.0' ) )
       tund.listen( 127 )
       add_read( tund, :tund )
