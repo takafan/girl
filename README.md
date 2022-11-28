@@ -19,7 +19,7 @@
 3. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。例如：`CONNECT google.com HTTP/1.1\r\n\r\n`
 4. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
 5. 出国tcp，若为代理协议或者tls握手，后续流量稍微多一点，来源端口被封，后续流量无法到达。
-6. 出国tcp，流量稍微频繁一点，vps每回来一次流量，目标国内端口被封，后续tcp无法到达vps，但ping的通，10分钟后恢复。
+6. 出国tcp，流量稍微频繁一点，后续tcp不论端口均无法到达vps，但ping的通，10分钟后恢复。
 7. 用shadowsocks稍微频繁一点，出国tcp及icmp无法到达vps，udp可达，持续几天至几个月不等。
 
 回避1和2须依靠中转，但中转会遇到3-7，妹子是针对3-7的极简解。
@@ -78,7 +78,6 @@ girl.conf.json的格式：
 {
     "redir_port": 6666,                 // 近端（本地）端口
     "proxyd_host": "1.2.3.4",           // 远端服务器
-    "proxyd_port": 6060,                // 远端端口
     "direct_path": "girl.direct.txt",   // 直连ip段
     "remote_path": "girl.remote.txt",   // 交给远端解析（并中转流量）的域名列表
     "nameserver": "114.114.114.114",    // 域名列表之外的域名就近查询，国内的dns服务器

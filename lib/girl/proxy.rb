@@ -49,7 +49,7 @@ module Girl
       raise "missing proxyd host" unless proxyd_host
 
       unless proxyd_port then
-        proxyd_port = 6060
+        proxyd_port = 443
       end
 
       directs = []

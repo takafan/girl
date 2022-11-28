@@ -475,7 +475,8 @@ module Girl
           p1_addrinfo: addrinfo,
           updated_at: Time.new,
           p1d: p1d,
-          p2d: p2d
+          p2d: p2d,
+          p2d_port: p2d_port
         }
 
         add_read( p1d, :p1d )
@@ -492,7 +493,7 @@ module Girl
       data, addrinfo, rflags, *controls = infod.recvmsg
       return if data.empty?
 
-      data2 = @room_infos.sort_by{ | _, info | info[ :updated_at ] }.reverse.map do | im, info |
+      data2 = @room_infos.sort_by{ | _, info | info[ :p2d_port ] }.map do | im, info |
         [
           info[ :updated_at ],
           @p2d_ports[ im ],

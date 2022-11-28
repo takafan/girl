@@ -4,24 +4,24 @@ module Girl
     ##
     # initialize
     #
-    def initialize( proxyd_port, nameserver, ports_size )
+    def initialize( proxyd_port, nameserver, ports_size, tund_port )
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
       @roles = {}         # sock => :tcpd / :tcp / :infod / :dst / :tund / :tun / :dns
       @tcp_infos = {}     # tcp => { :part, :wbuff, :im, :created_at, :last_recv_at }
-      @tund_infos = {}    # tund => { :im }
       @resolv_caches = {} # domain => [ ip, created_at ]
       @dst_infos = {}     # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id,
                           #          :created_at, :connected, :last_add_wbuff_at, :closing_write, :paused }
       @tun_infos = {}     # tun => { :im, :dst, :domain, :wbuff, :created_at, :last_add_wbuff_at, :paused }
       @dns_infos = {}     # dns => { :dns_id, :im, :src_id, :domain, :port, :tcp }
-      @im_infos = {}      # im => { :in, :out, :tund_ports }
+      @im_infos = {}      # im => { :in, :out }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @ports_size = ports_size
 
       new_tcpds( proxyd_port )
       new_a_infod( proxyd_port )
+      new_a_tund( tund_port )
     end
 
     ##
@@ -208,14 +208,6 @@ module Girl
     end
 
     ##
-    # close dsts
-    #
-    def close_dsts( im )
-      return unless im
-      @dst_infos.select{ | _, _dst_info | _dst_info[ :im ] == im }.keys.each{ | dst | close_dst( dst ) }
-    end
-
-    ##
     # close read dst
     #
     def close_read_dst( dst )
@@ -268,7 +260,7 @@ module Girl
       # puts "debug close tcp"
       close_sock( tcp )
       tcp_info = @tcp_infos.delete( tcp )
-      close_dsts( tcp_info[ :im ] )
+      @dst_infos.select{ | _, _dst_info | _dst_info[ :im ] == tcp_info[ :im ] }.keys.each{ | dst | close_dst( dst ) }
     end
 
     ##
@@ -279,16 +271,6 @@ module Girl
       # puts "debug close tun"
       close_sock( tun )
       @tun_infos.delete( tun )
-    end
-
-    ##
-    # close tund
-    #
-    def close_tund( tund )
-      return if tund.nil? || tund.closed?
-      # puts "debug close tund"
-      close_sock( tund )
-      @tund_infos.delete( tund )
     end
 
     ##
@@ -447,14 +429,13 @@ module Girl
     ##
     # new a tund
     #
-    def new_a_tund( im )
+    def new_a_tund( tund_port )
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      tund.bind( Socket.sockaddr_in( 0, '0.0.0.0' ) )
+      tund.bind( Socket.sockaddr_in( tund_port, '0.0.0.0' ) )
       tund.listen( 127 )
-      @tund_infos[ tund ] = { im: im }
       add_read( tund, :tund )
-      tund.local_address.ip_port
+      @tund_port = tund_port
     end
 
     ##
@@ -656,27 +637,19 @@ module Girl
         im_info = @im_infos[ im ]
 
         unless im_info then
-          tund_ports = []
-
-          @ports_size.times do
-            tund_ports << new_a_tund( im )
-          end
-
           im_info = {
             in: 0,
-            out: 0,
-            tund_ports: tund_ports
+            out: 0
           }
 
           @im_infos[ im ] = im_info
         end
 
         puts "#{ Time.new } got hello #{ im.inspect }"
-        print "ims #{ @im_infos.size } tcps #{ @tcp_infos.size } tunds #{ @tund_infos.size }"
+        print "ims #{ @im_infos.size } tcps #{ @tcp_infos.size }"
         puts " dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
 
-        puts "#{ Time.new } add tcp wbuff tund ports #{ im_info[ :tund_ports ].inspect }"
-        data2 = [ TUND_PORTS, *im_info[ :tund_ports ] ].pack( 'Cn*' )
+        data2 = [ TUND_PORTS, @tund_port ].pack( 'Cn' )
         add_tcp_wbuff( tcp, @custom.encode_a_msg( data2 ) )
       when A_NEW_SOURCE then
         return if tcp_info[ :im ].nil? || data.bytesize <= 9
@@ -851,7 +824,6 @@ module Girl
           sizes: {
             im_infos: @im_infos.size,
             tcp_infos: @tcp_infos.size,
-            tund_infos: @tund_infos.size,
             dst_infos: @dst_infos.size,
             tun_infos: @tun_infos.size,
             dns_infos: @dns_infos.size,
@@ -904,20 +876,17 @@ module Girl
         return
       end
 
-      tund_info = @tund_infos[ tund ]
-
       begin
         tun, _ = tund.accept_nonblock
       rescue Exception => e
-        puts "#{ Time.new } tund accept #{ e.class } #{ tund_info[ :im ].inspect }"
-        close_dsts( tund_info[ :im ] )
+        puts "#{ Time.new } tund accept #{ e.class }"
         return
       end
 
       # puts "debug accept a tun"
 
       @tun_infos[ tun ] = {
-        im: tund_info[ :im ],   # 标识
+        im: nil,                # 标识
         dst: nil,               # 对应dst
         domain: nil,            # 目的地
         part: '',               # 包长+没收全的缓存
@@ -981,6 +950,7 @@ module Girl
 
         tun_info[ :dst ] = dst
         tun_info[ :domain ] = dst_info[ :domain ]
+        tun_info[ :im ] = dst_info[ :im ]
         set_dst_info_tun( dst_info, tun )
         data = data[ 8..-1 ]
 
@@ -1113,7 +1083,10 @@ module Girl
 
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
-      @im_infos[ tun_info[ :im ] ][ :out ] += written
+
+      if tun_info[ :im ] then
+        @im_infos[ tun_info[ :im ] ][ :out ] += written
+      end
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]
