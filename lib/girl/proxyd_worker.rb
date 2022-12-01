@@ -577,12 +577,20 @@ module Girl
         return
       end
 
+      if Girl::Custom.const_defined?( :PREFIX ) then
+        ignore_size = Girl::Custom::PREFIX.bytesize
+      else
+        ignore_size = 0
+      end
+
+
       @tcp_infos[ tcp ] = {
-        part: '',             # 包长+没收全的缓存
-        wbuff: '',            # 写前
-        im: nil,              # 标识
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil     # 上一次收到控制流量时间
+        part: '',                # 包长+没收全的缓存
+        wbuff: '',               # 写前
+        im: nil,                 # 标识
+        created_at: Time.new,    # 创建时间
+        last_recv_at: nil,       # 上一次收到控制流量时间
+        ignore_size: ignore_size # 忽略前缀长度
       }
 
       # puts "debug accept a tcp"
@@ -607,6 +615,19 @@ module Girl
       end
 
       tcp_info = @tcp_infos[ tcp ]
+      ignore_size = tcp_info[ :ignore_size ]
+
+      if ignore_size > 0 then
+        if data.bytesize >= ignore_size then
+          data = data[ ignore_size..-1 ]
+          tcp_info[ :ignore_size ] = 0
+        else
+          puts "#{ Time.new } read tcp less than ignore size?"
+          close_tcp( tcp )
+          return
+        end
+      end
+
       data = "#{ tcp_info[ :part ] }#{ data }"
 
       msgs, part = @custom.decode_to_msgs( data )

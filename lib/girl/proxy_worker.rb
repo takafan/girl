@@ -639,17 +639,24 @@ module Girl
       domain = src_info[ :destination_domain ]
       tun_id = rand( ( 2 ** 64 ) - 2 ) + 1
       # puts "debug new a tun #{ tun_id } #{ Addrinfo.new( tund_addr ).inspect } #{ domain }"
+      data = ''
+
+      if Girl::Custom.const_defined?( :PREFIX ) then
+        data << Girl::Custom::PREFIX
+      end
+
+      data << [ dst_id ].pack( 'Q>' )
 
       tun_info = {
-        tun_id: tun_id,                 # tun id
-        src: src,                       # 对应src
-        domain: domain,                 # 目的地
-        part: '',                       # 包长+没收全的缓存
-        wbuff: [ dst_id ].pack( 'Q>' ), # 写前
-        created_at: Time.new,           # 创建时间
-        pong: false,                    # 是否有回应
-        last_add_wbuff_at: nil,         # 上一次加写前的时间
-        paused: false                   # 是否已暂停
+        tun_id: tun_id,         # tun id
+        src: src,               # 对应src
+        domain: domain,         # 目的地
+        part: '',               # 包长+没收全的缓存
+        wbuff: data,            # 写前
+        created_at: Time.new,   # 创建时间
+        pong: false,            # 是否有回应
+        last_add_wbuff_at: nil, # 上一次加写前的时间
+        paused: false           # 是否已暂停
       }
 
       @tun_infos[ tun ] = tun_info
@@ -738,8 +745,14 @@ module Girl
       add_read( tcp, :tcp )
       @tcp = tcp
 
+      data = ''
+
+      if Girl::Custom.const_defined?( :PREFIX ) then
+        data << Girl::Custom::PREFIX
+      end
+
       hello = @custom.hello
-      data = "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
+      data << "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
       puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
       puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
       add_tcp_wbuff( @custom.encode_a_msg( data ) )

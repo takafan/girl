@@ -1,5 +1,7 @@
 module Girl
   module Custom
+    PREFIX = "GET / HTTP/1.1\r\nHost: girl.com\r\n\r\n"
+
     def encode( data )
       buff = ''
       i = 0
