@@ -33,7 +33,7 @@ module Girl
       end
 
       unless proxyd_port then
-        proxyd_port = 443
+        proxyd_port = 6060
       end
 
       unless ports_size then
@@ -41,7 +41,7 @@ module Girl
       end
 
       unless tund_port then
-        tund_port = 80
+        tund_port = 0
       end
 
       text = IO.read( '/etc/resolv.conf' )

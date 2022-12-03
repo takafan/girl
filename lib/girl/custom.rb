@@ -1,18 +1,26 @@
 module Girl
   module Custom
-    PREFIX = "GET / HTTP/1.1\r\nHost: girl.com\r\n\r\n"
+
+    A_NEW_SOURCE        = 'A'
+    HELLO               = 'H'
+    PAIRED              = 'P'
+    SOURCE_CLOSED       = 'Q'
+    SOURCE_CLOSED_READ  = 'R'
+    SOURCE_CLOSED_WRITE = 'S'
+    TUND_PORTS          = 'T'
+    SEP                 = ','
 
     def encode( data )
       buff = ''
       i = 0
 
       loop do
-        chunk = data[ i, 255 ]
+        chunk = data[ i, 95 ]
         break if chunk.nil? || chunk.empty?
 
         chunk = chunk.reverse
         len = chunk.bytesize
-        packet = [ len ].pack( 'C' ) + chunk
+        packet = [ len + 31 ].pack( 'C' ) + chunk
         buff << packet
         i += len
       end
@@ -29,10 +37,10 @@ module Girl
         h = data[ i ]
         break unless h
 
-        len = h.unpack( 'C' ).first
+        len = h.unpack( 'C' ).first - 31
 
-        if len == 0 then
-          puts "#{ Time.new } decode zero len?"
+        if ( len <= 0 ) || ( len > 95 ) then
+          puts "#{ Time.new } decode invalid len? #{ h.inspect }"
           break
         end
 
@@ -40,7 +48,7 @@ module Girl
         break unless chunk
 
         if chunk.bytesize < len then
-          part = [ len ].pack( 'C' ) + chunk
+          part = [ len + 31 ].pack( 'C' ) + chunk
           break
         end
 
@@ -55,17 +63,12 @@ module Girl
     def encode_a_msg( data )
       len = data.bytesize
 
-      if len == 0 then
-        puts "#{ Time.new } encode msg zero len?"
+      if ( len == 0 ) || ( len > 95 ) then
+        puts "#{ Time.new } encode a msg invalid len? #{ data.inspect }"
         return ''
       end
 
-      if len > 255 then
-        puts "#{ Time.new } msg len oversize? #{ data.inspect }"
-        return ''
-      end
-
-      [ len ].pack( 'C' ) + data.reverse
+      [ len + 31 ].pack( 'C' ) + data.reverse
     end
 
     def decode_to_msgs( data )
@@ -77,10 +80,10 @@ module Girl
         h = data[ i ]
         break unless h
 
-        len = h.unpack( 'C' ).first
+        len = h.unpack( 'C' ).first - 31
 
-        if len == 0 then
-          puts "#{ Time.new } decode to msgs zero len?"
+        if ( len <= 0 ) || ( len > 95 ) then
+          puts "#{ Time.new } decode to msgs invalid len? #{ h.inspect }"
           break
         end
 
@@ -88,7 +91,7 @@ module Girl
         break unless chunk
 
         if chunk.bytesize < len then
-          part = [ len ].pack( 'C' ) + chunk
+          part = [ len + 31 ].pack( 'C' ) + chunk
           break
         end
 

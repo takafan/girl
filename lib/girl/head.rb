@@ -14,36 +14,8 @@ module Girl
   PING_TIMEOUT          = 2                # tun建立连接后多久没有响应，超时
   RENEW_CTL_INTERVAL    = 10               # p1心跳间隔
   ROOM_TITLE_LIMIT      = 16               # 房间名称字数
-  HELLO                 = 1
-  TUND_PORT             = 2
-  A_NEW_SOURCE          = 3
-  PAIRED                = 4
-  DEST_STATUS           = 5
-  SOURCE_STATUS         = 6
-  MISS                  = 7
-  FIN1                  = 8
-  GOT_FIN1              = 9
-  FIN2                  = 10
-  GOT_FIN2              = 11
-  TUND_FIN              = 12
-  TUN_FIN               = 13
-  IP_CHANGED            = 14
-  SINGLE_MISS           = 15
-  RANGE_MISS            = 16
-  CONTINUE              = 17
-  IS_RESEND_READY       = 18
-  RESEND_READY          = 19
-  RESOLV                = 20
-  RESOLVED              = 21
-  HEARTBEAT             = 22
-  UNKNOWN_CTL_ADDR      = 23
-  CTL_FIN               = 24
-  SOURCE_CLOSED         = 25
-  SOURCE_CLOSED_READ    = 26
-  SOURCE_CLOSED_WRITE   = 27
-  TUND_PORTS            = 28
-  TRAFF_INFOS           = 101
-  HTTP_OK               = "HTTP/1.1 200 OK\r\n\r\n"
+
+  HTTP_OK = "HTTP/1.1 200 OK\r\n\r\n"
   RESERVED_ROUTE = <<EOF
 0.0.0.0/8
 10.0.0.0/8

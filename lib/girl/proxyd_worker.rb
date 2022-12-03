@@ -394,7 +394,7 @@ module Girl
       add_read( dst, :dst )
       add_write( dst )
 
-      data = [ PAIRED, src_id, dst_id ].pack( 'CQ>Q>' )
+      data = [ Girl::Custom::PAIRED, src_id, dst_id ].join( Girl::Custom::SEP )
       # puts "debug add paired #{ im.inspect } #{ src_id } #{ dst_id } #{ domain }:#{ port }"
       add_tcp_wbuff( tcp, @custom.encode_a_msg( data ) )
 
@@ -436,7 +436,7 @@ module Girl
       tund.bind( Socket.sockaddr_in( tund_port, '0.0.0.0' ) )
       tund.listen( 127 )
       add_read( tund, :tund )
-      @tund_port = tund_port
+      @tund_port = tund.local_address.ip_port
     end
 
     ##
@@ -494,8 +494,9 @@ module Girl
     #
     def set_dst_info_tun( dst_info, tun )
       dst_info[ :tun ] = tun
-      # puts "debug add pong #{ dst_info[ :src_id ] }"
-      data = [ dst_info[ :src_id ] ].pack( 'Q>' )
+      src_id = dst_info[ :src_id ]
+      # puts "debug add pong #{ src_id }"
+      data = "#{ src_id }#{ Girl::Custom::SEP }"
 
       unless dst_info[ :rbuff ].empty? then
         data << @custom.encode( dst_info[ :rbuff ] )
@@ -577,20 +578,13 @@ module Girl
         return
       end
 
-      if Girl::Custom.const_defined?( :PREFIX ) then
-        ignore_size = Girl::Custom::PREFIX.bytesize
-      else
-        ignore_size = 0
-      end
-
 
       @tcp_infos[ tcp ] = {
-        part: '',                # 包长+没收全的缓存
-        wbuff: '',               # 写前
-        im: nil,                 # 标识
-        created_at: Time.new,    # 创建时间
-        last_recv_at: nil,       # 上一次收到控制流量时间
-        ignore_size: ignore_size # 忽略前缀长度
+        part: '',             # 包长+没收全的缓存
+        wbuff: '',            # 写前
+        im: nil,              # 标识
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil     # 上一次收到控制流量时间
       }
 
       # puts "debug accept a tcp"
@@ -615,19 +609,6 @@ module Girl
       end
 
       tcp_info = @tcp_infos[ tcp ]
-      ignore_size = tcp_info[ :ignore_size ]
-
-      if ignore_size > 0 then
-        if data.bytesize >= ignore_size then
-          data = data[ ignore_size..-1 ]
-          tcp_info[ :ignore_size ] = 0
-        else
-          puts "#{ Time.new } read tcp less than ignore size?"
-          close_tcp( tcp )
-          return
-        end
-      end
-
       data = "#{ tcp_info[ :part ] }#{ data }"
 
       msgs, part = @custom.decode_to_msgs( data )
@@ -642,12 +623,13 @@ module Girl
       return if data.nil? || data.empty? || tcp.nil? || tcp.closed?
       tcp_info = @tcp_infos[ tcp ]
       tcp_info[ :last_recv_at ] = Time.new
-      ctl_num = data[ 0 ].unpack( 'C' ).first
+      ctl_chr = data[ 0 ]
 
-      case ctl_num
-      when HELLO then
-        return if tcp_info[ :im ] || data.bytesize <= 1
-        im = data[ 1..-1 ]
+      case ctl_chr
+      when Girl::Custom::HELLO then
+        return if tcp_info[ :im ]
+        _, im = data.split( Girl::Custom::SEP )
+        return unless im
         result = @custom.check( im )
 
         if result != :success then
@@ -671,12 +653,13 @@ module Girl
         print "ims #{ @im_infos.size } tcps #{ @tcp_infos.size }"
         puts " dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
 
-        data2 = [ TUND_PORTS, @tund_port ].pack( 'Cn' )
+        data2 = [ Girl::Custom::TUND_PORTS, @tund_port ].join( Girl::Custom::SEP )
         add_tcp_wbuff( tcp, @custom.encode_a_msg( data2 ) )
-      when A_NEW_SOURCE then
-        return if tcp_info[ :im ].nil? || data.bytesize <= 9
-        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        domain_port = data[ 9..-1 ]
+      when Girl::Custom::A_NEW_SOURCE then
+        return unless tcp_info[ :im ]
+        _, src_id, domain_port = data.split( Girl::Custom::SEP )
+        return if src_id.nil? || domain_port.nil?
+        src_id = src_id.to_i
         dst_info = @dst_infos.values.find{ | info | info[ :src_id ] == src_id }
 
         if dst_info then
@@ -686,21 +669,24 @@ module Girl
 
         # puts "debug got a new source #{ tcp_info[ :im ].inspect } #{ src_id } #{ domain_port.inspect }"
         resolve_domain_port( domain_port, src_id, tcp )
-      when SOURCE_CLOSED then
-        return if tcp_info[ :im ].nil? || data.bytesize != 9
-        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+      when Girl::Custom::SOURCE_CLOSED then
+        return unless tcp_info[ :im ]
+        _, src_id = data.split( Girl::Custom::SEP )
+        return unless src_id
         # puts "debug got src closed #{ tcp_info[ :im ].inspect } #{ src_id }"
         dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
         close_dst( dst )
-      when SOURCE_CLOSED_READ then
-        return if tcp_info[ :im ].nil? || data.bytesize != 9
-        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+      when Girl::Custom::SOURCE_CLOSED_READ then
+        return unless tcp_info[ :im ]
+        _, src_id = data.split( Girl::Custom::SEP )
+        return unless src_id
         # puts "debug got src closed read #{ tcp_info[ :im ].inspect } #{ src_id }"
         dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
         set_dst_closing_write( dst )
-      when SOURCE_CLOSED_WRITE then
-        return if tcp_info[ :im ].nil? || data.bytesize != 9
-        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+      when Girl::Custom::SOURCE_CLOSED_WRITE then
+        return unless tcp_info[ :im ]
+        _, src_id = data.split( Girl::Custom::SEP )
+        return unless src_id
         # puts "debug got src closed write #{ tcp_info[ :im ].inspect } #{ src_id }"
         dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
         close_read_dst( dst )
@@ -955,13 +941,15 @@ module Girl
       dst = tun_info[ :dst ]
 
       unless dst then
-        if data.bytesize < 2 then
-          puts "#{ Time.new } tun ping less than 2?"
+        sep_idx = data.index( Girl::Custom::SEP )
+
+        unless sep_idx then
+          puts "#{ Time.new } miss ping sep?"
           close_tun( tun )
           return
         end
 
-        dst_id = data[ 0, 8 ].unpack( 'Q>' ).first
+        dst_id = data[ 0, sep_idx ].to_i
         dst, dst_info = @dst_infos.find{ | _, info | info[ :dst_id ] == dst_id }
 
         unless dst then
@@ -974,7 +962,7 @@ module Girl
         tun_info[ :domain ] = dst_info[ :domain ]
         tun_info[ :im ] = dst_info[ :im ]
         set_dst_info_tun( dst_info, tun )
-        data = data[ 8..-1 ]
+        data = data[ ( sep_idx + 1 )..-1 ]
 
         if data.empty? then
           return

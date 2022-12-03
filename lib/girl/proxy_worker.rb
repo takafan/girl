@@ -110,7 +110,7 @@ module Girl
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
       puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
-      data = "#{ [ A_NEW_SOURCE, src_id ].pack( 'CQ>' ) }#{ domain_port }"
+      data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
       add_tcp_wbuff( @custom.encode_a_msg( data ) )
 
       Thread.new do
@@ -319,7 +319,7 @@ module Girl
       src_info = @src_infos[ src ]
 
       if src_info[ :tun ] then
-        data = "#{ [ SOURCE_CLOSED_READ, src_info[ :src_id ] ].pack( 'CQ>' ) }"
+        data = [ Girl::Custom::SOURCE_CLOSED_READ, src_info[ :src_id ] ].join( Girl::Custom::SEP )
         add_tcp_wbuff( @custom.encode_a_msg( data ) )
       end
 
@@ -378,7 +378,7 @@ module Girl
           close_dst( dst )
         elsif src_info[ :tun ] then
           close_tun( src_info[ :tun ] )
-          data = "#{ [ SOURCE_CLOSED, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
+          data = [ Girl::Custom::SOURCE_CLOSED, src_info[ :src_id ] ].join( Girl::Custom::SEP )
           add_tcp_wbuff( @custom.encode_a_msg( data ) )
         end
       end
@@ -439,7 +439,7 @@ module Girl
       src_info = @src_infos[ src ]
 
       if src_info[ :tun ] then
-        data = "#{ [ SOURCE_CLOSED_WRITE, src_info[ :src_id ] ].pack( 'CQ>' ) }#{ @im }"
+        data = [ Girl::Custom::SOURCE_CLOSED_WRITE, src_info[ :src_id ] ].join( Girl::Custom::SEP )
         add_tcp_wbuff( @custom.encode_a_msg( data ) )
       end
 
@@ -639,13 +639,7 @@ module Girl
       domain = src_info[ :destination_domain ]
       tun_id = rand( ( 2 ** 64 ) - 2 ) + 1
       # puts "debug new a tun #{ tun_id } #{ Addrinfo.new( tund_addr ).inspect } #{ domain }"
-      data = ''
-
-      if Girl::Custom.const_defined?( :PREFIX ) then
-        data << Girl::Custom::PREFIX
-      end
-
-      data << [ dst_id ].pack( 'Q>' )
+      data = "#{ dst_id }#{ Girl::Custom::SEP }"
 
       tun_info = {
         tun_id: tun_id,         # tun id
@@ -745,16 +739,10 @@ module Girl
       add_read( tcp, :tcp )
       @tcp = tcp
 
-      data = ''
-
-      if Girl::Custom.const_defined?( :PREFIX ) then
-        data << Girl::Custom::PREFIX
-      end
-
       hello = @custom.hello
-      data << "#{ [ HELLO ].pack( 'C' ) }#{ hello }"
       puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
       puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
+      data = [ Girl::Custom::HELLO, hello ].join( Girl::Custom::SEP )
       add_tcp_wbuff( @custom.encode_a_msg( data ) )
     end
 
@@ -1125,19 +1113,20 @@ module Girl
       return if data.nil? || data.empty? || tcp.nil? || tcp.closed?
       tcp_info = @tcp_infos[ tcp ]
       tcp_info[ :last_recv_at ] = Time.new
-      ctl_num = data[ 0 ].unpack( 'C' ).first
+      ctl_chr = data[ 0 ]
 
-      case ctl_num
-      when TUND_PORTS then
-        len = @ports_size * 2
-        return if data.bytesize != ( 1 + len )
-        tund_ports = data[ 1, len ].unpack( 'n*' )
+      case ctl_chr
+      when Girl::Custom::TUND_PORTS then
+        _, *tund_ports = data.split( Girl::Custom::SEP )
+        return if tund_ports.empty?
+        tund_ports = tund_ports.map{ | str | str.to_i }
         puts "#{ Time.new } got tund ports #{ tund_ports.inspect }"
         @tund_addrs = tund_ports.map{ | tund_port | Socket.sockaddr_in( tund_port, @proxyd_host ) }
-      when PAIRED then
-        return if data.bytesize != 17
-        src_id, dst_id = data[ 1, 16 ].unpack( 'Q>Q>' )
+      when Girl::Custom::PAIRED then
+        _, src_id, dst_id = data.split( Girl::Custom::SEP )
         return if src_id.nil? || dst_id.nil?
+        src_id = src_id.to_i
+        dst_id = dst_id.to_i
         # puts "debug got paired #{ src_id } #{ dst_id }"
         new_a_tun( src_id, dst_id )
       end
@@ -1389,15 +1378,18 @@ module Girl
       end
 
       unless tun_info[ :pong ] then
-        if data.bytesize < 8 then
-          puts "#{ Time.new } pong length less than 8?"
+        sep_idx = data.index( Girl::Custom::SEP )
+
+        unless sep_idx then
+          puts "#{ Time.new } miss pong sep?"
           close_tun( tun )
           return
         end
 
+        src_id = data[ 0, sep_idx ].to_i
         src_info = @src_infos[ src ]
 
-        if data[ 0, 8 ].unpack( 'Q>' ).first != src_info[ :src_id ] then
+        if src_id != src_info[ :src_id ] then
           puts "#{ Time.new } invalid pong?"
           close_tun( tun )
           return
@@ -1405,7 +1397,7 @@ module Girl
 
         # puts "debug got pong #{ data.bytesize }"
         set_tun_info_pong( tun, src )
-        data = data[ 8..-1 ]
+        data = data[ ( sep_idx + 1 )..-1 ]
 
         if data.empty? then
           return
