@@ -63,7 +63,7 @@ module Girl
     def encode_a_msg( data )
       len = data.bytesize
 
-      if ( len == 0 ) || ( len > 95 ) then
+      if ( len == 0 ) || ( len > 224 ) then
         puts "#{ Time.new } encode a msg invalid len? #{ data.inspect }"
         return ''
       end
@@ -82,7 +82,7 @@ module Girl
 
         len = h.unpack( 'C' ).first - 31
 
-        if ( len <= 0 ) || ( len > 95 ) then
+        if len <= 0 then
           puts "#{ Time.new } decode to msgs invalid len? #{ h.inspect }"
           break
         end
