@@ -30,6 +30,8 @@ module Girl
         proxyd_port = conf[ :proxyd_port ]
         ports_size = conf[ :ports_size ]
         tund_port = conf[ :tund_port ]
+        girl_port = conf[ :girl_port ]
+        ims = conf[ :ims ]
       end
 
       unless proxyd_port then
@@ -44,14 +46,23 @@ module Girl
         tund_port = 0
       end
 
+      unless girl_port then
+        girl_port = 8080
+      end
+
+      unless ims then
+        ims = []
+      end
+
       text = IO.read( '/etc/resolv.conf' )
       match_data = /^nameserver .*\n/.match( text )
       nameserver = match_data ? match_data.to_a.first.split(' ')[ 1 ].strip : '8.8.8.8'
 
       puts "girl proxyd #{ Girl::VERSION }"
-      puts "proxyd #{ proxyd_port } nameserver #{ nameserver } ports_size #{ ports_size } tund_port #{ tund_port }"
+      puts "proxyd #{ proxyd_port } nameserver #{ nameserver } ports_size #{ ports_size } tund_port #{ tund_port } girl_port #{ girl_port }"
+      puts "ims #{ ims.inspect }"
 
-      worker = Girl::ProxydWorker.new( proxyd_port, nameserver, ports_size, tund_port )
+      worker = Girl::ProxydWorker.new( proxyd_port, nameserver, ports_size, tund_port, girl_port, ims )
 
       Signal.trap( :TERM ) do
         puts 'exit'

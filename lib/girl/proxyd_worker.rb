@@ -4,11 +4,11 @@ module Girl
     ##
     # initialize
     #
-    def initialize( proxyd_port, nameserver, ports_size, tund_port )
+    def initialize( proxyd_port, nameserver, ports_size, tund_port, girl_port, ims )
       @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
-      @roles = {}         # sock => :tcpd / :tcp / :infod / :dst / :tund / :tun / :dns
+      @roles = {}         # sock => :girld / :dns / :tcpd / :tcp / :infod / :dst / :tund / :tun
       @tcp_infos = {}     # tcp => { :part, :wbuff, :im, :created_at, :last_recv_at }
       @resolv_caches = {} # domain => [ ip, created_at ]
       @dst_infos = {}     # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id,
@@ -16,12 +16,15 @@ module Girl
       @tun_infos = {}     # tun => { :im, :dst, :domain, :wbuff, :created_at, :last_add_wbuff_at, :paused }
       @dns_infos = {}     # dns => { :dns_id, :im, :src_id, :domain, :port, :tcp }
       @im_infos = {}      # im => { :in, :out }
+      @ips = {}           # im => ip
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @ports_size = ports_size
-
+      @ims = ims
+      
       new_tcpds( proxyd_port )
       new_a_infod( proxyd_port )
       new_a_tund( tund_port )
+      new_a_girld( girl_port )
     end
 
     ##
@@ -39,6 +42,8 @@ module Girl
           role = @roles[ sock ]
 
           case role
+          when :girld then
+            read_girld( sock )
           when :dns then
             read_dns( sock )
           when :tcpd then
@@ -411,6 +416,18 @@ module Girl
     end
 
     ##
+    # new a girld
+    #
+    def new_a_girld( girl_port )
+      girld_addr = Socket.sockaddr_in( girl_port, '0.0.0.0' )
+      girld = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      girld.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      girld.bind( girld_addr )
+      puts "#{ Time.new } girld bind on #{ girl_port }"
+      add_read( girld, :girld )
+    end
+
+    ##
     # new a infod
     #
     def new_a_infod( infod_port )
@@ -518,6 +535,20 @@ module Girl
     end
 
     ##
+    # read girld
+    #
+    def read_girld( girld )
+      data, addrinfo, rflags, *controls = girld.recvmsg
+      return if data.empty?
+
+      im = @custom.decode_im( data )
+      return unless @ims.include?( im )
+
+      puts "#{ Time.new } set ip #{ im.inspect } #{ addrinfo.ip_address }"
+      @ips[ im ] = addrinfo.ip_address
+    end
+
+    ##
     # read dns
     #
     def read_dns( dns )
@@ -572,12 +603,17 @@ module Girl
       end
 
       begin
-        tcp, _ = tcpd.accept_nonblock
+        tcp, addrinfo = tcpd.accept_nonblock
       rescue Exception => e
         puts "#{ Time.new } tcpd accept #{ e.class }"
         return
       end
 
+      unless @ips.values.include?( addrinfo.ip_address ) then
+        puts "#{ Time.new } accept a tcp unknown ip? #{ addrinfo.ip_address }"
+        tcp.close
+        return
+      end
 
       @tcp_infos[ tcp ] = {
         part: '',             # 包长+没收全的缓存
@@ -630,12 +666,6 @@ module Girl
         return if tcp_info[ :im ]
         _, im = data.split( Girl::Custom::SEP )
         return unless im
-        result = @custom.check( im )
-
-        if result != :success then
-          puts "#{ Time.new } #{ result } #{ im.inspect }"
-          return
-        end
 
         tcp_info[ :im ] = im
         im_info = @im_infos[ im ]
@@ -740,7 +770,7 @@ module Girl
         # puts "debug dns query #{ domain.inspect }"
         dns.sendmsg_nonblock( packet.data, 0, @nameserver_addr )
       rescue Exception => e
-        puts "#{ Time.new } dns sendmsg #{ e.class } #{ domain.inspect }"
+        puts "#{ Time.new } dns send packet #{ e.class } #{ domain.inspect }"
         dns.close
         return
       end

@@ -79,10 +79,12 @@ girl.conf.json的格式：
     "redir_port": 6666,                 // 近端（本地）端口
     "proxyd_host": "1.2.3.4",           // 远端服务器
     "proxyd_port": 6060,                // 远端端口
+    "girl_port": 8080,                  // 妹子端口，防重放
     "direct_path": "girl.direct.txt",   // 直连ip段
     "remote_path": "girl.remote.txt",   // 交给远端解析（并中转流量）的域名列表
     "nameserver": "114.114.114.114",    // 域名列表之外的域名就近查询，国内的dns服务器
-    "im": "girl",                       // 标识，用来识别近端
+    "im": "taka-pc",                    // 设备标识
+    "ims": [ "taka-pc", "taka-mac" ],   // 远端允许的设备列表
     "mirrord_port": 7070,               // 镜子服务端口
     "mirrord_infod_port": 7080,         // 镜子服务查询端口，供本地调用
     "p2d_ports": [ [ "girl", 2222 ] ],  // 镜子服务，标识对应影子端口

@@ -4,18 +4,19 @@ module Girl
     ##
     # initialize
     #
-    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, ports_size, im )
+    def initialize( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, ports_size, girl_port, im )
       @proxyd_host = proxyd_host
       @proxyd_port = proxyd_port
       @directs = directs
       @remotes = remotes
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @ports_size = ports_size
+      @girld_addr = Socket.sockaddr_in( girl_port, proxyd_host )
       @im = im
       @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
-      @roles = {}            # sock => :redir / :infod / :tcp / :src / :dst / :tun / :dns
+      @roles = {}            # sock => :redir / :infod / :dns / :tcp / :src / :dst / :tun
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
       @tcp_infos = {}        # tcp => { :part, :wbuff, :created_at, :last_recv_at }
@@ -30,7 +31,8 @@ module Girl
 
       new_a_redir( redir_port )
       new_a_infod( redir_port )
-      new_the_tcp
+      new_a_girlc
+      new_a_tcp
     end
 
     ##
@@ -392,7 +394,7 @@ module Girl
       # puts "debug close tcp"
       close_sock( tcp )
       @tcp_infos.delete( tcp )
-      new_the_tcp
+      new_a_tcp
     end
 
     ##
@@ -565,6 +567,14 @@ module Girl
     end
 
     ##
+    # new a girlc
+    #
+    def new_a_girlc
+      girlc = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      @girlc = girlc
+    end
+
+    ##
     # new a infod
     #
     def new_a_infod( infod_port )
@@ -612,6 +622,49 @@ module Girl
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :remote
       add_a_new_source( src )
+    end
+
+    ##
+    # new a tcp
+    #
+    def new_a_tcp
+      begin
+        @girlc.sendmsg( @custom.encode_im( @im ), 0, @girld_addr )
+      rescue Exception => e
+        puts "#{ Time.new } send im to girld #{ e.class }"
+      end
+
+      tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+
+      tcpd_port = @proxyd_port + @ports_size.times.to_a.sample
+      tcpd_addr = Socket.sockaddr_in( tcpd_port, @proxyd_host )
+
+      begin
+        tcp.connect_nonblock( tcpd_addr )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "#{ Time.new } connect tcpd #{ e.class }"
+        tcp.close
+        return
+      end
+
+      tcp_info = {
+        part: '',             # 包长+没收全的缓存
+        wbuff: '',            # 写前
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil     # 上一次收到控制流量时间
+      }
+
+      @tcp_infos[ tcp ] = tcp_info
+      add_read( tcp, :tcp )
+      @tcp = tcp
+
+      hello = @custom.hello
+      puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
+      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
+      data = [ Girl::Custom::HELLO, hello ].join( Girl::Custom::SEP )
+      add_tcp_wbuff( @custom.encode_a_msg( data ) )
     end
 
     ##
@@ -710,43 +763,6 @@ module Girl
     end
 
     ##
-    # new the tcp
-    #
-    def new_the_tcp
-      tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-      tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-
-      tcpd_port = @proxyd_port + @ports_size.times.to_a.sample
-      tcpd_addr = Socket.sockaddr_in( tcpd_port, @proxyd_host )
-
-      begin
-        tcp.connect_nonblock( tcpd_addr )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "#{ Time.new } connect tcpd #{ e.class }"
-        tcp.close
-        return
-      end
-
-      tcp_info = {
-        part: '',             # 包长+没收全的缓存
-        wbuff: '',            # 写前
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil     # 上一次收到控制流量时间
-      }
-
-      @tcp_infos[ tcp ] = tcp_info
-      add_read( tcp, :tcp )
-      @tcp = tcp
-
-      hello = @custom.hello
-      puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
-      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
-      data = [ Girl::Custom::HELLO, hello ].join( Girl::Custom::SEP )
-      add_tcp_wbuff( @custom.encode_a_msg( data ) )
-    end
-
-    ##
     # resolve domain
     #
     def resolve_domain( domain, src )
@@ -807,7 +823,7 @@ module Girl
         # puts "debug dns query #{ domain }"
         dns.sendmsg_nonblock( packet.data, 0, @nameserver_addr )
       rescue Exception => e
-        puts "#{ Time.new } dns sendmsg #{ e.class }"
+        puts "#{ Time.new } dns send packet #{ e.class }"
         dns.close
         close_src( src )
         return
@@ -834,17 +850,6 @@ module Girl
         }
 
         send_msg_to_infod( msg )
-      end
-    end
-
-    ##
-    # send msg to client
-    #
-    def send_msg_to_client( msg, addrinfo )
-      begin
-        @infod.sendmsg_nonblock( JSON.generate( msg ), 0, addrinfo )
-      rescue Exception => e
-        puts "#{ Time.new } send msg to client #{ e.class } #{ addrinfo.ip_unpack.inspect }"
       end
     end
 
@@ -982,7 +987,7 @@ module Girl
               close_tcp( @tcp )
             end
           else
-            new_the_tcp
+            new_a_tcp
           end
         end
       when 'check-dst-connected' then
@@ -1032,7 +1037,11 @@ module Girl
           }
         }
 
-        send_msg_to_client( msg2, addrinfo )
+        begin
+          @infod.sendmsg_nonblock( JSON.generate( msg2 ), 0, addrinfo )
+        rescue Exception => e
+          puts "#{ Time.new } send memory info #{ e.class } #{ addrinfo.ip_unpack.inspect }"
+        end
       end
     end
 

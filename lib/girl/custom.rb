@@ -102,5 +102,13 @@ module Girl
 
       [ msgs, part ]
     end
+
+    def encode_im( data )
+      data.reverse
+    end
+
+    def decode_im( data )
+      data.reverse
+    end
   end
 end
