@@ -1,11 +1,11 @@
 module Girl
   class ProxydWorker
+    include Custom
 
     ##
     # initialize
     #
     def initialize( proxyd_port, nameserver, ports_size, tund_port, girl_port, ims )
-      @custom = Girl::ProxydCustom.new
       @reads = []
       @writes = []
       @roles = {}         # sock => :girld / :dns / :tcpd / :tcp / :infod / :dst / :tund / :tun
@@ -15,8 +15,8 @@ module Girl
                           #          :created_at, :connected, :last_add_wbuff_at, :closing_write, :paused }
       @tun_infos = {}     # tun => { :im, :dst, :domain, :wbuff, :created_at, :last_add_wbuff_at, :paused }
       @dns_infos = {}     # dns => { :dns_id, :im, :src_id, :domain, :port, :tcp }
-      @im_infos = {}      # im => { :in, :out }
       @ips = {}           # im => ip
+      @im_infos = {}      # im => { :in, :out }
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @ports_size = ports_size
       @ims = ims
@@ -401,7 +401,7 @@ module Girl
 
       data = [ Girl::Custom::PAIRED, src_id, dst_id ].join( Girl::Custom::SEP )
       # puts "debug add paired #{ im.inspect } #{ src_id } #{ dst_id } #{ domain }:#{ port }"
-      add_tcp_wbuff( tcp, @custom.encode_a_msg( data ) )
+      add_tcp_wbuff( tcp, encode_a_msg( data ) )
 
       Thread.new do
         sleep EXPIRE_CONNECTING
@@ -516,7 +516,7 @@ module Girl
       data = "#{ src_id }#{ Girl::Custom::SEP }"
 
       unless dst_info[ :rbuff ].empty? then
-        data << @custom.encode( dst_info[ :rbuff ] )
+        data << encode( dst_info[ :rbuff ] )
       end
 
       add_tun_wbuff( tun, data )
@@ -541,11 +541,11 @@ module Girl
       data, addrinfo, rflags, *controls = girld.recvmsg
       return if data.empty?
 
-      im = @custom.decode_im( data )
+      im = decode_im( data )
       return unless @ims.include?( im )
-
-      puts "#{ Time.new } set ip #{ im.inspect } #{ addrinfo.ip_address }"
+      
       @ips[ im ] = addrinfo.ip_address
+      puts "#{ Time.new } set ip #{ im.inspect } #{ addrinfo.ip_address } ips #{ @ips.size }"
     end
 
     ##
@@ -647,7 +647,7 @@ module Girl
       tcp_info = @tcp_infos[ tcp ]
       data = "#{ tcp_info[ :part ] }#{ data }"
 
-      msgs, part = @custom.decode_to_msgs( data )
+      msgs, part = decode_to_msgs( data )
       msgs.each{ | msg | deal_ctlmsg( msg, tcp ) }
       tcp_info[ :part ] = part
     end
@@ -679,12 +679,9 @@ module Girl
           @im_infos[ im ] = im_info
         end
 
-        puts "#{ Time.new } got hello #{ im.inspect }"
-        print "ims #{ @im_infos.size } tcps #{ @tcp_infos.size }"
-        puts " dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
-
+        puts "#{ Time.new } got hello #{ im.inspect } im infos #{ @im_infos.size } tcp infos #{ @tcp_infos.size } dst infos #{ @dst_infos.size } tun infos #{ @tun_infos.size } dns infos #{ @dns_infos.size }"
         data2 = [ Girl::Custom::TUND_PORTS, @tund_port ].join( Girl::Custom::SEP )
-        add_tcp_wbuff( tcp, @custom.encode_a_msg( data2 ) )
+        add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
       when Girl::Custom::A_NEW_SOURCE then
         return unless tcp_info[ :im ]
         _, src_id, domain_port = data.split( Girl::Custom::SEP )
@@ -860,6 +857,7 @@ module Girl
 
         msg2 = {
           sizes: {
+            ips: @ips.size,
             im_infos: @im_infos.size,
             tcp_infos: @tcp_infos.size,
             dst_infos: @dst_infos.size,
@@ -898,7 +896,7 @@ module Girl
       @im_infos[ dst_info[ :im ] ][ :in ] += data.bytesize
 
       if tun && !tun.closed? then
-        add_tun_wbuff( tun, @custom.encode( data ) )
+        add_tun_wbuff( tun, encode( data ) )
       else
         # puts "debug add dst rbuff #{ data.bytesize }"
         add_dst_rbuff( dst, data )
@@ -915,9 +913,15 @@ module Girl
       end
 
       begin
-        tun, _ = tund.accept_nonblock
+        tun, addrinfo = tund.accept_nonblock
       rescue Exception => e
         puts "#{ Time.new } tund accept #{ e.class }"
+        return
+      end
+
+      unless @ips.values.include?( addrinfo.ip_address ) then
+        puts "#{ Time.new } accept a tun unknown ip? #{ addrinfo.ip_address }"
+        tun.close
         return
       end
 
@@ -1000,7 +1004,7 @@ module Girl
       end
 
       data = "#{ tun_info[ :part ] }#{ data }"
-      data, part = @custom.decode( data )
+      data, part = decode( data )
       add_dst_wbuff( dst, data )
       tun_info[ :part ] = part
     end

@@ -1,5 +1,5 @@
+require 'girl/custom'
 require 'girl/head'
-require 'girl/proxy_custom'
 require 'girl/proxy_worker'
 require 'girl/version'
 require 'ipaddr'
@@ -80,11 +80,11 @@ module Girl
       end
 
       unless im then
-        im = 'my-pc'
+        im = 'office-pc'
       end
 
       puts "girl proxy #{ Girl::VERSION }"
-      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } nameserver #{ nameserver } ports_size #{ ports_size } im #{ im }"
+      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } nameserver #{ nameserver } ports size #{ ports_size } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 

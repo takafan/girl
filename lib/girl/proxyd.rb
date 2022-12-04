@@ -1,5 +1,5 @@
+require 'girl/custom'
 require 'girl/head'
-require 'girl/proxyd_custom'
 require 'girl/proxyd_worker'
 require 'girl/version'
 require 'json'
@@ -59,7 +59,7 @@ module Girl
       nameserver = match_data ? match_data.to_a.first.split(' ')[ 1 ].strip : '8.8.8.8'
 
       puts "girl proxyd #{ Girl::VERSION }"
-      puts "proxyd #{ proxyd_port } nameserver #{ nameserver } ports_size #{ ports_size } tund_port #{ tund_port } girl_port #{ girl_port }"
+      puts "proxyd #{ proxyd_port } #{ girl_port } nameserver #{ nameserver } ports size #{ ports_size } tund port #{ tund_port }"
       puts "ims #{ ims.inspect }"
 
       worker = Girl::ProxydWorker.new( proxyd_port, nameserver, ports_size, tund_port, girl_port, ims )

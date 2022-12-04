@@ -1,5 +1,6 @@
 module Girl
   class ProxyWorker
+    include Custom
 
     ##
     # initialize
@@ -11,9 +12,9 @@ module Girl
       @remotes = remotes
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @ports_size = ports_size
+      @girl_port = girl_port
       @girld_addr = Socket.sockaddr_in( girl_port, proxyd_host )
       @im = im
-      @custom = Girl::ProxyCustom.new( im )
       @reads = []
       @writes = []
       @roles = {}            # sock => :redir / :infod / :dns / :tcp / :src / :dst / :tun
@@ -113,7 +114,7 @@ module Girl
       domain_port = [ destination_domain, destination_port ].join( ':' )
       puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
       data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
-      add_tcp_wbuff( @custom.encode_a_msg( data ) )
+      add_tcp_wbuff( encode_a_msg( data ) )
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -322,7 +323,7 @@ module Girl
 
       if src_info[ :tun ] then
         data = [ Girl::Custom::SOURCE_CLOSED_READ, src_info[ :src_id ] ].join( Girl::Custom::SEP )
-        add_tcp_wbuff( @custom.encode_a_msg( data ) )
+        add_tcp_wbuff( encode_a_msg( data ) )
       end
 
       if src.closed? then
@@ -381,7 +382,7 @@ module Girl
         elsif src_info[ :tun ] then
           close_tun( src_info[ :tun ] )
           data = [ Girl::Custom::SOURCE_CLOSED, src_info[ :src_id ] ].join( Girl::Custom::SEP )
-          add_tcp_wbuff( @custom.encode_a_msg( data ) )
+          add_tcp_wbuff( encode_a_msg( data ) )
         end
       end
     end
@@ -442,7 +443,7 @@ module Girl
 
       if src_info[ :tun ] then
         data = [ Girl::Custom::SOURCE_CLOSED_WRITE, src_info[ :src_id ] ].join( Girl::Custom::SEP )
-        add_tcp_wbuff( @custom.encode_a_msg( data ) )
+        add_tcp_wbuff( encode_a_msg( data ) )
       end
 
       if src.closed? then
@@ -629,7 +630,7 @@ module Girl
     #
     def new_a_tcp
       begin
-        @girlc.sendmsg( @custom.encode_im( @im ), 0, @girld_addr )
+        @girlc.sendmsg( encode_im( @im ), 0, @girld_addr )
       rescue Exception => e
         puts "#{ Time.new } send im to girld #{ e.class }"
       end
@@ -660,11 +661,9 @@ module Girl
       add_read( tcp, :tcp )
       @tcp = tcp
 
-      hello = @custom.hello
-      puts "#{ Time.new } hello i'm #{ hello.inspect } #{ @proxyd_host } #{ tcpd_port }"
-      puts "srcs #{ @src_infos.size } dsts #{ @dst_infos.size } tuns #{ @tun_infos.size } dnses #{ @dns_infos.size }"
-      data = [ Girl::Custom::HELLO, hello ].join( Girl::Custom::SEP )
-      add_tcp_wbuff( @custom.encode_a_msg( data ) )
+      puts "#{ Time.new } hello i'm #{ @im } #{ @proxyd_host } #{ tcpd_port } #{ @girl_port } src infos #{ @src_infos.size } dst infos #{ @dst_infos.size } tun infos #{ @tun_infos.size } dns infos #{ @dns_infos.size }"
+      data = [ Girl::Custom::HELLO, @im ].join( Girl::Custom::SEP )
+      add_tcp_wbuff( encode_a_msg( data ) )
     end
 
     ##
@@ -920,7 +919,7 @@ module Girl
       end
 
       unless src_info[ :rbuff ].empty? then
-        data = @custom.encode( src_info[ :rbuff ] )
+        data = encode( src_info[ :rbuff ] )
         add_tun_wbuff( tun, data )
       end
     end
@@ -1110,7 +1109,7 @@ module Girl
       tcp_info = @tcp_infos[ tcp ]
       data = "#{ tcp_info[ :part ] }#{ data }"
 
-      msgs, part = @custom.decode_to_msgs( data )
+      msgs, part = decode_to_msgs( data )
       msgs.each{ | msg | deal_ctlmsg( msg, tcp ) }
       tcp_info[ :part ] = part
     end
@@ -1319,7 +1318,7 @@ module Girl
         tun = src_info[ :tun ]
 
         if tun then
-          add_tun_wbuff( tun, @custom.encode( data ) )
+          add_tun_wbuff( tun, encode( data ) )
         else
           # puts "debug add src rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
@@ -1414,7 +1413,7 @@ module Girl
       end
 
       data = "#{ tun_info[ :part ] }#{ data }"
-      data, part = @custom.decode( data )
+      data, part = decode( data )
       add_src_wbuff( src, data )
       tun_info[ :part ] = part
     end
