@@ -154,22 +154,6 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 
 妹子同时支持http和socks5代理。
 
-## docker
-
-快速体验可以使用我发布在docker hub的妹子镜像。
-
-远端一键启动：
-
-```bash
-docker run -d --restart=always -e USE=proxyd --network=host -it takafan/girl
-```
-
-近端一键启动：
-
-```bash
-docker run -d --restart=always -e USE=proxy -e PROXYD_HOST=1.2.3.4 -p6666:6666 -it takafan/girl
-```
-
 ## 设备端
 
 不用装任何东西，直接填代理，系统自带的代理。
