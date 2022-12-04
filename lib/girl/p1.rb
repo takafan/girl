@@ -40,7 +40,7 @@ module Girl
       end
 
       unless im then
-        im = 'girl'
+        im = 'office-pi'
       end
 
       puts "girl p1 #{ Girl::VERSION }"

@@ -542,7 +542,7 @@ module Girl
       return if data.empty?
 
       im = decode_im( data )
-      return unless @ims.include?( im )
+      return if @ims.any? && !@ims.include?( im )
       
       @ips[ im ] = addrinfo.ip_address
       puts "#{ Time.new } set ip #{ im.inspect } #{ addrinfo.ip_address } ips #{ @ips.size }"

@@ -38,63 +38,77 @@
 
 ## 使用
 
-分别在两端装：
+### 远端，通常是vps：
+
+1. 安装ruby，妹子：
 
 ```bash
 apt install ruby
 gem install girl
 ```
 
-远端，通常是vps：
+2. 创建 proxyd.run.rb：
 
 ```ruby
-# proxyd.rb
 require 'girl/proxyd'
 
 Girl::Proxyd.new '/etc/girl.conf.json'
 ```
 
-```bash
-ruby proxyd.rb
-```
-
-近端，可以是本机，树莓派，内网服务器，路由器：
-
-```ruby
-# proxy.rb
-require 'girl/proxy'
-
-Girl::Proxy.new '/boot/girl.conf.json'
-```
+3. 启动远端：
 
 ```bash
-ruby proxy.rb
+ruby proxyd.run.rb
 ```
 
-girl.conf.json的格式：
+4. 远端 girl.conf.json 样例：
 
 ```javascript
-// girl.conf.json
 {
-    "redir_port": 6666,                 // 近端（本地）端口
-    "proxyd_host": "1.2.3.4",           // 远端服务器
-    "proxyd_port": 6060,                // 远端端口
-    "girl_port": 8080,                  // 妹子端口，防重放
-    "direct_path": "girl.direct.txt",   // 直连ip段
-    "remote_path": "girl.remote.txt",   // 交给远端解析（并中转流量）的域名列表
-    "nameserver": "114.114.114.114",    // 域名列表之外的域名就近查询，国内的dns服务器
-    "im": "taka-pc",                    // 设备标识
-    "ims": [ "taka-pc", "taka-mac" ],   // 远端允许的设备列表
-    "mirrord_port": 7070,               // 镜子服务端口
-    "mirrord_infod_port": 7080,         // 镜子服务查询端口，供本地调用
-    "p2d_ports": [ [ "girl", 2222 ] ],  // 镜子服务，标识对应影子端口
-    "p2d_host": "127.0.0.1",            // 镜子服务，影子端口暴露地址，0.0.0.0为对外
-    "appd_host": "127.0.0.1",           // 镜子p1端，内网应用地址
-    "appd_port": 22                     // 镜子p1端，应用端口
+    "proxyd_port": 6060, // 远端端口
+    "girl_port": 8080    // 妹子端口，防重放
 }
 ```
 
-获取注册在亚太的CN的ip段：
+### 近端，可以是本机，树莓派，内网服务器，路由器:
+
+1. 以windows为例，下载和安装ruby：https://rubyinstaller.org/
+
+2. 安装妹子：
+
+```bash
+gem install girl
+```
+
+3. 创建 proxy.run.rb：
+
+```ruby
+require 'girl/proxy'
+
+Girl::Proxy.new File.expand_path( '../girl.conf.json', __FILE__ )
+```
+
+4. 启动近端：
+
+```bash
+ruby proxy.run.rb
+```
+
+5. 近端 girl.conf.json 样例：
+
+```javascript
+{
+    "redir_port": 6666,                           // 近端（本地）端口
+    "proxyd_host": "1.2.3.4",                     // 远端服务器
+    "proxyd_port": 6060,                          // 远端端口
+    "girl_port": 8080,                            // 妹子端口，防重放
+    "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
+    "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析（并中转流量）的域名列表
+    "im": "taka-pc"                               // 设备标识
+}
+```
+
+6. 获取注册在亚太的CN的ip段：
 
 ```bash
 curl -O http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
@@ -102,7 +116,7 @@ cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n",
 cat delegated-apnic-latest | grep ipv6 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, $5) }' >> girl.direct.txt
 ```
 
-girl.remote.txt的格式：
+7. girl.remote.txt的格式：
 
 ```txt
 google.com
@@ -188,33 +202,57 @@ sshd
 
 不单sshd，可以是p1所在内网的任意应用。
 
-镜子端：
+1. 镜子端：
 
 ```ruby
-# mirrord.rb
+# mirrord.run.rb
 require 'girl/mirrord'
 
 Girl::Mirrord.new '/etc/girl.conf.json'
 ```
 
 ```bash
-ruby mirrord.rb
+ruby mirrord.run.rb
 ```
 
-p1端：
+2. 镜子端 girl.conf.json 样例：
+
+```javascript
+{
+    "mirrord_port": 7070,       // 镜子服务端口
+    "mirrord_infod_port": 7080, // 镜子服务查询端口，供本地调用
+    "p2d_ports": [              // 镜子服务，标识对应影子端口
+      [ "taka-pi", 2222 ]
+    ]
+}
+```
+
+3. p1端：
 
 ```ruby
-# p1.rb
+# p1.run.rb
 require 'girl/p1'
 
 Girl::P1.new '/boot/girl.conf.json'
 ```
 
 ```bash
-ruby p1.rb
+ruby p1.run.rb
 ```
 
-镜子端本地，ssh连p1映射出来的影子端口：
+4. p1端 girl.conf.json 样例：
+
+```javascript
+{
+    "proxyd_host": "1.2.3.4", // 远端服务器
+    "mirrord_port": 7070,     // 远端端口
+    "appd_host": "127.0.0.1", // 镜子p1端，内网应用地址
+    "appd_port": 22,          // 镜子p1端，应用端口
+    "im": "taka-pi"           // 设备标识
+}
+```
+
+5. 镜子端本地，ssh连p1映射出来的影子端口：
 
 ```bash
 ssh -p2222 pi@localhost
