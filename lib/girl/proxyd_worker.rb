@@ -804,7 +804,13 @@ module Girl
       data, addrinfo, rflags, *controls = infod.recvmsg
       return if data.empty?
 
-      msg = JSON.parse( data, symbolize_names: true )
+      begin
+        msg = JSON.parse( data, symbolize_names: true )
+      rescue JSON::ParserError, EncodingError => e
+        puts "#{ Time.new } read infod #{ e.class }"
+        return
+      end
+
       message_type = msg[ :message_type ]
 
       case message_type
