@@ -4,19 +4,19 @@ module Girl
     ##
     # initialize
     #
-    def initialize( mirrord_port, infod_port, p2d_ports, p2d_host )
+    def initialize( mirrord_port, infod_port, im_infos, p2d_host )
       @p2d_host = p2d_host
       @reads = []
       @writes = []
       @roles = {}                    # :dotr / :mirrord / :infod / :p1d / :p2d / :p1 / :p2
-      @room_infos = {}               # im => { :mirrord, :p1_addrinfo, :updated_at, :p1d, :p2d }
+      @room_infos = {}               # im => { :mirrord, :p1_addrinfo, :updated_at, :p1d, :p2d, :p2d_port, :p1d_port }
       @p1d_infos = {}                # p1d => { :im }
       @p2d_infos = {}                # p2d => { :im }
       @p1_infos = {}                 # p1 => { :addrinfo, :im, :p2, :wbuff, :closing_write, :paused }
       @p2_infos = ConcurrentHash.new # p2 => { :addrinfo, :im, :p1, :rbuff, :wbuff, :created_at,
                                      #         :last_recv_at, :last_sent_at, :closing, :closing_write, :paused }
 
-      set_p2d_ports( p2d_ports )
+      set_im_infos( im_infos )
       new_a_pipe
       new_mirrords( mirrord_port )
       new_a_infod( infod_port )
@@ -423,13 +423,18 @@ module Girl
     end
 
     ##
-    # set p2d ports
+    # set im infos
     #
-    def set_p2d_ports( p2d_ports )
-      @p2d_ports = {}
+    def set_im_infos( im_infos )
+      @im_infos = {}
 
-      p2d_ports.each do | im, p2d_port |
-        @p2d_ports[ im ] = p2d_port
+      im_infos.each do | info |
+        im, p2d_port, p1d_port = info[ :im ], info[ :p2d_port ], info[ :p1d_port ]
+        
+        @im_infos[ im ] = {
+          p2d_port: p2d_port,
+          p1d_port: p1d_port
+        }
       end
     end
 
@@ -455,9 +460,10 @@ module Girl
         room_info[ :mirrord ] = mirrord
         room_info[ :p1_addrinfo ] = addrinfo
         room_info[ :updated_at ] = Time.new
-      elsif @p2d_ports.include?( im ) then
-        p2d_port = @p2d_ports[ im ]
-        p1d = new_a_listener( 0, '0.0.0.0' )
+      elsif @im_infos.include?( im ) then
+        im_info = @im_infos[ im ]
+        p2d_port, p1d_port = im_info[ :p2d_port ], im_info[ :p1d_port ]
+        p1d = new_a_listener( p1d_port, '0.0.0.0' )
         p2d = new_a_listener( p2d_port, @p2d_host )
         print "#{ Time.new } p1d listen on #{ p1d.local_address.inspect }"
         puts " p2d listen on #{ p2d.local_address.inspect }"
@@ -476,7 +482,8 @@ module Girl
           updated_at: Time.new,
           p1d: p1d,
           p2d: p2d,
-          p2d_port: p2d_port
+          p2d_port: p2d_port,
+          p1d_port: p1d_port
         }
 
         add_read( p1d, :p1d )
@@ -496,7 +503,8 @@ module Girl
       data2 = @room_infos.sort_by{ | _, info | info[ :p2d_port ] }.map do | im, info |
         [
           info[ :updated_at ],
-          @p2d_ports[ im ],
+          info[ :p2d_port ],
+          info[ :p1d_port ],
           im + ' ' * ( ROOM_TITLE_LIMIT - im.size ),
           info[ :p1_addrinfo ].ip_unpack.join( ':' )
         ].join( ' ' )

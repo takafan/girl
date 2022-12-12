@@ -205,8 +205,12 @@ ruby mirrord.run.rb
 {
     "mirrord_port": 7070,       // 镜子服务端口
     "mirrord_infod_port": 7080, // 镜子服务查询端口，供本地调用
-    "p2d_ports": [              // 镜子服务，标识对应影子端口
-      [ "taka-pi", 2222 ]
+    "im_infos": [               // 标识详情列表
+      { 
+        "im": "taka-pi",        // 标识
+        "p2d_port": 2222,       // p2影子端口
+        "p1d_port": 0           // p1影子端口
+      }
     ]
 }
 ```
