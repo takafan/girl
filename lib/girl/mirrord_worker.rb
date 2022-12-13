@@ -482,8 +482,8 @@ module Girl
           updated_at: Time.new,
           p1d: p1d,
           p2d: p2d,
-          p2d_port: p2d_port,
-          p1d_port: p1d_port
+          p1d_port: p1d.local_address.ip_port,
+          p2d_port: p2d.local_address.ip_port
         }
 
         add_read( p1d, :p1d )
