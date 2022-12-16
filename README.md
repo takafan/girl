@@ -6,30 +6,48 @@
 
 代理，不论http，https，socks5，shadowsocks，会受到邪恶阻拦。
 
-```
-流量 -> 代理 -> 本机/路由器（自定义传输） ------> vps -> 目的地
-```
-
-自定义传输，回避邪恶。
+妹子，回避邪恶。
 
 ## 邪恶细节
 
 1. dns查询得到错误的ip。
 2. tcp流量无法到达特定ip。
-3. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。例如：`CONNECT google.com HTTP/1.1\r\n\r\n`
-4. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
+3. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
+4. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。例如：`CONNECT google.com HTTP/1.1\r\n\r\n`
 5. 出国tcp，若为代理协议或者tls握手，后续流量稍微多一点，来源端口被封，后续流量无法到达。
-6. tcp阻断，触发后，来源ip每和vps建立tcp连接，不论端口，来回一两次流量即被封来源端口，后续流量无法到达，但ping的通，udp可达，几分钟至几小时恢复，容易反复触发。
+6. tcp阻断，触发后，来源ip每和vps建立tcp连接，不论端口，来回两次流量即被封来源端口，后续流量无法到达，但ping的通，udp可达，企业宽带极易触发。
 7. 用shadowsocks稍微频繁一点，国内任何来源的tcp及icmp均无法到达vps，但udp可达，持续几天至几个月不等。
-
-回避1和2须依靠中转，但中转会遇到3-7，妹子是针对3-7的极简解。
-
 8. udp，tcp分开触发，被偷偷限速在200K，重启vps恢复。
 
-## 完整的路线图
+* 应对1和2，须依靠中转：
 
 ```
-流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit ----------> 远端 -> 解析域名 -> 目的地
+流量 -> 代理 -> 本机/路由器 ------> vps -> 目的地
+```
+
+* 中转会遇到3-8。
+* 应对3：几乎不能走udp。
+* 应对4，5：自定义协议。
+* 应对6：三个方案，妹子对第三个有支持：
+
+```
+流量 ------> vps（非知名供应商ip段） -> 目的地
+```
+
+```
+流量 ------> 海外cdn中转 ------> vps -> 目的地
+```
+
+```
+流量 ------> 国内vps ------> 海外vps -> 目的地
+```
+
+妹子是实现上述应对的极简解。
+
+完整的路线图：
+
+```
+流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit ----- 中继（应对6） -----> 远端 -> 解析域名 -> 目的地
                                               \
                                                `- not hit -> 解析域名 -> ip命中directs.txt？-- hit -----> 目的地
                                                                                           \
@@ -52,7 +70,7 @@ gem install girl
 ```ruby
 require 'girl/proxyd'
 
-Girl::Proxyd.new '/etc/girl.conf.json'
+Girl::Proxyd.new '/etc/proxyd.conf.json'
 ```
 
 3. 启动远端：
@@ -61,12 +79,12 @@ Girl::Proxyd.new '/etc/girl.conf.json'
 ruby proxyd.run.rb
 ```
 
-4. 远端 girl.conf.json 样例：
+4. proxyd.conf.json 样例：
 
 ```javascript
 {
-    "proxyd_port": 6060, // 远端端口
-    "girl_port": 8080    // 妹子端口，防重放
+  "proxyd_port": 6060, // 远端端口
+  "girl_port": 8080    // 妹子端口，防重放
 }
 ```
 
@@ -85,7 +103,7 @@ gem install girl
 ```ruby
 require 'girl/proxy'
 
-Girl::Proxy.new File.expand_path( '../girl.conf.json', __FILE__ )
+Girl::Proxy.new File.expand_path( '../proxy.conf.json', __FILE__ )
 ```
 
 4. 启动近端：
@@ -94,17 +112,17 @@ Girl::Proxy.new File.expand_path( '../girl.conf.json', __FILE__ )
 ruby proxy.run.rb
 ```
 
-5. 近端 girl.conf.json 样例：
+5. proxy.conf.json 样例：
 
 ```javascript
 {
-    "redir_port": 6666,                           // 近端（本地）端口
-    "proxyd_host": "1.2.3.4",                     // 远端服务器
-    "proxyd_port": 6060,                          // 远端端口
-    "girl_port": 8080,                            // 妹子端口，防重放
-    "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
-    "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析（并中转流量）的域名列表
-    "im": "taka-pc"                               // 设备标识
+  "redir_port": 6666,                           // 近端（本地）端口
+  "proxyd_host": "1.2.3.4",                     // 远端服务器
+  "proxyd_port": 6060,                          // 远端端口
+  "girl_port": 8080,                            // 妹子端口，防重放
+  "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
+  "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
+  "im": "taka-pc"                               // 设备标识
 }
 ```
 
@@ -154,6 +172,34 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 
 妹子同时支持http和socks5代理。
 
+## 中继，通常是国内vps：
+
+1. 创建 relay.run.rb：
+
+```ruby
+require 'girl/relay'
+
+Girl::Relay.new File.expand_path( '../relay.conf.json', __FILE__ )
+```
+
+2. 启动中继：
+
+```bash
+ruby relay.run.rb
+```
+
+3. relay.conf.json 样例：
+
+```javascript
+{
+  "relay_proxyd_port": 5060, // 中继远端端口
+  "relay_girl_port": 5080,   // 中继妹子端口
+  "proxyd_host": "1.2.3.4",  // 远端服务器
+  "proxyd_port": 6060,       // 远端端口
+  "girl_port": 8080          // 妹子端口
+}
+```
+
 ## 设备端
 
 不用装任何东西，直接填代理，系统自带的代理。
@@ -192,26 +238,25 @@ sshd
 # mirrord.run.rb
 require 'girl/mirrord'
 
-Girl::Mirrord.new '/etc/girl.conf.json'
+Girl::Mirrord.new '/etc/mirrord.conf.json'
 ```
 
 ```bash
 ruby mirrord.run.rb
 ```
 
-2. 镜子端 girl.conf.json 样例：
+2. mirrord.conf.json 样例：
 
 ```javascript
 {
-    "mirrord_port": 7070,       // 镜子服务端口
-    "mirrord_infod_port": 7080, // 镜子服务查询端口，供本地调用
-    "im_infos": [               // 标识详情列表
-      { 
-        "im": "taka-pi",        // 标识
-        "p2d_port": 2222,       // p2影子端口
-        "p1d_port": 0           // p1影子端口
-      }
-    ]
+  "mirrord_port": 7070,       // 镜子服务端口
+  "im_infos": [               // 映射列表
+    { 
+      "im": "taka-pi",        // 标识
+      "p2d_port": 2222,       // p2影子端口
+      "p1d_port": 0           // p1影子端口，0为随机
+    }
+  ]
 }
 ```
 
@@ -221,19 +266,19 @@ ruby mirrord.run.rb
 # p1.run.rb
 require 'girl/p1'
 
-Girl::P1.new '/boot/girl.conf.json'
+Girl::P1.new '/boot/p1.conf.json'
 ```
 
 ```bash
 ruby p1.run.rb
 ```
 
-4. p1端 girl.conf.json 样例：
+4. p1.conf.json 样例：
 
 ```javascript
 {
-    "proxyd_host": "1.2.3.4", // 远端服务器
-    "mirrord_port": 7070,     // 远端端口
+    "proxyd_host": "1.2.3.4", // 镜子服务器
+    "mirrord_port": 7070,     // 镜子端口
     "appd_host": "127.0.0.1", // 镜子p1端，内网应用地址
     "appd_port": 22,          // 镜子p1端，应用端口
     "im": "taka-pi"           // 设备标识
