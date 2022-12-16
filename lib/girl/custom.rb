@@ -7,7 +7,6 @@ module Girl
     SOURCE_CLOSED       = 'Q'
     SOURCE_CLOSED_READ  = 'R'
     SOURCE_CLOSED_WRITE = 'S'
-    TUND_PORTS          = 'T'
     SEP                 = ','
 
     def encode( data )

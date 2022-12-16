@@ -28,6 +28,8 @@ lib/girl/proxy_worker.rb
 lib/girl/proxy.rb
 lib/girl/proxyd_worker.rb
 lib/girl/proxyd.rb
+lib/girl/relay_worker.rb
+lib/girl/relay.rb
 lib/girl/version.rb
   ]
 

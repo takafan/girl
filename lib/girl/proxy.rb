@@ -36,12 +36,11 @@ module Girl
       redir_port = conf[ :redir_port ]
       proxyd_host = conf[ :proxyd_host ]
       proxyd_port = conf[ :proxyd_port ]
+      girl_port = conf[ :girl_port ]
+      nameserver = conf[ :nameserver ]
+      im = conf[ :im ]
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
-      nameserver = conf[ :nameserver ]
-      ports_size = conf[ :ports_size ]
-      girl_port = conf[ :girl_port ]
-      im = conf[ :im ]
 
       unless redir_port then
         redir_port = 6666
@@ -51,6 +50,18 @@ module Girl
 
       unless proxyd_port then
         proxyd_port = 6060
+      end
+
+      unless girl_port then
+        girl_port = 8080
+      end
+
+      unless nameserver then
+        nameserver = '114.114.114.114'
+      end
+
+      unless im then
+        im = 'office-pc'
       end
 
       directs = []
@@ -67,28 +78,12 @@ module Girl
         remotes = IO.binread( remote_path ).split( "\n" ).map{ | line | line.strip }
       end
 
-      unless nameserver then
-        nameserver = '114.114.114.114'
-      end
-
-      unless ports_size then
-        ports_size = 1
-      end
-
-      unless girl_port then
-        girl_port = 8080
-      end
-
-      unless im then
-        im = 'office-pc'
-      end
-
       puts "girl proxy #{ Girl::VERSION }"
-      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } nameserver #{ nameserver } ports size #{ ports_size } im #{ im }"
+      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } nameserver #{ nameserver } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
-      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, directs, remotes, nameserver, ports_size, girl_port, im )
+      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, girl_port, nameserver, im, directs, remotes )
 
       Signal.trap( :TERM ) do
         puts 'exit'

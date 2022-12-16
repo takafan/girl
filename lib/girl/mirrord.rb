@@ -21,10 +21,8 @@ module Girl
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
       mirrord_port = conf[ :mirrord_port ]
       infod_port = conf[ :mirrord_infod_port ]
-      im_infos = conf[ :im_infos ]
       p2d_host = conf[ :p2d_host ]
-
-      raise 'missing im infos' if im_infos.nil? || im_infos.empty?
+      im_infos = conf[ :im_infos ]
 
       unless mirrord_port then
         mirrord_port = 7070
@@ -38,11 +36,13 @@ module Girl
         p2d_host = '127.0.0.1'
       end
 
+      raise 'missing im infos' if im_infos.nil? || im_infos.empty?
+
       puts "girl mirrord #{ Girl::VERSION }"
-      puts "mirrord #{ mirrord_port } #{ p2d_host } infod #{ infod_port }"
+      puts "mirrord #{ mirrord_port } infod #{ infod_port } p2d host #{ p2d_host }"
       puts "im infos #{ im_infos.inspect }"
 
-      worker = Girl::MirrordWorker.new( mirrord_port, infod_port, im_infos, p2d_host )
+      worker = Girl::MirrordWorker.new( mirrord_port, infod_port, p2d_host, im_infos )
 
       Signal.trap( :TERM ) do
         puts 'exit'

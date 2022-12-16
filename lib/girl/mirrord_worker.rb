@@ -1,11 +1,7 @@
 module Girl
   class MirrordWorker
 
-    ##
-    # initialize
-    #
-    def initialize( mirrord_port, infod_port, im_infos, p2d_host )
-      @p2d_host = p2d_host
+    def initialize( mirrord_port, infod_port, p2d_host, im_infos )
       @reads = []
       @writes = []
       @roles = {}                    # :dotr / :mirrord / :infod / :p1d / :p2d / :p1 / :p2
@@ -13,18 +9,15 @@ module Girl
       @p1d_infos = {}                # p1d => { :im }
       @p2d_infos = {}                # p2d => { :im }
       @p1_infos = {}                 # p1 => { :addrinfo, :im, :p2, :wbuff, :closing_write, :paused }
-      @p2_infos = ConcurrentHash.new # p2 => { :addrinfo, :im, :p1, :rbuff, :wbuff, :created_at,
-                                     #         :last_recv_at, :last_sent_at, :closing, :closing_write, :paused }
+      @p2_infos = ConcurrentHash.new # p2 => { :addrinfo, :im, :p1, :rbuff, :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing, :closing_write, :paused }       
+      @p2d_host = p2d_host
 
-      set_im_infos( im_infos )
       new_a_pipe
       new_mirrords( mirrord_port )
       new_a_infod( infod_port )
+      set_im_infos( im_infos )
     end
 
-    ##
-    # looping
-    #
     def looping
       puts "#{ Time.new } looping"
       loop_check_expire
@@ -38,18 +31,18 @@ module Girl
           case role
           when :dotr then
             read_dotr( sock )
-          when :mirrord
-            read_mirrord( sock )
           when :infod
             read_infod( sock )
-          when :p1d
-            read_p1d( sock )
-          when :p2d
-            read_p2d( sock )
+          when :mirrord
+            read_mirrord( sock )
           when :p1
             read_p1( sock )
+          when :p1d
+            read_p1d( sock )
           when :p2
             read_p2( sock )
+          when :p2d
+            read_p2d( sock )
           else
             puts "#{ Time.new } read unknown role #{ role }"
           end
@@ -74,9 +67,6 @@ module Girl
       quit!
     end
 
-    ##
-    # quit!
-    #
     def quit!
       # puts "debug exit"
       exit
@@ -84,9 +74,6 @@ module Girl
 
     private
 
-    ##
-    # add p1 wbuff
-    #
     def add_p1_wbuff( p1, data )
       return if p1.nil? || p1.closed?
       p1_info = @p1_infos[ p1 ]
@@ -108,9 +95,6 @@ module Girl
       end
     end
 
-    ##
-    # add p2 rbuff
-    #
     def add_p2_rbuff( p2, data )
       return if p2.nil? || p2.closed?
       p2_info = @p2_infos[ p2 ]
@@ -123,9 +107,6 @@ module Girl
       end
     end
 
-    ##
-    # add p2 wbuff
-    #
     def add_p2_wbuff( p2, data )
       return if p2.nil? || p2.closed?
       p2_info = @p2_infos[ p2 ]
@@ -149,9 +130,6 @@ module Girl
       end
     end
 
-    ##
-    # add read
-    #
     def add_read( sock, role = nil )
       return if sock.nil? || sock.closed? || @reads.include?( sock )
       @reads << sock
@@ -161,17 +139,11 @@ module Girl
       end
     end
 
-    ##
-    # add write
-    #
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
     end
 
-    ##
-    # close p1
-    #
     def close_p1( p1 )
       return if p1.nil? || p1.closed?
       # puts "debug close p1"
@@ -179,9 +151,6 @@ module Girl
       @p1_infos.delete( p1 )
     end
 
-    ##
-    # close p1d
-    #
     def close_p1d( p1d )
       return if p1d.nil? || p1d.closed?
       # puts "debug close p1d"
@@ -189,9 +158,6 @@ module Girl
       @p1d_infos.delete( p1d )
     end
 
-    ##
-    # close p2
-    #
     def close_p2( p2 )
       return if p2.nil? || p2.closed?
       # puts "debug close p2"
@@ -203,9 +169,6 @@ module Girl
       end
     end
 
-    ##
-    # close p2d
-    #
     def close_p2d( p2d )
       return if p2d.nil? || p2d.closed?
       # puts "debug close p2d"
@@ -213,9 +176,6 @@ module Girl
       @p2d_infos.delete( p2d )
     end
 
-    ##
-    # close read p1
-    #
     def close_read_p1( p1 )
       return if p1.nil? || p1.closed?
       # puts "debug close read p1"
@@ -230,9 +190,6 @@ module Girl
       end
     end
 
-    ##
-    # close read p2
-    #
     def close_read_p2( p2 )
       return if p2.nil? || p2.closed?
       # puts "debug close read p2"
@@ -247,9 +204,6 @@ module Girl
       end
     end
 
-    ##
-    # close sock
-    #
     def close_sock( sock )
       return if sock.nil? || sock.closed?
       sock.close
@@ -258,9 +212,6 @@ module Girl
       @roles.delete( sock )
     end
 
-    ##
-    # close write p1
-    #
     def close_write_p1( p1 )
       return if p1.nil? || p1.closed?
       # puts "debug close write p1"
@@ -275,9 +226,6 @@ module Girl
       end
     end
 
-    ##
-    # close write p2
-    #
     def close_write_p2( p2 )
       return if p2.nil? || p2.closed?
       # puts "debug close write p2"
@@ -292,9 +240,6 @@ module Girl
       end
     end
 
-    ##
-    # del room info
-    #
     def del_room_info( im )
       room_info = @room_infos.delete( im )
 
@@ -304,9 +249,6 @@ module Girl
       end
     end
 
-    ##
-    # loop check expire
-    #
     def loop_check_expire
       Thread.new do
         loop do
@@ -328,9 +270,6 @@ module Girl
       end
     end
 
-    ##
-    # new a infod
-    #
     def new_a_infod( infod_port )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
@@ -340,9 +279,6 @@ module Girl
       add_read( infod, :infod )
     end
 
-    ##
-    # new a listener
-    #
     def new_a_listener( port, host )
       listener = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       listener.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
@@ -357,18 +293,12 @@ module Girl
       listener
     end
 
-    ##
-    # new a pipe
-    #
     def new_a_pipe
       dotr, dotw = IO.pipe
       @dotw = dotw
       add_read( dotr, :dotr )
     end
 
-    ##
-    # new mirrords
-    #
     def new_mirrords( begin_port )
       10.times do | i |
         mirrord_port = begin_port + i
@@ -380,75 +310,32 @@ module Girl
       end
     end
 
-    ##
-    # next tick
-    #
     def next_tick
       @dotw.write( '.' )
     end
 
-    ##
-    # send data
-    #
-    def send_data( sock, data, target_addr )
-      begin
-        sock.sendmsg_nonblock( data, 0, target_addr )
-      rescue Exception => e
-        puts "#{ Time.new } sendmsg #{ e.class }"
-      end
-    end
-
-    ##
-    # set p1 closing write
-    #
-    def set_p1_closing_write( p1 )
-      return if p1.nil? || p1.closed?
-      p1_info = @p1_infos[ p1 ]
-      return if p1_info[ :closing_write ]
-      # puts "debug set p1 closing write"
-      p1_info[ :closing_write ] = true
-      add_write( p1 )
-    end
-
-    ##
-    # set p2 closing write
-    #
-    def set_p2_closing_write( p2 )
-      return if p2.nil? || p2.closed?
-      p2_info = @p2_infos[ p2 ]
-      return if p2_info[ :closing_write ]
-      # puts "debug set p2 closing write"
-      p2_info[ :closing_write ] = true
-      add_write( p2 )
-    end
-
-    ##
-    # set im infos
-    #
-    def set_im_infos( im_infos )
-      @im_infos = {}
-
-      im_infos.each do | info |
-        im, p2d_port, p1d_port = info[ :im ], info[ :p2d_port ], info[ :p1d_port ]
-        
-        @im_infos[ im ] = {
-          p2d_port: p2d_port,
-          p1d_port: p1d_port
-        }
-      end
-    end
-
-    ##
-    # read dotr
-    #
     def read_dotr( dotr )
       dotr.read_nonblock( READ_SIZE )
       @p2_infos.select{ | _, info | info[ :closing ] }.keys.each{ | p2 | close_p2( p2 ) }
     end
 
-    ##
-    # read mirrord
-    #
+    def read_infod( infod )
+      data, addrinfo, rflags, *controls = infod.recvmsg
+      return if data.empty?
+
+      data2 = @room_infos.sort_by{ | _, info | info[ :p2d_port ] }.map do | im, info |
+        [
+          info[ :updated_at ],
+          info[ :p2d_port ],
+          info[ :p1d_port ],
+          im + ' ' * ( ROOM_TITLE_LIMIT - im.size ),
+          info[ :p1_addrinfo ].ip_unpack.join( ':' )
+        ].join( ' ' )
+      end.join( "\n" )
+
+      send_data( infod, data2, addrinfo )
+    end
+
     def read_mirrord( mirrord )
       data, addrinfo, rflags, *controls = mirrord.recvmsg
       return if data.empty? || ( data.size > ROOM_TITLE_LIMIT ) || data =~ /\r|\n/
@@ -493,109 +380,6 @@ module Girl
       end
     end
 
-    ##
-    # read infod
-    #
-    def read_infod( infod )
-      data, addrinfo, rflags, *controls = infod.recvmsg
-      return if data.empty?
-
-      data2 = @room_infos.sort_by{ | _, info | info[ :p2d_port ] }.map do | im, info |
-        [
-          info[ :updated_at ],
-          info[ :p2d_port ],
-          info[ :p1d_port ],
-          im + ' ' * ( ROOM_TITLE_LIMIT - im.size ),
-          info[ :p1_addrinfo ].ip_unpack.join( ':' )
-        ].join( ' ' )
-      end.join( "\n" )
-
-      send_data( infod, data2, addrinfo )
-    end
-
-    ##
-    # read p1d
-    #
-    def read_p1d( p1d )
-      if p1d.closed? then
-        puts "#{ Time.new } read p1d but p1d closed?"
-        return
-      end
-
-      p1d_info = @p1d_infos[ p1d ]
-      im = p1d_info[ :im ]
-
-      begin
-        p1, addrinfo = p1d.accept_nonblock
-      rescue Exception => e
-        puts "#{ Time.new } p1d accept #{ e.class } #{ im.inspect }"
-        del_room_info( im )
-        return
-      end
-
-      @p1_infos[ p1 ] = {
-        addrinfo: addrinfo,   # 地址
-        im: im,               # 标识
-        p2: nil,              # 对应p2
-        wbuff: '',            # 写前
-        closing_write: false, # 准备关闭写
-        paused: false         # 是否暂停
-      }
-
-      add_read( p1, :p1 )
-      puts "#{ Time.new } here comes a p1 #{ im.inspect } #{ addrinfo.inspect }"
-    end
-
-    ##
-    # read p2d
-    #
-    def read_p2d( p2d )
-      if p2d.closed? then
-        puts "#{ Time.new } read p2d but p2d closed?"
-        return
-      end
-
-      p2d_info = @p2d_infos[ p2d ]
-      im = p2d_info[ :im ]
-
-      begin
-        p2, addrinfo = p2d.accept_nonblock
-      rescue Exception => e
-        puts "#{ Time.new } p2d accept #{ e.class } #{ im.inspect }"
-        del_room_info( im )
-        return
-      end
-
-      room_info = @room_infos[ im ]
-      p1d_port = room_info[ :p1d ].local_address.ip_port
-      p2_id = rand( ( 2 ** 64 ) - 2 ) + 1
-
-      @p2_infos[ p2 ] = {
-        p2_id: p2_id,         # p2 id
-        addrinfo: addrinfo,   # 地址
-        im: im,               # 标识
-        p1: nil,              # 对应p1
-        rbuff: '',            # 匹配到p1之前，暂存流量
-        wbuff: '',            # 写前
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量（p1读到，放入p2写前）的时间
-        last_sent_at: nil,    # 上一次中转流量（p1写）的时间
-        closing: false,       # 是否准备关闭
-        closing_write: false, # 准备关闭写
-        paused: false         # 是否暂停
-      }
-
-      add_read( p2, :p2 )
-
-      puts "#{ Time.new } here comes a p2 #{ im.inspect } #{ addrinfo.inspect } #{ p2_id }"
-      puts "rooms #{ @room_infos.size } p1ds #{ @p1d_infos.size } p2ds #{ @p2d_infos.size } p1s #{ @p1_infos.size } p2s #{ @p2_infos.size }"
-      data = [ p1d_port, p2_id ].pack( 'nQ>' )
-      send_data( room_info[ :mirrord ], data, room_info[ :p1_addrinfo ] )
-    end
-
-    ##
-    # read p1
-    #
     def read_p1( p1 )
       if p1.closed? then
         puts "#{ Time.new } read p1 but p1 closed?"
@@ -649,9 +433,36 @@ module Girl
       add_p2_wbuff( p2, data )
     end
 
-    ##
-    # read p2
-    #
+    def read_p1d( p1d )
+      if p1d.closed? then
+        puts "#{ Time.new } read p1d but p1d closed?"
+        return
+      end
+
+      p1d_info = @p1d_infos[ p1d ]
+      im = p1d_info[ :im ]
+
+      begin
+        p1, addrinfo = p1d.accept_nonblock
+      rescue Exception => e
+        puts "#{ Time.new } p1d accept #{ e.class } #{ im.inspect }"
+        del_room_info( im )
+        return
+      end
+
+      @p1_infos[ p1 ] = {
+        addrinfo: addrinfo,   # 地址
+        im: im,               # 标识
+        p2: nil,              # 对应p2
+        wbuff: '',            # 写前
+        closing_write: false, # 准备关闭写
+        paused: false         # 是否暂停
+      }
+
+      add_read( p1, :p1 )
+      puts "#{ Time.new } here comes a p1 #{ im.inspect } #{ addrinfo.inspect }"
+    end
+
     def read_p2( p2 )
       if p2.closed? then
         puts "#{ Time.new } read p2 but p2 closed?"
@@ -677,9 +488,89 @@ module Girl
       end
     end
 
-    ##
-    # write p1
-    #
+    def read_p2d( p2d )
+      if p2d.closed? then
+        puts "#{ Time.new } read p2d but p2d closed?"
+        return
+      end
+
+      p2d_info = @p2d_infos[ p2d ]
+      im = p2d_info[ :im ]
+
+      begin
+        p2, addrinfo = p2d.accept_nonblock
+      rescue Exception => e
+        puts "#{ Time.new } p2d accept #{ e.class } #{ im.inspect }"
+        del_room_info( im )
+        return
+      end
+
+      room_info = @room_infos[ im ]
+      p1d_port = room_info[ :p1d ].local_address.ip_port
+      p2_id = rand( ( 2 ** 64 ) - 2 ) + 1
+
+      @p2_infos[ p2 ] = {
+        p2_id: p2_id,         # p2 id
+        addrinfo: addrinfo,   # 地址
+        im: im,               # 标识
+        p1: nil,              # 对应p1
+        rbuff: '',            # 匹配到p1之前，暂存流量
+        wbuff: '',            # 写前
+        created_at: Time.new, # 创建时间
+        last_recv_at: nil,    # 上一次收到流量（p1读到，放入p2写前）的时间
+        last_sent_at: nil,    # 上一次中转流量（p1写）的时间
+        closing: false,       # 是否准备关闭
+        closing_write: false, # 准备关闭写
+        paused: false         # 是否暂停
+      }
+
+      add_read( p2, :p2 )
+
+      puts "#{ Time.new } here comes a p2 #{ im.inspect } #{ addrinfo.inspect } #{ p2_id }"
+      puts "rooms #{ @room_infos.size } p1ds #{ @p1d_infos.size } p2ds #{ @p2d_infos.size } p1s #{ @p1_infos.size } p2s #{ @p2_infos.size }"
+      data = [ p1d_port, p2_id ].pack( 'nQ>' )
+      send_data( room_info[ :mirrord ], data, room_info[ :p1_addrinfo ] )
+    end
+
+    def send_data( sock, data, target_addr )
+      begin
+        sock.sendmsg_nonblock( data, 0, target_addr )
+      rescue Exception => e
+        puts "#{ Time.new } sendmsg #{ e.class }"
+      end
+    end
+
+    def set_im_infos( im_infos )
+      @im_infos = {}
+
+      im_infos.each do | info |
+        im, p2d_port, p1d_port = info[ :im ], info[ :p2d_port ], info[ :p1d_port ]
+        
+        @im_infos[ im ] = {
+          p2d_port: p2d_port,
+          p1d_port: p1d_port
+        }
+      end
+    end
+
+    def set_p1_closing_write( p1 )
+      return if p1.nil? || p1.closed?
+      p1_info = @p1_infos[ p1 ]
+      return if p1_info[ :closing_write ]
+      # puts "debug set p1 closing write"
+      p1_info[ :closing_write ] = true
+      add_write( p1 )
+    end
+
+    def set_p2_closing_write( p2 )
+      return if p2.nil? || p2.closed?
+      p2_info = @p2_infos[ p2 ]
+      return if p2_info[ :closing_write ]
+      # puts "debug set p2 closing write"
+      p2_info[ :closing_write ] = true
+      add_write( p2 )
+    end
+
     def write_p1( p1 )
       if p1.closed? then
         puts "#{ Time.new } write p1 but p1 closed?"
@@ -727,9 +618,6 @@ module Girl
       end
     end
 
-    ##
-    # write p2
-    #
     def write_p2( p2 )
       if p2.closed? then
         puts "#{ Time.new } write p2 but p2 closed?"
@@ -774,5 +662,6 @@ module Girl
         end
       end
     end
+
   end
 end
