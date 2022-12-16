@@ -103,7 +103,7 @@ gem install girl
 ```ruby
 require 'girl/proxy'
 
-Girl::Proxy.new File.expand_path( '../proxy.conf.json', __FILE__ )
+Girl::Proxy.new '/etc/proxy.conf.json'
 ```
 
 4. 启动近端：
@@ -179,7 +179,7 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 ```ruby
 require 'girl/relay'
 
-Girl::Relay.new File.expand_path( '../relay.conf.json', __FILE__ )
+Girl::Relay.new '/etc/relay.conf.json'
 ```
 
 2. 启动中继：
@@ -266,7 +266,7 @@ ruby mirrord.run.rb
 # p1.run.rb
 require 'girl/p1'
 
-Girl::P1.new '/boot/p1.conf.json'
+Girl::P1.new '/etc/p1.conf.json'
 ```
 
 ```bash
