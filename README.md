@@ -285,7 +285,7 @@ ruby p1.run.rb
 }
 ```
 
-5. 镜子端本地，ssh连p1映射出来的影子端口：
+5. 镜子端本地，ssh连p2影子端口：
 
 ```bash
 ssh -p2222 pi@localhost
