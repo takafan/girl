@@ -609,7 +609,11 @@ module Girl
           im_infos: im_info_arr
         }
 
-        send_msg_to_client( msg2, addrinfo )
+        begin
+          @infod.sendmsg_nonblock( JSON.generate( msg2 ), 0, addrinfo )
+        rescue Exception => e
+          puts "#{ Time.new } send memory info #{ e.class } #{ addrinfo.ip_unpack.inspect }"
+        end
       end
     end
 
@@ -834,14 +838,6 @@ module Girl
         @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
       rescue Exception => e
         puts "#{ Time.new } send msg to infod #{ e.class }"
-      end
-    end
-
-    def send_msg_to_client( msg, addrinfo )
-      begin
-        @infod.sendmsg_nonblock( JSON.generate( msg ), 0, addrinfo )
-      rescue Exception => e
-        puts "#{ Time.new } send msg to client #{ e.class } #{ addrinfo.ip_unpack.inspect }"
       end
     end
 

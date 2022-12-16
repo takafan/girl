@@ -1,20 +1,19 @@
 module Girl
   class MirrordWorker
 
-    def initialize( mirrord_port, infod_port, p2d_host, im_infos )
+    def initialize( mirrord_port, p2d_host, im_infos )
       @reads = []
       @writes = []
-      @roles = {}                    # :dotr / :mirrord / :infod / :p1d / :p2d / :p1 / :p2
-      @room_infos = {}               # im => { :mirrord, :p1_addrinfo, :updated_at, :p1d, :p2d, :p2d_port, :p1d_port }
-      @p1d_infos = {}                # p1d => { :im }
-      @p2d_infos = {}                # p2d => { :im }
-      @p1_infos = {}                 # p1 => { :addrinfo, :im, :p2, :wbuff, :closing_write, :paused }
-      @p2_infos = ConcurrentHash.new # p2 => { :addrinfo, :im, :p1, :rbuff, :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing, :closing_write, :paused }       
+      @roles = {}      # :infod / :mirrord / :p1 / :p1d / :p2 / :p2d
+      @room_infos = {} # im => { :mirrord, :p1_addrinfo, :updated_at, :p1d, :p2d, :p2d_port, :p1d_port }
+      @p1d_infos = {}  # p1d => { :im }
+      @p2d_infos = {}  # p2d => { :im }
+      @p1_infos = {}   # p1 => { :addrinfo, :im, :p2, :wbuff, :closing_write, :paused }
+      @p2_infos = {}   # p2 => { :addrinfo, :im, :p1, :rbuff, :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing_write, :paused }
       @p2d_host = p2d_host
 
-      new_a_pipe
       new_mirrords( mirrord_port )
-      new_a_infod( infod_port )
+      new_a_infod( mirrord_port )
       set_im_infos( im_infos )
     end
 
@@ -29,8 +28,6 @@ module Girl
           role = @roles[ sock ]
 
           case role
-          when :dotr then
-            read_dotr( sock )
           when :infod
             read_infod( sock )
           when :mirrord
@@ -98,7 +95,6 @@ module Girl
     def add_p2_rbuff( p2, data )
       return if p2.nil? || p2.closed?
       p2_info = @p2_infos[ p2 ]
-      return if p2_info[ :closing ]
       p2_info[ :rbuff ] << data
 
       if p2_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
@@ -110,7 +106,6 @@ module Girl
     def add_p2_wbuff( p2, data )
       return if p2.nil? || p2.closed?
       p2_info = @p2_infos[ p2 ]
-      return if p2_info[ :closing ]
       p2_info[ :wbuff ] << data
       p2_info[ :last_recv_at ] = Time.new
       add_write( p2 )
@@ -253,30 +248,28 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_EXPIRE_INTERVAL
-          now = Time.new
 
-          @p2_infos.select{ | p2, _ | !p2.closed? }.values.each do | p2_info |
-            last_recv_at = p2_info[ :last_recv_at ] || p2_info[ :created_at ]
-            last_sent_at = p2_info[ :last_sent_at ] || p2_info[ :created_at ]
-            is_expire = ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER )
+          msg = {
+            message_type: 'check-expire'
+          }
 
-            if is_expire then
-              puts "#{ Time.new } expire p2 #{ p2_info[ :im ].inspect } #{ p2_info[ :addrinfo ].inspect }"
-              p2_info[ :closing ] = true
-              next_tick
-            end
-          end
+          send_msg_to_infod( msg )
         end
       end
     end
 
-    def new_a_infod( infod_port )
+    def new_a_infod( mirrord_port )
+      infod_port = mirrord_port + 10
+      infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      infod.bind( Socket.sockaddr_in( infod_port, '127.0.0.1' ) )
-
+      infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
+      info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      @infod_addr = infod_addr
+      @infod = infod
+      @info = info
     end
 
     def new_a_listener( port, host )
@@ -293,12 +286,6 @@ module Girl
       listener
     end
 
-    def new_a_pipe
-      dotr, dotw = IO.pipe
-      @dotw = dotw
-      add_read( dotr, :dotr )
-    end
-
     def new_mirrords( begin_port )
       10.times do | i |
         mirrord_port = begin_port + i
@@ -310,30 +297,45 @@ module Girl
       end
     end
 
-    def next_tick
-      @dotw.write( '.' )
-    end
-
-    def read_dotr( dotr )
-      dotr.read_nonblock( READ_SIZE )
-      @p2_infos.select{ | _, info | info[ :closing ] }.keys.each{ | p2 | close_p2( p2 ) }
-    end
-
     def read_infod( infod )
       data, addrinfo, rflags, *controls = infod.recvmsg
       return if data.empty?
 
-      data2 = @room_infos.sort_by{ | _, info | info[ :p2d_port ] }.map do | im, info |
-        [
-          info[ :updated_at ],
-          info[ :p2d_port ],
-          info[ :p1d_port ],
-          im + ' ' * ( ROOM_TITLE_LIMIT - im.size ),
-          info[ :p1_addrinfo ].ip_unpack.join( ':' )
-        ].join( ' ' )
-      end.join( "\n" )
+      begin
+        msg = JSON.parse( data, symbolize_names: true )
+      rescue JSON::ParserError, EncodingError => e
+        puts "#{ Time.new } read infod #{ e.class }"
+        return
+      end
 
-      send_data( infod, data2, addrinfo )
+      message_type = msg[ :message_type ]
+
+      case message_type
+      when 'check-expire' then
+        now = Time.new
+
+        @p2_infos.each do | p2, p2_info |
+          last_recv_at = p2_info[ :last_recv_at ] || p2_info[ :created_at ]
+          last_sent_at = p2_info[ :last_sent_at ] || p2_info[ :created_at ]
+
+          if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
+            puts "#{ Time.new } expire p2 #{ p2_info[ :im ].inspect } #{ p2_info[ :addrinfo ].inspect }"
+            close_p2( p2 )
+          end
+        end
+      when 'memory-info' then
+        data2 = @room_infos.sort_by{ | _, info | info[ :p2d_port ] }.map do | im, info |
+          [
+            info[ :updated_at ],
+            info[ :p2d_port ],
+            info[ :p1d_port ],
+            im + ' ' * ( ROOM_TITLE_LIMIT - im.size ),
+            info[ :p1_addrinfo ].ip_unpack.join( ':' )
+          ].join( ' ' )
+        end.join( "\n" )
+  
+        send_data( infod, data2, addrinfo )
+      end
     end
 
     def read_mirrord( mirrord )
@@ -537,6 +539,14 @@ module Girl
         sock.sendmsg_nonblock( data, 0, target_addr )
       rescue Exception => e
         puts "#{ Time.new } sendmsg #{ e.class }"
+      end
+    end
+
+    def send_msg_to_infod( msg )
+      begin
+        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
+      rescue Exception => e
+        puts "#{ Time.new } send msg to infod #{ e.class }"
       end
     end
 

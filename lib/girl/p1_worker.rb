@@ -1,19 +1,19 @@
 module Girl
   class P1Worker
 
-    def initialize( mirrord_host, mirrord_port, appd_host, appd_port, im )
+    def initialize( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
       @reads = []
       @writes = []
-      @roles = {} # sock => :dotr / :ctl / :p1 / :app
-      @p1_infos = {}
-      @app_infos = ConcurrentHash.new
+      @roles = {}     # sock => :app / :ctl / :infod / :p1
+      @p1_infos = {}  # p1 => { :wbuff, :closing_write, :paused, :app }
+      @app_infos = {} # app => { :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing_write, :paused, :p1 }
       @mirrord_host = mirrord_host
       @mirrord_port = mirrord_port
       @appd_addr = Socket.sockaddr_in( appd_port, appd_host )
       @im = im
 
-      new_a_pipe
       new_a_ctl
+      new_a_infod( infod_port )
     end
 
     def looping
@@ -32,8 +32,8 @@ module Girl
             read_app( sock )
           when :ctl then
             read_ctl( sock )
-          when :dotr then
-            read_dotr( sock )
+          when :infod
+            read_infod( sock )
           when :p1 then
             read_p1( sock )
           else
@@ -210,19 +210,12 @@ module Girl
       Thread.new do
         loop do
           sleep CHECK_EXPIRE_INTERVAL
-          now = Time.new
 
-          @app_infos.select{ | app, _ | !app.closed? }.values.each do | app_info |
-            last_recv_at = app_info[ :last_recv_at ] || app_info[ :created_at ]
-            last_sent_at = app_info[ :last_sent_at ] || app_info[ :created_at ]
-            is_expire = ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER )
+          msg = {
+            message_type: 'check-expire'
+          }
 
-            if is_expire then
-              puts "#{ Time.new } expire app"
-              app_info[ :closing ] = true
-              next_tick
-            end
-          end
+          send_msg_to_infod( msg )
         end
       end
     end
@@ -232,10 +225,11 @@ module Girl
         loop do
           sleep RENEW_CTL_INTERVAL
 
-          if @ctl && !@ctl.closed? && !@ctl_info[ :closing ] then
-            @ctl_info[ :closing ] = true
-            next_tick
-          end
+          msg = {
+            message_type: 'renew-ctl'
+          }
+
+          send_msg_to_infod( msg )
         end
       end
     end
@@ -253,8 +247,7 @@ module Girl
 
       @ctl = ctl
       @ctl_info = {
-        mirrord_addr: mirrord_addr,
-        closing: false
+        mirrord_addr: mirrord_addr
       }
 
       add_read( ctl, :ctl )
@@ -262,10 +255,17 @@ module Girl
       send_im
     end
 
-    def new_a_pipe
-      dotr, dotw = IO.pipe
-      @dotw = dotw
-      add_read( dotr, :dotr )
+    def new_a_infod( infod_port )
+      infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
+      infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      infod.bind( infod_addr )
+      puts "#{ Time.new } infod bind on #{ infod_port }"
+      add_read( infod, :infod )
+      info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      @infod_addr = infod_addr
+      @infod = infod
+      @info = info
     end
 
     def new_app_and_p1( p1d_port, p2_id )
@@ -299,7 +299,6 @@ module Girl
         created_at: Time.new,
         last_recv_at: nil,
         last_sent_at: nil,
-        closing: false,
         closing_write: false,
         paused: false,
         p1: p1
@@ -316,10 +315,6 @@ module Girl
       add_read( p1, :p1 )
       add_write( p1 )
       puts "#{ Time.new } new app and p1 #{ p1d_port } #{ p2_id } app infos #{ @app_infos.size } p1 infos #{ @p1_infos.size }"
-    end
-
-    def next_tick
-      @dotw.write( '.' )
     end
 
     def read_app( app )
@@ -361,15 +356,51 @@ module Girl
       new_app_and_p1( p1d_port, p2_id )
     end
 
-    def read_dotr( dotr )
-      dotr.read_nonblock( READ_SIZE )
+    def read_infod( infod )
+      data, addrinfo, rflags, *controls = infod.recvmsg
+      return if data.empty?
 
-      if @ctl && !@ctl.closed? && @ctl_info[ :closing ] then
-        close_ctl
-        new_a_ctl
+      begin
+        msg = JSON.parse( data, symbolize_names: true )
+      rescue JSON::ParserError, EncodingError => e
+        puts "#{ Time.new } read infod #{ e.class }"
+        return
       end
 
-      @app_infos.select{ | _, info | info[ :closing ] }.keys.each{ | app | close_app( app ) }
+      message_type = msg[ :message_type ]
+
+      case message_type
+      when 'check-expire' then
+        now = Time.new
+
+        @app_infos.each do | app, app_info |
+          last_recv_at = app_info[ :last_recv_at ] || app_info[ :created_at ]
+          last_sent_at = app_info[ :last_sent_at ] || app_info[ :created_at ]
+
+          if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
+            puts "#{ Time.new } expire app"
+            close_app( app )
+          end
+        end
+      when 'renew-ctl' then
+        if @ctl && !@ctl.closed? then
+          close_ctl
+          new_a_ctl
+        end
+      when 'memory-info' then
+        msg2 = {
+          sizes: {
+            p1_infos: @p1_infos.size,
+            app_infos: @app_infos.size
+          }
+        }
+
+        begin
+          @infod.sendmsg_nonblock( JSON.generate( msg2 ), 0, addrinfo )
+        rescue Exception => e
+          puts "#{ Time.new } send memory info #{ e.class } #{ addrinfo.ip_unpack.inspect }"
+        end
+      end
     end
 
     def read_p1( p1 )
@@ -398,6 +429,14 @@ module Girl
         @ctl.sendmsg( @im, 0, @ctl_info[ :mirrord_addr ] )
       rescue Exception => e
         puts "#{ Time.new } ctl sendmsg #{ e.class }"
+      end
+    end
+
+    def send_msg_to_infod( msg )
+      begin
+        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
+      rescue Exception => e
+        puts "#{ Time.new } send msg to infod #{ e.class }"
       end
     end
 

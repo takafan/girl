@@ -1,4 +1,3 @@
-require 'girl/concurrent_hash'
 require 'girl/head'
 require 'girl/mirrord_worker'
 require 'girl/version'
@@ -20,16 +19,11 @@ module Girl
 
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
       mirrord_port = conf[ :mirrord_port ]
-      infod_port = conf[ :mirrord_infod_port ]
       p2d_host = conf[ :p2d_host ]
       im_infos = conf[ :im_infos ]
 
       unless mirrord_port then
         mirrord_port = 7070
-      end
-
-      unless infod_port then
-        infod_port = 7080
       end
 
       unless p2d_host then
@@ -39,10 +33,10 @@ module Girl
       raise 'missing im infos' if im_infos.nil? || im_infos.empty?
 
       puts "girl mirrord #{ Girl::VERSION }"
-      puts "mirrord #{ mirrord_port } infod #{ infod_port } p2d host #{ p2d_host }"
+      puts "mirrord #{ mirrord_port } p2d host #{ p2d_host }"
       puts "im infos #{ im_infos.inspect }"
 
-      worker = Girl::MirrordWorker.new( mirrord_port, infod_port, p2d_host, im_infos )
+      worker = Girl::MirrordWorker.new( mirrord_port, p2d_host, im_infos )
 
       Signal.trap( :TERM ) do
         puts 'exit'
