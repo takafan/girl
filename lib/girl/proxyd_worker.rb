@@ -6,7 +6,7 @@ module Girl
       @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
       @ims = ims
 
-      @updates_limit = 1019                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ tcpd, girl, tund, infod ] = 1019
+      @updates_limit = 1019                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girl, infod, tcpd, tund ] = 1019
       @eliminate_size = @updates_limit - 255     # 淘汰数，保留255个最近的，其余淘汰
       @update_roles = [ :dns, :dst, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
@@ -257,7 +257,8 @@ module Girl
           @im_infos[ im ] = im_info
         end
 
-        puts "#{ Time.new } got hello #{ im.inspect } im infos #{ @im_infos.size } tcp infos #{ @tcp_infos.size } dst infos #{ @dst_infos.size } tun infos #{ @tun_infos.size } dns infos #{ @dns_infos.size }"
+        print "#{ Time.new } got hello #{ im.inspect } im infos #{ @im_infos.size } updates #{ @updates.size } "
+        puts "tcp infos #{ @tcp_infos.size } dst infos #{ @dst_infos.size } tun infos #{ @tun_infos.size } dns infos #{ @dns_infos.size }"
       when Girl::Custom::A_NEW_SOURCE then
         return unless tcp_info[ :im ]
         _, src_id, domain_port = data.split( Girl::Custom::SEP )
@@ -284,15 +285,12 @@ module Girl
         _, src_id = data.split( Girl::Custom::SEP )
         return unless src_id
         # puts "debug got src closed read #{ tcp_info[ :im ].inspect } #{ src_id }"
-        dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
-        set_dst_closing( dst )
-      when Girl::Custom::SOURCE_CLOSED_WRITE then
-        return unless tcp_info[ :im ]
-        _, src_id = data.split( Girl::Custom::SEP )
-        return unless src_id
-        # puts "debug got src closed write #{ tcp_info[ :im ].inspect } #{ src_id }"
-        dst, _ = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
-        close_read_dst( dst )
+        dst, dst_info = @dst_infos.find{ | _, info | info[ :src_id ] == src_id }
+        
+        if dst_info then
+          dst_info[ :closing ] = true
+          add_write( dst )
+        end
       end
     end
 
@@ -691,12 +689,12 @@ module Girl
       # puts "debug accept a tun"
 
       @tun_infos[ tun ] = {
-        im: nil,                # 标识
-        dst: nil,               # 对应dst
-        domain: nil,            # 目的地
-        part: '',               # 包长+没收全的缓存
-        wbuff: '',              # 写前
-        paused: false           # 是否暂停
+        im: nil,      # 标识
+        dst: nil,     # 对应dst
+        domain: nil,  # 目的地
+        part: '',     # 包长+没收全的缓存
+        wbuff: '',    # 写前
+        paused: false # 是否暂停
       }
 
       add_read( tun, :tun )
@@ -784,15 +782,6 @@ module Girl
       end
     end
 
-    def set_dst_closing( dst )
-      return if dst.nil? || dst.closed?
-      dst_info = @dst_infos[ dst ]
-      return if dst_info[ :closing ]
-      # puts "debug set dst closing write"
-      dst_info[ :closing ] = true
-      add_write( dst )
-    end
-
     def set_dst_info_tun( dst_info, tun )
       dst_info[ :tun ] = tun
       src_id = dst_info[ :src_id ]
@@ -847,7 +836,6 @@ module Girl
       tun = dst_info[ :tun ]
       data = dst_info[ :wbuff ]
 
-      # 写前为空，处理关闭写
       if data.empty? then
         if dst_info[ :closing ] then
           close_dst( dst )
@@ -858,7 +846,6 @@ module Girl
         return
       end
 
-      # 写入
       begin
         written = dst.write_nonblock( data )
       rescue Exception => e
@@ -893,13 +880,11 @@ module Girl
       tcp_info = @tcp_infos[ tcp ]
       data = tcp_info[ :wbuff ]
 
-      # 写前为空，处理关闭写
       if data.empty? then
         @writes.delete( tcp )
         return
       end
 
-      # 写入
       begin
         written = tcp.write_nonblock( data )
       rescue Exception => e
@@ -924,7 +909,6 @@ module Girl
       dst = tun_info[ :dst ]
       data = tun_info[ :wbuff ]
 
-      # 写前为空，处理关闭
       if data.empty? then
         if tun_info[ :closing ] then
           close_tun( tun )
@@ -935,7 +919,6 @@ module Girl
         return
       end
 
-      # 写入
       begin
         written = tun.write_nonblock( data )
       rescue Exception => e

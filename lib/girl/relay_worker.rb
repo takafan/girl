@@ -3,16 +3,22 @@ module Girl
     include Custom
 
     def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
-      @reads = []
-      @writes = []
-      @roles = {}           # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
-      @relay_tcp_infos = {} # relay_tcp => { :wbuff, :created_at, :last_recv_at }
-      @relay_tun_infos = {} # relay_tun => { :wbuff, :created_at, :last_add_wbuff_at, :paused }
-      @tcp_infos = {}       # tcp => { :wbuff, :created_at, :last_recv_at }
-      @tun_infos = {}       # tun => { :wbuff, :created_at, :last_add_wbuff_at, :paused }
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
-      
+
+      @updates_limit = 1019                                  # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, relay_girl, relay_tcpd, relay_tund ] = 1019
+      @eliminate_size = @updates_limit - 255                 # 淘汰数，保留255个最近的，其余淘汰
+      @update_roles = [ :relay_tcp, :relay_tun, :tcp, :tun ] # 参与淘汰的角色
+      @reads = []                                            # 读池
+      @writes = []                                           # 写池
+
+      @updates = {}         # sock => updated_at
+      @roles = {}           # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
+      @relay_tcp_infos = {} # relay_tcp => { :wbuff }
+      @relay_tun_infos = {} # relay_tun => { :closing, :wbuff, :paused }
+      @tcp_infos = {}       # tcp => { :wbuff }
+      @tun_infos = {}       # tun => { :closing, :wbuff, :paused }
+
       new_a_relay_tcpd( relay_proxyd_port )
       new_a_infod( relay_proxyd_port )
       new_a_relay_tund( relay_girl_port )
@@ -22,7 +28,6 @@ module Girl
 
     def looping
       puts "#{ Time.new } looping"
-      loop_check_expire
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -89,6 +94,12 @@ module Girl
 
       if role then
         @roles[ sock ] = role
+      else
+        role = @roles[ sock ]
+      end
+
+      if @update_roles.include?( role ) then
+        set_update( sock )
       end
     end
 
@@ -131,7 +142,6 @@ module Girl
       return if tun.nil? || tun.closed?
       tun_info = @tun_infos[ tun ]
       tun_info[ :wbuff ] << data
-      tun_info[ :last_add_wbuff_at ] = Time.new
       add_write( tun )
 
       if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
@@ -152,33 +162,34 @@ module Girl
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
+      role = @roles[ sock ]
+
+      if @update_roles.include?( role ) then
+        set_update( sock )
+      end
     end
 
     def close_read_relay_tun( relay_tun )
       return if relay_tun.nil? || relay_tun.closed?
       # puts "debug close read relay tun"
-      relay_tun.close_read
-      @reads.delete( relay_tun )
+      relay_tun_info = @relay_tun_infos[ relay_tun ]
 
-      if relay_tun.closed? then
-        # puts "debug relay tun closed"
-        @writes.delete( relay_tun )
-        @roles.delete( relay_tun )
-        @relay_tun_infos.delete( relay_tun )
+      if relay_tun_info[ :wbuff ].empty? then
+        close_relay_tun( relay_tun )
+      else
+        @reads.delete( relay_tun )
       end
     end
 
     def close_read_tun( tun )
       return if tun.nil? || tun.closed?
       # puts "debug close read tun"
-      tun.close_read
-      @reads.delete( tun )
+      tun_info = @tun_infos[ tun ]
 
-      if tun.closed? then
-        # puts "debug tun closed"
-        @writes.delete( tun )
-        @roles.delete( tun )
-        @tun_infos.delete( tun )
+      if tun_info[ :wbuff ].empty? then
+        close_tun( tun )
+      else
+        @reads.delete( tun )
       end
     end
 
@@ -201,6 +212,7 @@ module Girl
       sock.close
       @reads.delete( sock )
       @writes.delete( sock )
+      @updates.delete( sock )
       @roles.delete( sock )
     end
 
@@ -216,48 +228,6 @@ module Girl
       # puts "debug close tun"
       close_sock( tun )
       @tun_infos.delete( tun )
-    end
-
-    def close_write_relay_tun( relay_tun )
-      return if relay_tun.nil? || relay_tun.closed?
-      # puts "debug close write relay tun"
-      relay_tun.close_write
-      @writes.delete( relay_tun )
-
-      if relay_tun.closed? then
-        # puts "debug relay tun closed"
-        @reads.delete( relay_tun )
-        @roles.delete( relay_tun )
-        @relay_tun_infos.delete( relay_tun )
-      end
-    end
-
-    def close_write_tun( tun )
-      return if tun.nil? || tun.closed?
-      # puts "debug close write tun"
-      tun.close_write
-      @writes.delete( tun )
-
-      if tun.closed? then
-        # puts "debug tun closed"
-        @reads.delete( tun )
-        @roles.delete( tun )
-        @tun_infos.delete( tun )
-      end
-    end
-
-    def loop_check_expire
-      Thread.new do
-        loop do
-          sleep CHECK_EXPIRE_INTERVAL
-
-          msg = {
-            message_type: 'check-expire'
-          }
-
-          send_msg_to_infod( msg )
-        end
-      end
     end
 
     def new_a_girlc
@@ -321,31 +291,10 @@ module Girl
       message_type = msg[ :message_type ]
 
       case message_type
-      when 'check-expire' then
-        now = Time.new
-
-        @tcp_infos.select{ | _, _tcp_info | now - ( _tcp_info[ :last_recv_at ] || _tcp_info[ :created_at ] ) >= EXPIRE_AFTER }.keys.each do | tcp |
-          puts "#{ Time.new } expire tcp #{ tcp.object_id }"
-          close_tcp( tcp )
-        end
-
-        @relay_tcp_infos.select{ | _, _relay_tcp_info | now - ( _relay_tcp_info[ :last_recv_at ] || _relay_tcp_info[ :created_at ] ) >= EXPIRE_AFTER }.keys.each do | relay_tcp |
-          puts "#{ Time.new } expire relay tcp #{ relay_tcp.object_id }"
-          close_relay_tcp( relay_tcp )
-        end
-
-        @tun_infos.select{ | _, _tun_info | now - ( _tun_info[ :last_add_wbuff_at ] || _tun_info[ :created_at ] ) >= EXPIRE_AFTER }.keys.each do | tun |
-          puts "#{ Time.new } expire tun #{ tun.object_id }"
-          close_tun( tun )
-        end
-
-        @relay_tun_infos.select{ | _, _relay_tun_info | now - ( _relay_tun_info[ :last_add_wbuff_at ] || _relay_tun_info[ :created_at ] ) >= EXPIRE_AFTER }.keys.each do | relay_tun |
-          puts "#{ Time.new } expire relay tun #{ relay_tun.object_id }"
-          close_relay_tun( relay_tun )
-        end
       when 'memory-info' then
         msg2 = {
           sizes: {
+            updates: @updates.size,
             relay_tcp_infos: @relay_tcp_infos.size,
             relay_tun_infos: @relay_tun_infos.size,
             tcp_infos: @tcp_infos.size,
@@ -372,7 +321,7 @@ module Girl
 
     def read_relay_tcp( relay_tcp )
       if relay_tcp.closed? then
-        puts "#{ Time.new } read relay tcp but relay tcp closed?"
+        puts "#{ Time.new } read closed relay tcp?"
         return
       end
 
@@ -384,15 +333,15 @@ module Girl
         return
       end
 
+      set_update( relay_tcp )
       relay_tcp_info = @relay_tcp_infos[ relay_tcp ]
-      relay_tcp_info[ :last_recv_at ] = Time.new
       tcp = relay_tcp_info[ :tcp ]
       add_tcp_wbuff( tcp, data )
     end
 
     def read_relay_tcpd( relay_tcpd )
       if relay_tcpd.closed? then
-        puts "#{ Time.new } read relay tcpd but relay tcpd closed?"
+        puts "#{ Time.new } read closed relay tcpd?"
         return
       end
 
@@ -402,8 +351,6 @@ module Girl
         puts "#{ Time.new } relay tcpd accept #{ e.class }"
         return
       end
-
-      # puts "debug accept a relay tcp"
 
       tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
@@ -419,16 +366,12 @@ module Girl
       end
 
       @relay_tcp_infos[ relay_tcp ] = {
-        wbuff: '',            # 写前
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到控制流量时间
+        wbuff: '',
         tcp: tcp
       }
 
       @tcp_infos[ tcp ] = {
-        wbuff: '',            # 写前
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到控制流量时间
+        wbuff: '',
         relay_tcp: relay_tcp
       }
 
@@ -438,7 +381,7 @@ module Girl
 
     def read_relay_tun( relay_tun )
       if relay_tun.closed? then
-        puts "#{ Time.new } read relay tun but relay tun closed?"
+        puts "#{ Time.new } read closed relay tun?"
         return
       end
 
@@ -450,15 +393,15 @@ module Girl
         return
       end
 
+      set_update( relay_tun )
       relay_tun_info = @relay_tun_infos[ relay_tun ]
-      relay_tun_info[ :last_recv_at ] = Time.new
       tun = relay_tun_info[ :tun ]
       add_tun_wbuff( tun, data )
     end
 
     def read_relay_tund( relay_tund )
       if relay_tund.closed? then
-        puts "#{ Time.new } read relay tund but relay tund closed?"
+        puts "#{ Time.new } read closed relay tund?"
         return
       end
 
@@ -468,8 +411,6 @@ module Girl
         puts "#{ Time.new } relay tund accept #{ e.class }"
         return
       end
-
-      # puts "debug accept a relay tun"
 
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
@@ -485,18 +426,14 @@ module Girl
       end
 
       @relay_tun_infos[ relay_tun ] = {
-        wbuff: '',              # 写前
-        created_at: Time.new,   # 创建时间
-        last_add_wbuff_at: nil, # 上一次加写前的时间
-        paused: false,          # 是否暂停
+        wbuff: '',
+        paused: false,
         tun: tun
       }
 
       @tun_infos[ tun ] = {
-        wbuff: '',              # 写前
-        created_at: Time.new,   # 创建时间
-        last_add_wbuff_at: nil, # 上一次加写前的时间
-        paused: false,          # 是否已暂停
+        wbuff: '',
+        paused: false,
         relay_tun: relay_tun
       }
 
@@ -506,7 +443,7 @@ module Girl
 
     def read_tcp( tcp )
       if tcp.closed? then
-        puts "#{ Time.new } read tcp but tcp closed?"
+        puts "#{ Time.new } read closed tcp?"
         return
       end
 
@@ -518,19 +455,17 @@ module Girl
         return
       end
 
+      set_update( tcp )
       tcp_info = @tcp_infos[ tcp ]
-      tcp_info[ :last_recv_at ] = Time.new
       relay_tcp = tcp_info[ :relay_tcp ]
       add_relay_tcp_wbuff( relay_tcp, data )
     end
 
     def read_tun( tun )
       if tun.closed? then
-        puts "#{ Time.new } read tun but tun closed?"
+        puts "#{ Time.new } read closed tun?"
         return
       end
-
-      tun_info = @tun_infos[ tun ]
 
       begin
         data = tun.read_nonblock( READ_SIZE )
@@ -540,6 +475,8 @@ module Girl
         return
       end
 
+      set_update( tun )
+      tun_info = @tun_infos[ tun ]
       relay_tun = tun_info[ :relay_tun ]
       add_relay_tun_wbuff( relay_tun, data )
     end
@@ -560,31 +497,50 @@ module Girl
       end
     end
 
-    def set_tun_closing_write( tun )
+    def set_tun_closing( tun )
       return if tun.nil? || tun.closed?
       tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing_write ]
+      return if tun_info[ :closing ]
       # puts "debug set tun closing write"
-      tun_info[ :closing_write ] = true
+      tun_info[ :closing ] = true
       add_write( tun )
+    end
+
+    def set_update( sock )
+      if @updates.size >= @updates_limit then
+        puts "#{ Time.new } eliminate updates"
+
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
+          case @roles[ sock ]
+          when :relay_tcp
+            close_relay_tcp( sock )
+          when :relay_tun
+            close_relay_tun( sock )
+          when :tcp
+            close_tcp( sock )
+          when :tun
+            close_tun( sock )
+          end
+        end
+      end
+
+      @updates[ sock ] = Time.new
     end
 
     def write_relay_tcp( relay_tcp )
       if relay_tcp.closed? then
-        puts "#{ Time.new } write relay tcp but relay tcp closed?"
+        puts "#{ Time.new } write closed relay tcp?"
         return
       end
 
       relay_tcp_info = @relay_tcp_infos[ relay_tcp ]
       data = relay_tcp_info[ :wbuff ]
 
-      # 写前为空，处理关闭写
       if data.empty? then
         @writes.delete( relay_tcp )
         return
       end
 
-      # 写入
       begin
         written = relay_tcp.write_nonblock( data )
       rescue Exception => e
@@ -593,13 +549,14 @@ module Girl
         return
       end
 
+      set_update( relay_tcp )
       data = data[ written..-1 ]
       relay_tcp_info[ :wbuff ] = data
     end
 
     def write_relay_tun( relay_tun )
       if relay_tun.closed? then
-        puts "#{ Time.new } write relay tun but relay tun closed?"
+        puts "#{ Time.new } write closed relay tun?"
         return
       end
 
@@ -607,10 +564,9 @@ module Girl
       tun = relay_tun_info[ :tun ]
       data = relay_tun_info[ :wbuff ]
 
-      # 写前为空，处理关闭写
       if data.empty? then
-        if relay_tun_info[ :closing_write ] then
-          close_write_relay_tun( relay_tun )
+        if relay_tun_info[ :closing ] then
+          close_relay_tun( relay_tun )
         else
           @writes.delete( relay_tun )
         end
@@ -618,7 +574,6 @@ module Girl
         return
       end
 
-      # 写入
       begin
         written = relay_tun.write_nonblock( data )
       rescue Exception => e
@@ -628,6 +583,7 @@ module Girl
         return
       end
 
+      set_update( relay_tun )
       data = data[ written..-1 ]
       relay_tun_info[ :wbuff ] = data
 
@@ -644,22 +600,18 @@ module Girl
 
     def write_tcp( tcp )
       if tcp.closed? then
-        puts "#{ Time.new } write tcp but tcp closed?"
+        puts "#{ Time.new } write closed tcp?"
         return
       end
 
       tcp_info = @tcp_infos[ tcp ]
       data = tcp_info[ :wbuff ]
 
-      # 写前为空，处理关闭写
       if data.empty? then
         @writes.delete( tcp )
         return
       end
 
-      # puts "debug write tcp #{ data.inspect }"
-
-      # 写入
       begin
         written = tcp.write_nonblock( data )
       rescue Exception => e
@@ -668,13 +620,14 @@ module Girl
         return
       end
 
+      set_update( tcp )
       data = data[ written..-1 ]
       tcp_info[ :wbuff ] = data
     end
 
     def write_tun( tun )
       if tun.closed? then
-        puts "#{ Time.new } write tun but tun closed?"
+        puts "#{ Time.new } write closed tun?"
         return
       end
 
@@ -682,10 +635,9 @@ module Girl
       relay_tun = tun_info[ :relay_tun ]
       data = tun_info[ :wbuff ]
 
-      # 写前为空，处理关闭写
       if data.empty? then
-        if tun_info[ :closing_write ] then
-          close_write_tun( tun )
+        if tun_info[ :closing ] then
+          close_tun( tun )
         else
           @writes.delete( tun )
         end
@@ -693,7 +645,6 @@ module Girl
         return
       end
 
-      # 写入
       begin
         written = tun.write_nonblock( data )
       rescue Exception => e
@@ -703,6 +654,7 @@ module Girl
         return
       end
 
+      set_update( tun )
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
 
