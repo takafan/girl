@@ -238,7 +238,11 @@ module Girl
     def new_a_relay_girl( relay_girl_port )
       relay_girl_addr = Socket.sockaddr_in( relay_girl_port, '0.0.0.0' )
       relay_girl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      relay_girl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        relay_girl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      end
+
       relay_girl.bind( relay_girl_addr )
       puts "#{ Time.new } relay girl bind on #{ relay_girl_port }"
       add_read( relay_girl, :relay_girl )
@@ -247,7 +251,11 @@ module Girl
     def new_a_infod( infod_port )
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      end
+
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
@@ -260,7 +268,11 @@ module Girl
     def new_a_relay_tcpd( relay_tcpd_port )
       relay_tcpd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relay_tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      relay_tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        relay_tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      end
+
       relay_tcpd.bind( Socket.sockaddr_in( relay_tcpd_port, '0.0.0.0' ) )
       relay_tcpd.listen( 127 )
       puts "#{ Time.new } relay tcpd listen on #{ relay_tcpd_port }"
@@ -270,7 +282,11 @@ module Girl
     def new_a_relay_tund( relay_girl_port )
       relay_tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relay_tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      relay_tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        relay_tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      end
+      
       relay_tund.bind( Socket.sockaddr_in( relay_girl_port, '0.0.0.0' ) )
       relay_tund.listen( 127 )
       puts "#{ Time.new } relay tund listen on #{ relay_girl_port }"
