@@ -39,7 +39,7 @@
 ```
 
 ```
-流量 ------> 国内vps ------> 海外vps -> 目的地
+流量 ------> 国内专线/vps ------> 海外vps -> 目的地
 ```
 
 妹子支持第三种。
@@ -172,7 +172,7 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 
 妹子同时支持http和socks5代理。
 
-## 中继，通常是国内vps：
+## 中继，通常是国内专线/vps：
 
 1. 创建 relay.run.rb：
 
