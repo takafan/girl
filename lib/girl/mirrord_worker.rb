@@ -262,7 +262,11 @@ module Girl
       infod_port = mirrord_port + 10
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      end
+
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
@@ -290,7 +294,11 @@ module Girl
       10.times do | i |
         mirrord_port = begin_port + i
         mirrord = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-        mirrord.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+
+        if RUBY_PLATFORM.include?( 'linux' ) then
+          mirrord.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+        end
+        
         mirrord.bind( Socket.sockaddr_in( mirrord_port, '0.0.0.0' ) )
         puts "#{ Time.new } mirrord bind on #{ mirrord_port }"
         add_read( mirrord, :mirrord )
