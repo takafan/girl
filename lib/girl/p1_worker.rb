@@ -258,7 +258,11 @@ module Girl
     def new_a_infod( infod_port )
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      end
+
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
