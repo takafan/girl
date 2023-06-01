@@ -18,7 +18,7 @@ module Girl
       raise "missing config file #{ config_path }" unless File.exist?( config_path )
 
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
-      mirrord_host = conf[ :proxyd_host ]
+      mirrord_host = conf[ :mirrord_host ] || conf[ :proxyd_host ]
       mirrord_port = conf[ :mirrord_port ]
       infod_port = conf[ :infod_port ]
       appd_host = conf[ :appd_host ]
