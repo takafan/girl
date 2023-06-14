@@ -10,7 +10,7 @@ module Girl
       @im = im
       @directs = directs
       @remotes = remotes
-      @local_addrinfos = Socket.ip_address_list
+      @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
 
       @updates_limit = 1021                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, redir ] = 1021
       @eliminate_size = @updates_limit - 255     # 淘汰数，保留255个最近的，其余淘汰
@@ -550,7 +550,7 @@ module Girl
       ip = ipaddr.to_s
       port = src_info[ :destination_port ]
 
-      if ( @local_addrinfos.any?{ | _addrinfo | _addrinfo.ip_address == ip } ) && ( port == @redir_port ) then
+      if @local_ips.include?( ip ) && ( port == @redir_port ) then
         puts "#{ Time.new } ignore #{ ip }:#{ port }"
         close_src( src )
         return
@@ -1030,6 +1030,23 @@ module Girl
     def resolve_domain( domain, src )
       return if src.nil? || src.closed?
 
+      unless domain =~ /^[0-9a-zA-Z\-\.]{1,63}$/ then
+        puts "#{ Time.new } ignore #{ domain }"
+        close_src( src )
+        return
+      end
+
+      if domain == 'localhost' then
+        domain = "127.0.0.1"
+      end
+      
+      if domain =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ then
+        # ipv4
+        ipaddr = IPAddr.new( domain )
+        new_a_tunnel( ipaddr, src )
+        return
+      end
+
       if @remotes.any?{ | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) } then
         # puts "debug hit remotes #{ domain }"
         new_a_remote( src )
@@ -1049,26 +1066,6 @@ module Girl
 
         # puts "debug expire resolv cache #{ domain }"
         @resolv_caches.delete( domain )
-      end
-
-      src_info = @src_infos[ src ]
-
-      if domain == 'localhost' then
-        ip = src_info[ :addrinfo ].ip_address
-        # puts "debug redirect #{ domain } #{ ip }"
-        ipaddr = IPAddr.new( ip )
-        new_a_tunnel( ipaddr, src )
-        return
-      end
-
-      begin
-        ipaddr = IPAddr.new( domain )
-
-        if ipaddr.ipv4? || ipaddr.ipv6? then
-          new_a_tunnel( ipaddr, src )
-          return
-        end
-      rescue Exception => e
       end
 
       begin
@@ -1101,6 +1098,7 @@ module Girl
 
       @dns_infos[ dns ] = dns_info
       add_read( dns, :dns )
+      src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :checking
 
       Thread.new do
