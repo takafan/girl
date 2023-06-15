@@ -16,7 +16,7 @@ module Girl
       @roles = {}         # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
       @tcp_infos = {}     # tcp => { :part, :wbuff, :im }
       @resolv_caches = {} # domain => [ ip, created_at ]
-      @dst_infos = {}     # dst => { :dst_id, :im, :domain, :rbuff, :tun, :wbuff, :src_id, :connected, :closing, :paused }
+      @dst_infos = {}     # dst => { :dst_id, :im, :domain, :ip, :rbuff, :tun, :wbuff, :src_id, :connected, :closing, :paused }
       @tun_infos = {}     # tun => { :im, :dst, :domain, :wbuff, :paused }
       @dns_infos = {}     # dns => { :dns_id, :im, :src_id, :domain, :port, :tcp }
       @ips = {}           # im => ip
@@ -113,7 +113,7 @@ module Girl
           tun_info = @tun_infos[ tun ]
 
           if tun_info then
-            puts "#{ Time.new } pause tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+            puts "#{ Time.new } pause tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ] }"
             @reads.delete( tun )
             tun_info[ :paused ] = true
           end
@@ -156,7 +156,7 @@ module Girl
           dst_info = @dst_infos[ dst ]
 
           if dst_info then
-            puts "#{ Time.new } pause dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+            puts "#{ Time.new } pause dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ] }"
             @reads.delete( dst )
             dst_info[ :paused ] = true
           end
@@ -267,7 +267,7 @@ module Girl
         dst_info = @dst_infos.values.find{ | info | info[ :src_id ] == src_id }
 
         if dst_info then
-          puts "#{ Time.new } dst info already exist, ignore a new source #{ src_id } #{ domain_port }"
+          puts "#{ Time.new } dst info already exist, ignore a new source #{ src_id } #{ domain_port.inspect }"
           return
         end
 
@@ -312,27 +312,26 @@ module Girl
       end
     end
 
-    def new_a_dst( ipaddr, domain, port, src_id, tcp )
+    def new_a_dst( domain, ip, port, src_id, tcp )
       return if tcp.nil? || tcp.closed?
       tcp_info = @tcp_infos[ tcp ]
       im = tcp_info[ :im ]
 
       begin
-        dst = Socket.new( ipaddr.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+        dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "#{ Time.new } new a dst #{ e.class } #{ im } #{ domain.inspect } #{ port }"
+        puts "#{ Time.new } new a dst #{ e.class } #{ im } #{ domain }:#{ port }"
         return
       end
 
       dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      ip = ipaddr.to_s
       destination_addr = Socket.sockaddr_in( port, ip )
 
       begin
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "#{ Time.new } connect destination #{ e.class } #{ im } #{ domain.inspect } #{ ip } #{ port }"
+        puts "#{ Time.new } connect destination #{ e.class } #{ im } #{ domain }:#{ port }"
         dst.close
         return
       end
@@ -342,7 +341,8 @@ module Girl
       dst_info = {
         dst_id: dst_id,   # dst_id
         im: im,           # 标识
-        domain: domain,   # 目的地
+        domain: domain,   # 目的地域名
+        ip: ip,           # 目的地ip
         rbuff: '',        # 对应的tun没准备好，暂存读到的流量
         tun: nil,         # 对应的tun
         wbuff: '',        # 从tun读到的流量
@@ -357,7 +357,7 @@ module Girl
       add_write( dst )
 
       data = [ Girl::Custom::PAIRED, src_id, dst_id ].join( Girl::Custom::SEP )
-      # puts "debug add paired #{ im.inspect } #{ src_id } #{ dst_id } #{ domain }:#{ port }"
+      # puts "debug add paired #{ im.inspect } #{ src_id } #{ dst_id } #{ ip }:#{ port }"
       add_tcp_wbuff( tcp, encode_a_msg( data ) )
 
       Thread.new do
@@ -443,13 +443,13 @@ module Girl
       ans = packet.answer.find{ | ans | ans.class == Net::DNS::RR::A }
 
       if ans then
+        ip = ans.value
         domain = dns_info[ :domain ]
-        ipaddr = IPAddr.new( ans.value )
-        @resolv_caches[ domain ] = [ ipaddr, Time.new ]
+        @resolv_caches[ domain ] = [ ip, Time.new ]
         port = dns_info[ :port ]
         src_id = dns_info[ :src_id ]
         tcp = dns_info[ :tcp ]
-        new_a_dst( ipaddr, domain, port, src_id, tcp )
+        new_a_dst( domain, ip, port, src_id, tcp )
       end
 
       close_dns( dns )
@@ -514,7 +514,7 @@ module Girl
         dst, dst_info = @dst_infos.find{ | _, _dst_info | ( _dst_info[ :dst_id ] == dst_id ) && !_dst_info[ :connected ] }
 
         if dst then
-          puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ].inspect }"
+          puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ] }"
           close_dst( dst )
         end
       when 'check-dns-closed' then
@@ -522,7 +522,7 @@ module Girl
         dns, dns_info = @dns_infos.find{ | _, _dns_info | ( _dns_info[ :dns_id ] == dns_id ) }
 
         if dns then
-          puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ].inspect }"
+          puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ] }"
           close_dns( dns )
         end
       when 'reset-traffic' then
@@ -706,45 +706,49 @@ module Girl
 
       domain = domain_port[ 0...colon_idx ]
       port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
+
+      if ( domain !~ /^[0-9a-zA-Z\-\.]{1,63}$/ ) || ( domain =~ /^(0\.\d{1,3}\.\d{1,3}\.\d{1,3})|(10\.\d{1,3}\.\d{1,3}\.\d{1,3})|(127\.\d{1,3}\.\d{1,3}\.\d{1,3})|(169\.254\.\d{1,3}\.\d{1,3})|(172\.((1[6-9])|(2\d)|(3[01]))\.\d{1,3}\.\d{1,3})|(192\.168\.\d{1,3}\.\d{1,3})|(255\.255\.255\.255)|(localhost)$/ ) then
+        # 忽略非法域名，内网地址
+        puts "#{ Time.new } ignore #{ domain }"
+        close_src( src )
+        return
+      end
+
+      if domain =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ then
+        # ipv4
+        new_a_dst( domain, domain, port, src_id, tcp )
+        return
+      end
+
       resolv_cache = @resolv_caches[ domain ]
 
       if resolv_cache then
-        ipaddr, created_at = resolv_cache
+        ip, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug #{ domain.inspect } hit resolv cache #{ ipaddr.to_s }"
-          new_a_dst( ipaddr, domain, port, src_id, tcp )
+          # puts "debug #{ domain } hit resolv cache #{ ip }"
+          new_a_dst( domain, ip, port, src_id, tcp )
           return
         end
 
-        # puts "debug expire #{ domain.inspect } resolv cache"
+        # puts "debug expire #{ domain } resolv cache"
         @resolv_caches.delete( domain )
-      end
-
-      begin
-        ipaddr = IPAddr.new( domain )
-
-        if ipaddr.ipv4? || ipaddr.ipv6? then
-          new_a_dst( ipaddr, domain, port, src_id, tcp )
-          return
-        end
-      rescue Exception => e
       end
 
       begin
         packet = Net::DNS::Packet.new( domain )
       rescue Exception => e
-        puts "#{ Time.new } new packet #{ e.class } #{ domain.inspect }"
+        puts "#{ Time.new } new packet #{ e.class } #{ domain }"
         return
       end
 
       dns = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       begin
-        # puts "debug dns query #{ domain.inspect }"
+        # puts "debug dns query #{ domain }"
         dns.sendmsg_nonblock( packet.data, 0, @nameserver_addr )
       rescue Exception => e
-        puts "#{ Time.new } dns send packet #{ e.class } #{ domain.inspect }"
+        puts "#{ Time.new } dns send packet #{ e.class } #{ domain }"
         dns.close
         return
       end
@@ -864,7 +868,7 @@ module Girl
         tun_info = @tun_infos[ tun ]
 
         if tun_info[ :paused ] && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ].inspect }"
+          puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ] }"
           add_read( tun )
           tun_info[ :paused ] = false
         end
@@ -940,7 +944,7 @@ module Girl
         dst_info = @dst_infos[ dst ]
 
         if dst_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ].inspect }"
+          puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ] }"
           add_read( dst )
           dst_info[ :paused ] = false
         end

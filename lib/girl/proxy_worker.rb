@@ -107,7 +107,7 @@ module Girl
 
         if src && !src.closed? then
           src_info = @src_infos[ src ]
-          puts "#{ Time.new } pause direct src #{ src_info[ :destination_domain ].inspect }"
+          puts "#{ Time.new } pause direct src #{ src_info[ :destination_domain ] }"
           @reads.delete( src )
           src_info[ :paused ] = true
         end
@@ -165,7 +165,7 @@ module Girl
           dst_info = @dst_infos[ dst ]
 
           if dst_info then
-            puts "#{ Time.new } pause dst #{ dst_info[ :domain ].inspect }"
+            puts "#{ Time.new } pause dst #{ dst_info[ :domain ] }"
             @reads.delete( dst )
             dst_info[ :paused ] = true
           end
@@ -176,7 +176,7 @@ module Girl
             tun_info = @tun_infos[ tun ]
 
             if tun_info then
-              puts "#{ Time.new } pause tun #{ tun_info[ :domain ].inspect }"
+              puts "#{ Time.new } pause tun #{ tun_info[ :domain ] }"
               @reads.delete( tun )
               tun_info[ :paused ] = true
             end
@@ -203,7 +203,7 @@ module Girl
 
         if src && !src.closed? then
           src_info = @src_infos[ src ]
-          puts "#{ Time.new } pause remote src #{ src_info[ :destination_domain ].inspect }"
+          puts "#{ Time.new } pause remote src #{ src_info[ :destination_domain ] }"
           @reads.delete( src )
           src_info[ :paused ] = true
         end
@@ -325,18 +325,17 @@ module Girl
       end
     end
 
-    def new_a_dst( ipaddr, src )
+    def new_a_dst( ip, src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
       domain = src_info[ :destination_domain ]
       port = src_info[ :destination_port ]
-      ip = ipaddr.to_s
       destination_addr = Socket.sockaddr_in( port, ip )
 
       begin
-        dst = Socket.new( ipaddr.ipv4? ? Socket::AF_INET : Socket::AF_INET6, Socket::SOCK_STREAM, 0 )
+        dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "#{ Time.new } new a dst #{ e.class } #{ domain.inspect } #{ ip } #{ port }"
+        puts "#{ Time.new } new a dst #{ e.class } #{ domain } #{ ip }:#{ port }"
         close_src( src )
         return
       end
@@ -347,7 +346,7 @@ module Girl
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "#{ Time.new } dst connect destination #{ e.class } #{ domain.inspect } #{ ip } #{ port }"
+        puts "#{ Time.new } dst connect destination #{ e.class } #{ domain } #{ ip }:#{ port }"
         dst.close
         close_src( src )
         return
@@ -359,7 +358,8 @@ module Girl
       dst_info = {
         dst_id: dst_id,   # dst id
         src: src,         # 对应src
-        domain: domain,   # 目的地
+        domain: domain,   # 目的地域名
+        ip: ip,           # 目的地ip
         wbuff: '',        # 写前
         connected: false, # 是否已连接
         closing: false,   # 准备关闭写
@@ -544,10 +544,9 @@ module Girl
       end
     end
 
-    def new_a_tunnel( ipaddr, src )
+    def new_a_tunnel( ip, src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
-      ip = ipaddr.to_s
       port = src_info[ :destination_port ]
 
       if @local_ips.include?( ip ) && ( port == @redir_port ) then
@@ -559,7 +558,7 @@ module Girl
       if ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( port ) then
         # 访问远端非80/443端口，直连
         puts "#{ Time.new } direct #{ ip } #{ port }"
-        new_a_dst( ipaddr, src )
+        new_a_dst( ip, src )
         return
       end
 
@@ -573,7 +572,7 @@ module Girl
 
       if is_direct then
         # puts "debug hit directs #{ ip }"
-        new_a_dst( ipaddr, src )
+        new_a_dst( ip, src )
       else
         # puts "debug go remote #{ ip }"
         new_a_remote( src )
@@ -611,11 +610,11 @@ module Girl
       ans = packet.answer.find{ | ans | ans.class == Net::DNS::RR::A }
 
       if ans then
-        ipaddr = IPAddr.new( ans.value )
-        @resolv_caches[ domain ] = [ ipaddr, Time.new ]
-        new_a_tunnel( ipaddr, src )
+        ip = ans.value
+        @resolv_caches[ domain ] = [ ip, Time.new ]
+        new_a_tunnel( ip, src )
       else
-        puts "#{ Time.new } dns query no answer #{ domain.inspect }"
+        puts "#{ Time.new } dns query no answer #{ domain }"
         close_src( src )
       end
 
@@ -682,7 +681,7 @@ module Girl
         dst, dst_info = @dst_infos.find{ | _, _dst_info | ( _dst_info[ :dst_id ] == dst_id ) && !_dst_info[ :connected ] }
 
         if dst then
-          puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ].inspect }"
+          puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ] }"
           close_dst( dst )
         end
       when 'check-tun-pong' then
@@ -690,7 +689,7 @@ module Girl
         tun, tun_info = @tun_infos.find{ | _, _tun_info | ( _tun_info[ :tun_id ] == tun_id ) && !_tun_info[ :pong ] }
 
         if tun then
-          puts "#{ Time.new } tun ping timeout #{ tun_info[ :tun_id ] } #{ tun_info[ :domain ].inspect }"
+          puts "#{ Time.new } tun ping timeout #{ tun_info[ :tun_id ] } #{ tun_info[ :domain ] }"
           close_tun( tun )
         end
       when 'check-dns-closed' then
@@ -698,7 +697,7 @@ module Girl
         dns, dns_info = @dns_infos.find{ | _, _dns_info | ( _dns_info[ :dns_id ] == dns_id ) }
 
         if dns then
-          puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ].inspect }"
+          puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ] }"
           close_dns( dns )
         end
       when 'memory-info' then
@@ -904,8 +903,7 @@ module Girl
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
             # puts "debug IP V4 address #{ destination_ip } #{ destination_port }"
-            ipaddr = IPAddr.new( destination_ip )
-            new_a_tunnel( ipaddr, src )
+            new_a_tunnel( destination_ip, src )
           elsif atyp == 3 then
             domain_len = data[ 4 ].unpack( 'C' ).first
 
@@ -1031,6 +1029,7 @@ module Girl
       return if src.nil? || src.closed?
 
       unless domain =~ /^[0-9a-zA-Z\-\.]{1,63}$/ then
+        # 忽略非法域名
         puts "#{ Time.new } ignore #{ domain }"
         close_src( src )
         return
@@ -1042,8 +1041,7 @@ module Girl
       
       if domain =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ then
         # ipv4
-        ipaddr = IPAddr.new( domain )
-        new_a_tunnel( ipaddr, src )
+        new_a_tunnel( domain, src )
         return
       end
 
@@ -1056,11 +1054,11 @@ module Girl
       resolv_cache = @resolv_caches[ domain ]
 
       if resolv_cache then
-        ipaddr, created_at = resolv_cache
+        ip, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug hit resolv cache #{ domain } #{ ipaddr.to_s }"
-          new_a_tunnel( ipaddr, src )
+          # puts "debug hit resolv cache #{ domain } #{ ip }"
+          new_a_tunnel( ip, src )
           return
         end
 
@@ -1071,7 +1069,7 @@ module Girl
       begin
         packet = Net::DNS::Packet.new( domain )
       rescue Exception => e
-        puts "#{ Time.new } new packet #{ e.class } #{ domain.inspect }"
+        puts "#{ Time.new } new packet #{ e.class } #{ domain }"
         close_src( src )
         return
       end
@@ -1229,7 +1227,7 @@ module Girl
         src_info = @src_infos[ src ]
 
         if src_info[ :paused ] && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ].inspect }"
+          puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
           add_read( src )
           src_info[ :paused ] = false
         end
@@ -1280,7 +1278,7 @@ module Girl
         dst_info = @dst_infos[ dst ]
 
         if dst_info[ :paused ] && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume dst #{ dst_info[ :domain ].inspect }"
+          puts "#{ Time.new } resume dst #{ dst_info[ :domain ] }"
           add_read( dst )
           dst_info[ :paused ] = false
         end
@@ -1288,7 +1286,7 @@ module Girl
         tun_info = @tun_infos[ tun ]
 
         if tun_info[ :paused ] && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume tun #{ tun_info[ :domain ].inspect }"
+          puts "#{ Time.new } resume tun #{ tun_info[ :domain ] }"
           add_read( tun )
           tun_info[ :paused ] = false
         end
@@ -1358,7 +1356,7 @@ module Girl
         src_info = @src_infos[ src ]
 
         if src_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ].inspect }"
+          puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ] }"
           add_read( src )
           src_info[ :paused ] = false
         end
