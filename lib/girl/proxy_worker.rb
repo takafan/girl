@@ -2,11 +2,11 @@ module Girl
   class ProxyWorker
     include Custom
 
-    def initialize( redir_port, proxyd_host, proxyd_port, girl_port, nameserver, im, directs, remotes )
+    def initialize( redir_port, proxyd_host, proxyd_port, girl_port, nameservers, im, directs, remotes )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
-      @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
+      @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @im = im
       @directs = directs
       @remotes = remotes
@@ -1078,7 +1078,7 @@ module Girl
 
       begin
         # puts "debug dns query #{ domain }"
-        dns.sendmsg_nonblock( packet.data, 0, @nameserver_addr )
+        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( packet.data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } dns send packet #{ e.class }"
         dns.close

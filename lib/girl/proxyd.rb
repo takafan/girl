@@ -41,18 +41,30 @@ module Girl
       end
 
       text = IO.read( '/etc/resolv.conf' )
-      match_data = /^nameserver .*\n/.match( text )
-      nameserver = match_data ? match_data.to_a.first.split(' ')[ 1 ].strip : '8.8.8.8'
+      nameservers = []
+
+      text.split( "\n" ).each do | line |
+        match_data = /^nameserver \d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}/.match( line )
+
+        if match_data then
+          nameservers << match_data[ 0 ].split(' ')[ 1 ].strip
+          break if nameservers.size >= 3
+        end
+      end
+
+      if nameservers.empty? then
+        nameservers << '8.8.8.8'
+      end
 
       unless ims then
         ims = []
       end
 
       puts "girl proxyd #{ Girl::VERSION }"
-      puts "proxyd #{ proxyd_port } #{ girl_port } nameserver #{ nameserver }"
+      puts "proxyd #{ proxyd_port } #{ girl_port } nameservers #{ nameservers.inspect }"
       puts "ims #{ ims.inspect }"
 
-      worker = Girl::ProxydWorker.new( proxyd_port, girl_port, nameserver, ims )
+      worker = Girl::ProxydWorker.new( proxyd_port, girl_port, nameservers, ims )
 
       Signal.trap( :TERM ) do
         puts 'exit'

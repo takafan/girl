@@ -2,8 +2,8 @@ module Girl
   class ProxydWorker
     include Custom
 
-    def initialize( proxyd_port, girl_port, nameserver, ims )
-      @nameserver_addr = Socket.sockaddr_in( 53, nameserver )
+    def initialize( proxyd_port, girl_port, nameservers, ims )
+      @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @ims = ims
 
       @updates_limit = 1019                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girl, infod, tcpd, tund ] = 1019
@@ -746,7 +746,7 @@ module Girl
 
       begin
         # puts "debug dns query #{ domain }"
-        dns.sendmsg_nonblock( packet.data, 0, @nameserver_addr )
+        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( packet.data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } dns send packet #{ e.class } #{ domain }"
         dns.close

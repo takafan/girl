@@ -60,6 +60,8 @@ module Girl
         nameserver = '114.114.114.114'
       end
 
+      nameservers = nameserver.split( ' ' )
+
       unless im then
         im = 'office-pc'
       end
@@ -79,11 +81,11 @@ module Girl
       end
 
       puts "girl proxy #{ Girl::VERSION }"
-      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } nameserver #{ nameserver } im #{ im }"
+      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } nameservers #{ nameservers.inspect } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
-      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, girl_port, nameserver, im, directs, remotes )
+      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, girl_port, nameservers, im, directs, remotes )
 
       Signal.trap( :TERM ) do
         puts 'exit'
