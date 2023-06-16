@@ -1,6 +1,7 @@
 module Girl
   class ProxyWorker
     include Custom
+    include Dns
 
     def initialize( redir_port, proxyd_host, proxyd_port, girl_port, nameservers, im, directs, remotes )
       @proxyd_host = proxyd_host
@@ -330,9 +331,9 @@ module Girl
       src_info = @src_infos[ src ]
       domain = src_info[ :destination_domain ]
       port = src_info[ :destination_port ]
-      destination_addr = Socket.sockaddr_in( port, ip )
-
+      
       begin
+        destination_addr = Socket.sockaddr_in( port, ip )
         dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
         puts "#{ Time.new } new a dst #{ e.class } #{ domain } #{ ip }:#{ port }"
@@ -597,24 +598,21 @@ module Girl
 
       # puts "debug recv dns #{ data.inspect }"
       begin
-        packet = Net::DNS::Packet::parse( data )
+        ip = seek_ip( data )
       rescue Exception => e
-        puts "#{ Time.new } parse packet #{ e.class }"
+        puts "#{ Time.new } seek ip #{ e.class } #{ e.message }"
         close_dns( dns )
         return
       end
 
-      dns_info = @dns_infos[ dns ]
-      src = dns_info[ :src ]
-      domain = dns_info[ :domain ]
-      ans = packet.answer.find{ | ans | ans.class == Net::DNS::RR::A }
-
-      if ans then
-        ip = ans.value
-        @resolv_caches[ domain ] = [ ip, Time.new ]
+      if ip then
+        dns_info = @dns_infos[ dns ]
+        src = dns_info[ :src ]
+        domain = dns_info[ :domain ]
         new_a_tunnel( ip, src )
+        @resolv_caches[ domain ] = [ ip, Time.new ]
       else
-        puts "#{ Time.new } dns query no answer #{ domain }"
+        puts "#{ Time.new } no ip in answer #{ domain }"
         close_src( src )
       end
 
@@ -889,9 +887,9 @@ module Girl
 
           if atyp == 1 then
             destination_host, destination_port = data[ 4, 6 ].unpack( 'Nn' )
-            destination_addr = Socket.sockaddr_in( destination_port, destination_host )
-
+            
             begin
+              destination_addr = Socket.sockaddr_in( destination_port, destination_host )
               destination_addrinfo = Addrinfo.new( destination_addr )
             rescue Exception => e
               puts "#{ Time.new } new addrinfo #{ e.class }"
@@ -1039,7 +1037,7 @@ module Girl
         domain = "127.0.0.1"
       end
       
-      if domain =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ then
+      if domain =~ /^\d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}$/ then
         # ipv4
         new_a_tunnel( domain, src )
         return
@@ -1067,9 +1065,9 @@ module Girl
       end
 
       begin
-        packet = Net::DNS::Packet.new( domain )
+        data = pack_a_query( domain )
       rescue Exception => e
-        puts "#{ Time.new } new packet #{ e.class } #{ domain }"
+        puts "#{ Time.new } pack a query #{ e.class } #{ e.message } #{ domain }"
         close_src( src )
         return
       end
@@ -1078,9 +1076,9 @@ module Girl
 
       begin
         # puts "debug dns query #{ domain }"
-        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( packet.data, 0, addr ) }
+        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( data, 0, addr ) }
       rescue Exception => e
-        puts "#{ Time.new } dns send packet #{ e.class }"
+        puts "#{ Time.new } dns send data #{ e.class }"
         dns.close
         close_src( src )
         return

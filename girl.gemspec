@@ -18,6 +18,7 @@ Gem::Specification.new do |spec|
 girl.gemspec
 lib/girl.rb
 lib/girl/custom.rb
+lib/girl/dns.rb
 lib/girl/head.rb
 lib/girl/mirrord_worker.rb
 lib/girl/mirrord.rb
@@ -33,5 +34,4 @@ lib/girl/version.rb
   ]
 
   spec.require_paths = ['lib']
-  spec.add_dependency 'net-dns', '~> 0.9.0'
 end

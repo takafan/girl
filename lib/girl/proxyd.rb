@@ -1,21 +1,10 @@
 require 'girl/custom'
+require 'girl/dns'
 require 'girl/head'
 require 'girl/proxyd_worker'
 require 'girl/version'
 require 'json'
-require 'net/dns'
 require 'socket'
-
-unless Net::DNS::RR.const_defined?(:DNAME) then
-  module Net
-    module DNS
-      class RR
-        class DNAME < RR
-        end
-      end
-    end
-  end
-end
 
 ##
 # Girl::Proxyd - 远端

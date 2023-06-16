@@ -1,6 +1,7 @@
 module Girl
   class ProxydWorker
     include Custom
+    include Dns
 
     def initialize( proxyd_port, girl_port, nameservers, ims )
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
@@ -325,9 +326,9 @@ module Girl
       end
 
       dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      destination_addr = Socket.sockaddr_in( port, ip )
-
+      
       begin
+        destination_addr = Socket.sockaddr_in( port, ip )
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
@@ -433,23 +434,20 @@ module Girl
       dns_info = @dns_infos[ dns ]
 
       begin
-        packet = Net::DNS::Packet::parse( data )
+        ip = seek_ip( data )
       rescue Exception => e
-        puts "#{ Time.new } parse packet #{ e.class }"
+        puts "#{ Time.new } seek ip #{ e.class } #{ e.message }"
         close_dns( dns )
         return
       end
 
-      ans = packet.answer.find{ | ans | ans.class == Net::DNS::RR::A }
-
-      if ans then
-        ip = ans.value
+      if ip then
         domain = dns_info[ :domain ]
-        @resolv_caches[ domain ] = [ ip, Time.new ]
         port = dns_info[ :port ]
         src_id = dns_info[ :src_id ]
         tcp = dns_info[ :tcp ]
         new_a_dst( domain, ip, port, src_id, tcp )
+        @resolv_caches[ domain ] = [ ip, Time.new ]
       end
 
       close_dns( dns )
@@ -713,7 +711,7 @@ module Girl
         return
       end
 
-      if domain =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ then
+      if domain =~ /^\d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}$/ then
         # ipv4
         new_a_dst( domain, domain, port, src_id, tcp )
         return
@@ -735,9 +733,9 @@ module Girl
       end
 
       begin
-        packet = Net::DNS::Packet.new( domain )
+        data = pack_a_query( domain )
       rescue Exception => e
-        puts "#{ Time.new } new packet #{ e.class } #{ domain }"
+        puts "#{ Time.new } pack a query #{ e.class } #{ e.message } #{ domain }"
         return
       end
 
@@ -745,9 +743,9 @@ module Girl
 
       begin
         # puts "debug dns query #{ domain }"
-        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( packet.data, 0, addr ) }
+        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( data, 0, addr ) }
       rescue Exception => e
-        puts "#{ Time.new } dns send packet #{ e.class } #{ domain }"
+        puts "#{ Time.new } dns send data #{ e.class } #{ domain }"
         dns.close
         return
       end
