@@ -14,10 +14,10 @@
 2. tcp流量无法到达特定ip。
 3. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
 4. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。例如：`CONNECT google.com HTTP/1.1\r\n\r\n`
-5. tcp阻断，触发后，来源ip每和vps建立tcp连接，不论端口，来回两次流量即被封来源端口，后续流量无法到达，但ping的通，udp可达，企业宽带极易触发。
-6. 用shadowsocks稍微频繁一点，国内任何来源的tcp及icmp均无法到达vps，但udp可达，持续几天至几个月不等。
+5. 限流，触发后，来源ip每和vps建立tcp连接，不论端口，来回两次流量即被封来源端口，后续流量无法到达，但ping的通，udp可达，企业宽带极易触发。
+6. 封ip，用shadowsocks稍微频繁一点，国内任何来源的tcp及icmp均无法到达vps，但udp可达，持续几天至几个月不等。
 
-* 应对1和2，须依靠中转：
+* 应对1和2，靠中转：
 
 ```
 流量 -> 代理 -> 本机/路由器 ------> vps -> 目的地
@@ -120,6 +120,7 @@ ruby proxy.run.rb
   "girl_port": 8080,                            // 妹子端口，防重放
   "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
   "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
+  "nameserver": "192.168.1.1  114.114.114.114", // dns服务器，多个用空格分隔
   "im": "taka-pc"                               // 设备标识
 }
 ```
@@ -129,7 +130,6 @@ ruby proxy.run.rb
 ```bash
 curl -O http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
 cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > girl.direct.txt
-cat delegated-apnic-latest | grep ipv6 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, $5) }' >> girl.direct.txt
 ```
 
 7. girl.remote.txt的格式：
