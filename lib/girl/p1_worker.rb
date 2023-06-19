@@ -209,7 +209,7 @@ module Girl
     def loop_check_expire
       Thread.new do
         loop do
-          sleep CHECK_EXPIRE_INTERVAL
+          sleep CHECK_APP_EXPIRE_INTERVAL
 
           msg = {
             message_type: 'check-expire'
@@ -381,7 +381,7 @@ module Girl
           last_recv_at = app_info[ :last_recv_at ] || app_info[ :created_at ]
           last_sent_at = app_info[ :last_sent_at ] || app_info[ :created_at ]
 
-          if ( now - last_recv_at >= EXPIRE_AFTER ) && ( now - last_sent_at >= EXPIRE_AFTER ) then
+          if ( now - last_recv_at >= EXPIRE_APP_AFTER ) && ( now - last_sent_at >= EXPIRE_APP_AFTER ) then
             puts "#{ Time.new } expire app"
             close_app( app )
           end

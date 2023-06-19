@@ -32,6 +32,7 @@ module Girl
 
     def looping
       puts "#{ Time.new } looping"
+      loop_check_expire
       loop_check_traff
 
       loop do
@@ -296,6 +297,20 @@ module Girl
       end
     end
 
+    def loop_check_expire
+      Thread.new do
+        loop do
+          sleep CHECK_EXPIRE_INTERVAL
+
+          msg = {
+            message_type: 'check-expire'
+          }
+
+          send_msg_to_infod( msg )
+        end
+      end
+    end
+
     def loop_check_traff
       if @reset_traff_day > 0 then
         Thread.new do
@@ -526,6 +541,32 @@ module Girl
         if dns then
           puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ] }"
           close_dns( dns )
+        end
+      when 'check-expire' then
+        now = Time.new
+        socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_AFTER }.keys
+
+        if socks.any? then
+          dns_count = dst_count = tcp_count = tun_count = 0
+
+          socks.each do | sock, _ |
+            case @roles[ sock ]
+            when :dns
+              close_dns( sock )
+              dns_count += 1
+            when :dst
+              close_dst( sock )
+              dst_count += 1
+            when :tcp
+              close_tcp( sock )
+              tcp_count += 1
+            when :tun
+              close_tun( sock )
+              tun_count += 1
+            end
+          end
+
+          puts "#{ now } expire dns #{ dns_count } dst #{ dst_count } tcp #{ tcp_count } tun #{ tun_count }"
         end
       when 'check-tcp-im' then
         tcp_id = msg[ :tcp_id ]

@@ -28,6 +28,7 @@ module Girl
 
     def looping
       puts "#{ Time.new } looping"
+      loop_check_expire
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -197,14 +198,16 @@ module Girl
       return if relay_tcp.nil? || relay_tcp.closed?
       # puts "debug close relay tcp"
       close_sock( relay_tcp )
-      @relay_tcp_infos.delete( relay_tcp )
+      relay_tcp_info = @relay_tcp_infos.delete( relay_tcp )
+      close_tcp( relay_tcp_info[ :tcp ] ) if relay_tcp_info
     end
 
     def close_relay_tun( relay_tun )
       return if relay_tun.nil? || relay_tun.closed?
       # puts "debug close relay tun"
       close_sock( relay_tun )
-      @relay_tun_infos.delete( relay_tun )
+      relay_tun_info = @relay_tun_infos.delete( relay_tun )
+      close_tun( relay_tun_info[ :tun ] ) if relay_tun_info
     end
 
     def close_sock( sock )
@@ -228,6 +231,20 @@ module Girl
       # puts "debug close tun"
       close_sock( tun )
       @tun_infos.delete( tun )
+    end
+
+    def loop_check_expire
+      Thread.new do
+        loop do
+          sleep CHECK_EXPIRE_INTERVAL
+
+          msg = {
+            message_type: 'check-expire'
+          }
+
+          send_msg_to_infod( msg )
+        end
+      end
     end
 
     def new_a_girlc
@@ -307,6 +324,32 @@ module Girl
       message_type = msg[ :message_type ]
 
       case message_type
+      when 'check-expire' then
+        now = Time.new
+        socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_AFTER }.keys
+
+        if socks.any? then
+          relay_tcp_count = relay_tun_count = tcp_count = tun_count = 0
+
+          socks.each do | sock, _ |
+            case @roles[ sock ]
+            when :relay_tcp
+              close_relay_tcp( sock )
+              relay_tcp_count += 1
+            when :relay_tun
+              close_relay_tun( sock )
+              relay_tun_count += 1
+            when :tcp
+              close_tcp( sock )
+              tcp_count += 1
+            when :tun
+              close_tun( sock )
+              tun_count += 1
+            end
+          end
+
+          puts "#{ now } expire relay tcp #{ relay_tcp_count } relay tun #{ relay_tun_count } tcp #{ tcp_count } tun #{ tun_count }"
+        end
       when 'memory-info' then
         msg2 = {
           sizes: {
