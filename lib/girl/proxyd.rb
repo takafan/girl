@@ -19,6 +19,7 @@ module Girl
         proxyd_port = conf[ :proxyd_port ]
         girl_port = conf[ :girl_port ]
         ims = conf[ :ims ]
+        reset_traff_day = conf[ :reset_traff_day ]
       end
 
       unless proxyd_port then
@@ -45,15 +46,21 @@ module Girl
         nameservers << '8.8.8.8'
       end
 
+      if reset_traff_day then
+        reset_traff_day = reset_traff_day.to_i
+      else
+        reset_traff_day = 1
+      end
+
       unless ims then
         ims = []
       end
 
       puts "girl proxyd #{ Girl::VERSION }"
-      puts "proxyd #{ proxyd_port } #{ girl_port } nameservers #{ nameservers.inspect }"
+      puts "proxyd #{ proxyd_port } #{ girl_port } nameservers #{ nameservers.inspect } reset traff day #{ reset_traff_day }"
       puts "ims #{ ims.inspect }"
 
-      worker = Girl::ProxydWorker.new( proxyd_port, girl_port, nameservers, ims )
+      worker = Girl::ProxydWorker.new( proxyd_port, girl_port, nameservers, reset_traff_day, ims )
 
       Signal.trap( :TERM ) do
         puts 'exit'

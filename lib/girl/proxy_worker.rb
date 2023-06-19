@@ -597,6 +597,7 @@ module Girl
       return if data.empty?
 
       # puts "debug recv dns #{ data.inspect }"
+
       begin
         ip = seek_ip( data )
       rescue Exception => e
@@ -605,10 +606,11 @@ module Girl
         return
       end
 
+      dns_info = @dns_infos[ dns ]
+      domain = dns_info[ :domain ]
+
       if ip then
-        dns_info = @dns_infos[ dns ]
         src = dns_info[ :src ]
-        domain = dns_info[ :domain ]
         new_a_tunnel( ip, src )
         @resolv_caches[ domain ] = [ ip, Time.new ]
       else
@@ -657,7 +659,7 @@ module Girl
       case message_type
       when 'check-src-paired' then
         src_id = msg[ :src_id ]
-        src, src_info = @src_infos.find{ | _, _src_info | ( _src_info[ :src_id ] == src_id ) && _src_info[ :dst_id ].nil? }
+        src, src_info = @src_infos.find{ | _, _info | ( _info[ :src_id ] == src_id ) && _info[ :dst_id ].nil? }
 
         if src then
           puts "#{ Time.new } src pair timeout #{ src_id } #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }"
@@ -676,7 +678,7 @@ module Girl
         end
       when 'check-dst-connected' then
         dst_id = msg[ :dst_id ]
-        dst, dst_info = @dst_infos.find{ | _, _dst_info | ( _dst_info[ :dst_id ] == dst_id ) && !_dst_info[ :connected ] }
+        dst, dst_info = @dst_infos.find{ | _, _info | ( _info[ :dst_id ] == dst_id ) && !_info[ :connected ] }
 
         if dst then
           puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ] }"
@@ -684,7 +686,7 @@ module Girl
         end
       when 'check-tun-pong' then
         tun_id = msg[ :tun_id ]
-        tun, tun_info = @tun_infos.find{ | _, _tun_info | ( _tun_info[ :tun_id ] == tun_id ) && !_tun_info[ :pong ] }
+        tun, tun_info = @tun_infos.find{ | _, _info | ( _info[ :tun_id ] == tun_id ) && !_info[ :pong ] }
 
         if tun then
           puts "#{ Time.new } tun ping timeout #{ tun_info[ :tun_id ] } #{ tun_info[ :domain ] }"
@@ -692,7 +694,7 @@ module Girl
         end
       when 'check-dns-closed' then
         dns_id = msg[ :dns_id ]
-        dns, dns_info = @dns_infos.find{ | _, _dns_info | ( _dns_info[ :dns_id ] == dns_id ) }
+        dns, dns_info = @dns_infos.find{ | _, _info | _info[ :dns_id ] == dns_id }
 
         if dns then
           puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ] }"

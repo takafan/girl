@@ -29,7 +29,7 @@ module Girl
       loop do
         raise "offset is greater than datalen" if datalen < ( offset + 1 )
   
-        len = data.unpack( "@#{offset} C" ).first
+        len = data.unpack( "@#{ offset } C" ).first
   
         if len == 0
           offset += 1
@@ -37,7 +37,7 @@ module Girl
         elsif ( len & 0xC0 ) == 0xC0
           raise "data ended before offset expand" if datalen < ( offset + 2 )
   
-          ptr = data.unpack( "@#{offset} n" ).first
+          ptr = data.unpack( "@#{ offset } n" ).first
           ptr &= 0x3FFF
           name2 = seek_dn( data, ptr ).first
           raise "data is malformed" if name2.nil?

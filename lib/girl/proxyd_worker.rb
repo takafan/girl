@@ -3,8 +3,9 @@ module Girl
     include Custom
     include Dns
 
-    def initialize( proxyd_port, girl_port, nameservers, ims )
+    def initialize( proxyd_port, girl_port, nameservers, reset_traff_day, ims )
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
+      @reset_traff_day = reset_traff_day
       @ims = ims
 
       @updates_limit = 1019                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girl, infod, tcpd, tund ] = 1019
@@ -296,12 +297,12 @@ module Girl
     end
 
     def loop_check_traff
-      if RESET_TRAFF_DAY > 0 then
+      if @reset_traff_day > 0 then
         Thread.new do
           loop do
             sleep CHECK_TRAFF_INTERVAL
 
-            if Time.new.day == RESET_TRAFF_DAY then
+            if Time.new.day == @reset_traff_day then
               msg = {
                 message_type: 'reset-traffic'
               }
@@ -431,8 +432,7 @@ module Girl
       return if data.empty?
 
       # puts "debug recv dns #{ data.inspect }"
-      dns_info = @dns_infos[ dns ]
-
+      
       begin
         ip = seek_ip( data )
       rescue Exception => e
@@ -441,13 +441,17 @@ module Girl
         return
       end
 
+      dns_info = @dns_infos[ dns ]
+      domain = dns_info[ :domain ]
+
       if ip then
-        domain = dns_info[ :domain ]
         port = dns_info[ :port ]
         src_id = dns_info[ :src_id ]
         tcp = dns_info[ :tcp ]
         new_a_dst( domain, ip, port, src_id, tcp )
         @resolv_caches[ domain ] = [ ip, Time.new ]
+      else
+        puts "#{ Time.new } no ip in answer #{ domain }"
       end
 
       close_dns( dns )
@@ -509,7 +513,7 @@ module Girl
       case message_type
       when 'check-dst-connected' then
         dst_id = msg[ :dst_id ]
-        dst, dst_info = @dst_infos.find{ | _, _dst_info | ( _dst_info[ :dst_id ] == dst_id ) && !_dst_info[ :connected ] }
+        dst, dst_info = @dst_infos.find{ | _, _info | ( _info[ :dst_id ] == dst_id ) && !_info[ :connected ] }
 
         if dst then
           puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ] }"
@@ -517,23 +521,39 @@ module Girl
         end
       when 'check-dns-closed' then
         dns_id = msg[ :dns_id ]
-        dns, dns_info = @dns_infos.find{ | _, _dns_info | ( _dns_info[ :dns_id ] == dns_id ) }
+        dns, dns_info = @dns_infos.find{ | _, _info | _info[ :dns_id ] == dns_id }
 
         if dns then
           puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ] }"
           close_dns( dns )
         end
+      when 'check-tcp-im' then
+        tcp_id = msg[ :tcp_id ]
+        tcp, tcp_info = @tcp_infos.find{ | _, _info | ( _info[ :tcp_id ] == tcp_id ) && _info[ :im ].nil? }
+
+        if tcp then
+          puts "#{ Time.new } tcp expired #{ tcp_info[ :tcp_id ] }"
+          close_tcp( tcp )
+        end
+      when 'check-tun-im' then
+        tun_id = msg[ :tun_id ]
+        tun, tun_info = @tun_infos.find{ | _, _info | ( _info[ :tun_id ] == tun_id ) && _info[ :im ].nil? }
+
+        if tun then
+          puts "#{ Time.new } tun expired #{ tun_info[ :tun_id ] }"
+          close_tun( tun )
+        end
       when 'reset-traffic' then
         puts "#{ Time.new } reset traffic"
-        @im_infos.each{ | _, im_info | im_info[ :in ] = im_info[ :out ] = 0 }
+        @im_infos.each{ | _, _info | _info[ :in ] = _info[ :out ] = 0 }
       when 'memory-info' then
-        im_info_arr = []
+        arr = []
 
-        @im_infos.sort.map do | im, im_info |
-          im_info_arr << {
+        @im_infos.sort.map do | im, _info |
+          arr << {
             im: im,
-            in: im_info[ :in ],
-            out: im_info[ :out ]
+            in: _info[ :in ],
+            out: _info[ :out ]
           }
         end
 
@@ -548,7 +568,7 @@ module Girl
             dns_infos: @dns_infos.size,
             resolv_caches: @resolv_caches.size
           },
-          im_infos: im_info_arr
+          im_infos: arr
         }
 
         begin
@@ -578,6 +598,7 @@ module Girl
       data = "#{ tcp_info[ :part ] }#{ data }"
 
       msgs, part = decode_to_msgs( data )
+      close_tcp( tcp ) if msgs.empty?
       msgs.each{ | msg | deal_ctlmsg( msg, tcp ) }
       tcp_info[ :part ] = part
     end
@@ -601,14 +622,28 @@ module Girl
         return
       end
 
-      @tcp_infos[ tcp ] = {
-        part: '',  # 包长+没收全的缓存
-        wbuff: '', # 写前
-        im: nil    # 标识
-      }
-
       # puts "debug accept a tcp"
+      tcp_id = rand( ( 2 ** 64 ) - 2 ) + 1
+
+      @tcp_infos[ tcp ] = {
+        tcp_id: tcp_id, # tcp id
+        part: '',       # 包长+没收全的缓存
+        wbuff: '',      # 写前
+        im: nil         # 标识
+      }
+      
       add_read( tcp, :tcp )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        msg = {
+          message_type: 'check-tcp-im',
+          tcp_id: tcp_id
+        }
+
+        send_msg_to_infod( msg )
+      end
     end
 
     def read_tun( tun )
@@ -685,17 +720,30 @@ module Girl
       end
 
       # puts "debug accept a tun"
+      tun_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
       @tun_infos[ tun ] = {
-        im: nil,      # 标识
-        dst: nil,     # 对应dst
-        domain: nil,  # 目的地
-        part: '',     # 包长+没收全的缓存
-        wbuff: '',    # 写前
-        paused: false # 是否暂停
+        tun_id: tun_id, # tun id
+        im: nil,        # 标识
+        dst: nil,       # 对应dst
+        domain: nil,    # 目的地
+        part: '',       # 包长+没收全的缓存
+        wbuff: '',      # 写前
+        paused: false   # 是否暂停
       }
 
       add_read( tun, :tun )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        msg = {
+          message_type: 'check-tun-im',
+          tun_id: tun_id
+        }
+
+        send_msg_to_infod( msg )
+      end
     end
 
     def resolve_domain_port( domain_port, src_id, tcp )
