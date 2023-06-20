@@ -18,7 +18,7 @@ module Girl
       @roles = {}         # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
       @tcp_infos = {}     # tcp => { :part :wbuff :im }
       @resolv_caches = {} # domain => [ ip, created_at ]
-      @dst_infos = {}     # dst => { :dst_id :im :domain :ip :rbuff :tun :wbuff :src_id :connected :closing :paused }
+      @dst_infos = {}     # dst => { :dst_id :im :domain :ip :rbuff :tun :src_id :connected :wbuff :closing :paused }
       @tun_infos = {}     # tun => { :im :dst :domain :wbuff :closing :paused }
       @dns_infos = {}     # dns => { :dns_id :im :src_id :domain :port :tcp }
       @ips = {}           # im => ip
@@ -242,8 +242,8 @@ module Girl
           @im_infos[ im ] = im_info
         end
 
-        print "#{ Time.new } got hello #{ im.inspect } im infos #{ @im_infos.size } updates #{ @updates.size } "
-        puts "tcp infos #{ @tcp_infos.size } dst infos #{ @dst_infos.size } tun infos #{ @tun_infos.size } dns infos #{ @dns_infos.size }"
+        print "#{ Time.new } got hello #{ im.inspect } im #{ @im_infos.size } updates #{ @updates.size } "
+        puts "tcp #{ @tcp_infos.size } dst #{ @dst_infos.size } tun #{ @tun_infos.size } dns #{ @dns_infos.size }"
       when Girl::Custom::A_NEW_SOURCE then
         return unless tcp_info[ :im ]
         _, src_id, domain_port = data.split( Girl::Custom::SEP )
@@ -326,9 +326,9 @@ module Girl
         ip: ip,           # 目的地ip
         rbuff: '',        # 对应的tun没准备好，暂存读到的流量
         tun: nil,         # 对应的tun
-        wbuff: '',        # 从tun读到的流量
         src_id: src_id,   # 近端src id
         connected: false, # 是否已连接
+        wbuff: '',        # 写前
         closing: false,   # 是否准备关闭
         paused: false     # 是否已暂停
       }
@@ -442,11 +442,8 @@ module Girl
         return
       end
 
-      dst_info = @dst_infos[ dst ]
-      tun = dst_info[ :tun ]
-
       begin
-        data = dst.read_nonblock( CHUNK_SIZE )
+        data = dst.read_nonblock( READ_SIZE )
       rescue Exception => e
         # puts "debug read dst #{ e.class }"
         close_dst( dst )
@@ -454,6 +451,8 @@ module Girl
       end
 
       set_update( dst )
+      dst_info = @dst_infos[ dst ]
+      tun = dst_info[ :tun ]
       @im_infos[ dst_info[ :im ] ][ :in ] += data.bytesize
 
       if tun && !tun.closed? then
@@ -656,8 +655,6 @@ module Girl
         return
       end
 
-      tun_info = @tun_infos[ tun ]
-
       begin
         data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -667,6 +664,7 @@ module Girl
       end
 
       set_update( tun )
+      tun_info = @tun_infos[ tun ]
       dst = tun_info[ :dst ]
 
       unless dst then

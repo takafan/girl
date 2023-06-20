@@ -26,8 +26,8 @@ module Girl
       @tcp_infos = {}        # tcp => { :part :wbuff :created_at :last_recv_at }
       @src_infos = {}        # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port
                              #          :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused }
-      @dst_infos = {}        # dst => { :dst_id :src :domain :wbuff :connected :closing :paused }
-      @tun_infos = {}        # tun => { :tun_id :src :domain :wbuff :pong :closing :paused }
+      @dst_infos = {}        # dst => { :dst_id :src :domain :connected :wbuff :closing :paused }
+      @tun_infos = {}        # tun => { :tun_id :src :domain :pong :wbuff :closing :paused }
       @dns_infos = {}        # dns => { :dns_id :domain :src }
       
       new_a_redir( redir_port )
@@ -38,6 +38,7 @@ module Girl
 
     def looping
       puts "#{ Time.new } looping"
+      loop_check_expire
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -295,6 +296,20 @@ module Girl
       end
     end
 
+    def loop_check_expire
+      Thread.new do
+        loop do
+          sleep CHECK_EXPIRE_INTERVAL
+
+          msg = {
+            message_type: 'check-expire'
+          }
+
+          send_msg_to_infod( msg )
+        end
+      end
+    end
+
     def new_a_dst( ip, src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
@@ -330,8 +345,8 @@ module Girl
         src: src,         # 对应src
         domain: domain,   # 目的地域名
         ip: ip,           # 目的地ip
-        wbuff: '',        # 写前
         connected: false, # 是否已连接
+        wbuff: '',        # 写前
         closing: false,   # 是否准备关闭
         paused: false     # 是否已暂停
       }
@@ -492,8 +507,8 @@ module Girl
         src: src,       # 对应src
         domain: domain, # 目的地
         part: '',       # 包长+没收全的缓存
-        wbuff: data,    # 写前
         pong: false,    # 是否有回应
+        wbuff: data,    # 写前
         closing: false, # 是否准备关闭
         paused: false   # 是否已暂停
       }
@@ -597,11 +612,8 @@ module Girl
         return
       end
 
-      dst_info = @dst_infos[ dst ]
-      src = dst_info[ :src ]
-
       begin
-        data = dst.read_nonblock( CHUNK_SIZE )
+        data = dst.read_nonblock( READ_SIZE )
       rescue Exception => e
         # puts "debug read dst #{ e.class }"
         close_dst( dst )
@@ -609,6 +621,8 @@ module Girl
       end
 
       set_update( dst )
+      dst_info = @dst_infos[ dst ]
+      src = dst_info[ :src ]
       add_src_wbuff( src, data )
     end
 
@@ -747,10 +761,8 @@ module Girl
         return
       end
 
-      src_info = @src_infos[ src ]
-
       begin
-        data = src.read_nonblock( CHUNK_SIZE )
+        data = src.read_nonblock( READ_SIZE )
       rescue Exception => e
         # puts "debug read src #{ e.class }"
         close_src( src )
@@ -758,6 +770,7 @@ module Girl
       end
 
       set_update( src )
+      src_info = @src_infos[ src ]
       proxy_type = src_info[ :proxy_type ]
 
       case proxy_type
@@ -954,14 +967,6 @@ module Girl
         return
       end
 
-      tun_info = @tun_infos[ tun ]
-      src = tun_info[ :src ]
-
-      if src.closed? then
-        close_tun( tun )
-        return
-      end
-
       begin
         data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -971,6 +976,8 @@ module Girl
       end
 
       set_update( tun )
+      tun_info = @tun_infos[ tun ]
+      src = tun_info[ :src ]
 
       unless tun_info[ :pong ] then
         sep_idx = data.index( Girl::Custom::SEP )

@@ -2,11 +2,16 @@ module Girl
   class P1Worker
 
     def initialize( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
+      @updates_limit = 1023 - 2               # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ ctl, infod ]
+      @eliminate_size = @updates_limit - 255  # 淘汰数，保留255个最近的，其余淘汰
+      @update_roles = [ :app, :p1 ]           # 参与淘汰的角色
       @reads = []
       @writes = []
+
+      @updates = {}   # sock => updated_at
       @roles = {}     # sock => :app / :ctl / :infod / :p1
-      @p1_infos = {}  # p1 => { :wbuff :closing_write :paused :app }
-      @app_infos = {} # app => { :wbuff :created_at :last_recv_at :last_sent_at :closing_write :paused :p1 }
+      @app_infos = {} # app => { :p1 :wbuff :closing :paused }
+      @p1_infos = {}  # p1 => { :app :wbuff :closing :paused }
       @mirrord_host = mirrord_host
       @mirrord_port = mirrord_port
       @appd_addr = Socket.sockaddr_in( appd_port, appd_host )
@@ -72,17 +77,19 @@ module Girl
       return if app.nil? || app.closed?
       app_info = @app_infos[ app ]
       app_info[ :wbuff ] << data
-      app_info[ :last_recv_at ] = Time.new
       add_write( app )
 
       if app_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         p1 = app_info[ :p1 ]
 
-        unless p1.closed? then
-          puts "#{ Time.new } pause p1"
-          @reads.delete( p1 )
+        if p1 then
           p1_info = @p1_infos[ p1 ]
-          p1_info[ :paused ] = true
+
+          if p1_info then
+            puts "#{ Time.new } pause p1"
+            @reads.delete( p1 )
+            p1_info[ :paused ] = true
+          end
         end
       end
     end
@@ -96,11 +103,14 @@ module Girl
       if p1_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         app = p1_info[ :app ]
 
-        unless app.closed? then
-          puts "#{ Time.new } pause app"
-          @reads.delete( app )
+        if app then
           app_info = @app_infos[ app ]
-          app_info[ :paused ] = true
+
+          if app_info then
+            puts "#{ Time.new } pause app"
+            @reads.delete( app )
+            app_info[ :paused ] = true
+          end
         end
       end
     end
@@ -111,12 +121,23 @@ module Girl
 
       if role then
         @roles[ sock ] = role
+      else
+        role = @roles[ sock ]
+      end
+
+      if @update_roles.include?( role ) then
+        set_update( sock )
       end
     end
 
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
+      role = @roles[ sock ]
+
+      if @update_roles.include?( role ) then
+        set_update( sock )
+      end
     end
 
     def close_app( app )
@@ -124,10 +145,8 @@ module Girl
       puts "#{ Time.new } close app"
       close_sock( app )
       app_info = @app_infos.delete( app )
-
-      if app_info then
-        close_p1( app_info[ :p1 ] )
-      end
+      set_p1_closing( app_info[ :p1 ] ) if app_info
+      app_info
     end
 
     def close_ctl
@@ -139,35 +158,9 @@ module Girl
       return if p1.nil? || p1.closed?
       puts "#{ Time.new } close p1"
       close_sock( p1 )
-      @p1_infos.delete( p1 )
-    end
-
-    def close_read_app( app )
-      return if app.nil? || app.closed?
-      # puts "debug close read app"
-      app.close_read
-      @reads.delete( app )
-
-      if app.closed? then
-        # puts "debug app closed"
-        @writes.delete( app )
-        @roles.delete( app )
-        @app_infos.delete( app )
-      end
-    end
-
-    def close_read_p1( p1 )
-      return if p1.nil? || p1.closed?
-      # puts "debug close read p1"
-      p1.close_read
-      @reads.delete( p1 )
-
-      if p1.closed? then
-        # puts "debug p1 closed"
-        @writes.delete( p1 )
-        @roles.delete( p1 )
-        @p1_infos.delete( p1 )
-      end
+      p1_info = @p1_infos.delete( p1 )
+      set_app_closing( p1_info[ :app ] ) if p1_info
+      p1_info
     end
 
     def close_sock( sock )
@@ -175,35 +168,8 @@ module Girl
       sock.close
       @reads.delete( sock )
       @writes.delete( sock )
+      @updates.delete( sock )
       @roles.delete( sock )
-    end
-
-    def close_write_app( app )
-      return if app.nil? || app.closed?
-      # puts "debug close write app"
-      app.close_write
-      @writes.delete( app )
-
-      if app.closed? then
-        # puts "debug app closed"
-        @reads.delete( app )
-        @roles.delete( app )
-        @app_infos.delete( app )
-      end
-    end
-
-    def close_write_p1( p1 )
-      return if p1.nil? || p1.closed?
-      # puts "debug close write p1"
-      p1.close_write
-      @writes.delete( p1 )
-
-      if p1.closed? then
-        # puts "debug p1 closed"
-        @reads.delete( p1 )
-        @roles.delete( p1 )
-        @p1_infos.delete( p1 )
-      end
     end
 
     def loop_check_expire
@@ -299,20 +265,17 @@ module Girl
       end
 
       @app_infos[ app ] = {
+        p1: p1,
         wbuff: '',
-        created_at: Time.new,
-        last_recv_at: nil,
-        last_sent_at: nil,
-        closing_write: false,
-        paused: false,
-        p1: p1
+        closing: false,
+        paused: false
       }
 
       @p1_infos[ p1 ] = {
+        app: app,
         wbuff: [ p2_id ].pack( 'Q>' ),
-        closing_write: false,
-        paused: false,
-        app: app
+        closing: false,
+        paused: false
       }
 
       add_read( app, :app )
@@ -323,28 +286,27 @@ module Girl
 
     def read_app( app )
       if app.closed? then
-        puts "#{ Time.new } read app but app closed?"
+        puts "#{ Time.new } read closed app?"
         return
       end
-
-      app_info = @app_infos[ app ]
-      p1 = app_info[ :p1 ]
 
       begin
         data = app.read_nonblock( READ_SIZE )
       rescue Exception => e
         puts "#{ Time.new } read app #{ e.class }"
-        close_read_app( app )
-        set_p1_closing_write( p1 )
+        close_app( app )
         return
       end
 
+      set_update( app )
+      app_info = @app_infos[ app ]
+      p1 = app_info[ :p1 ]
       add_p1_wbuff( p1, data )
     end
 
     def read_ctl( ctl )
       if ctl.closed? then
-        puts "#{ Time.new } read ctl but ctl closed?"
+        puts "#{ Time.new } read closed ctl?"
         return
       end
 
@@ -376,14 +338,16 @@ module Girl
       case message_type
       when 'check-expire' then
         now = Time.new
+        socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_APP_AFTER }.keys
 
-        @app_infos.each do | app, app_info |
-          last_recv_at = app_info[ :last_recv_at ] || app_info[ :created_at ]
-          last_sent_at = app_info[ :last_sent_at ] || app_info[ :created_at ]
-
-          if ( now - last_recv_at >= EXPIRE_APP_AFTER ) && ( now - last_sent_at >= EXPIRE_APP_AFTER ) then
-            puts "#{ Time.new } expire app"
-            close_app( app )
+        socks.each do | sock |
+          case @roles[ sock ]
+          when :app
+            app_info = close_app( sock )
+            puts "#{ Time.new } expire app" if app_info
+          when :p1
+            p1_info = close_p1( sock )
+            puts "#{ Time.new } expire p1" if p1_info
           end
         end
       when 'renew-ctl' then
@@ -394,6 +358,7 @@ module Girl
       when 'memory-info' then
         msg2 = {
           sizes: {
+            updates: @updates.size,
             p1_infos: @p1_infos.size,
             app_infos: @app_infos.size
           }
@@ -409,22 +374,21 @@ module Girl
 
     def read_p1( p1 )
       if p1.closed? then
-        puts "#{ Time.new } read p1 but p1 closed?"
+        puts "#{ Time.new } read closed p1?"
         return
       end
-
-      p1_info = @p1_infos[ p1 ]
-      app = p1_info[ :app ]
 
       begin
         data = p1.read_nonblock( READ_SIZE )
       rescue Exception => e
         puts "#{ Time.new } read p1 #{ e.class }"
-        close_read_p1( p1 )
-        set_app_closing_write( app )
+        close_p1( p1 )
         return
       end
 
+      set_update( p1 )
+      p1_info = @p1_infos[ p1 ]
+      app = p1_info[ :app ]
       add_app_wbuff( app, data )
     end
 
@@ -444,26 +408,42 @@ module Girl
       end
     end
 
-    def set_app_closing_write( app )
+    def set_app_closing( app )
       return if app.nil? || app.closed?
       app_info = @app_infos[ app ]
-      return if app_info[ :closing_write ]
-      app_info[ :closing_write ] = true
+      return if app_info.nil? || app_info[ :closing ]
+      app_info[ :closing ] = true
       add_write( app )
     end
 
-    def set_p1_closing_write( p1 )
+    def set_p1_closing( p1 )
       return if p1.nil? || p1.closed?
       p1_info = @p1_infos[ p1 ]
-      return if p1_info[ :closing_write ]
-      # puts "debug set p1 closing write"
-      p1_info[ :closing_write ] = true
+      return if p1_info.nil? || p1_info[ :closing_write ]
+      p1_info[ :closing ] = true
       add_write( p1 )
+    end
+
+    def set_update( sock )
+      if @updates.size >= @updates_limit then
+        puts "#{ Time.new } eliminate updates"
+
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
+          case @roles[ sock ]
+          when :app
+            close_app( sock )
+          when :p1
+            close_p1( sock )
+          end
+        end
+      end
+
+      @updates[ sock ] = Time.new
     end
 
     def write_app( app )
       if app.closed? then
-        puts "#{ Time.new } write app but app closed?"
+        puts "#{ Time.new } write closed app?"
         return
       end
 
@@ -473,8 +453,8 @@ module Girl
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if app_info[ :closing_write ] then
-          close_write_app( app )
+        if app_info[ :closing ] then
+          close_app( app )
         else
           @writes.delete( app )
         end
@@ -487,11 +467,11 @@ module Girl
         written = app.write_nonblock( data )
       rescue Exception => e
         puts "#{ Time.new } write app #{ e.class }"
-        close_write_app( app )
-        close_read_p1( p1 )
+        close_app( app )
         return
       end
 
+      set_update( app )
       data = data[ written..-1 ]
       app_info[ :wbuff ] = data
 
@@ -508,7 +488,7 @@ module Girl
 
     def write_p1( p1 )
       if p1.closed? then
-        puts "#{ Time.new } write p1 but p1 closed?"
+        puts "#{ Time.new } write closed p1?"
         return
       end
 
@@ -518,8 +498,8 @@ module Girl
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if p1_info[ :closing_write ] then
-          close_write_p1( p1 )
+        if p1_info[ :closing ] then
+          close_p1( p1 )
         else
           @writes.delete( p1 )
         end
@@ -532,11 +512,11 @@ module Girl
         written = p1.write_nonblock( data )
       rescue Exception => e
         puts "#{ Time.new } write p1 #{ e.class }"
-        close_write_p1( p1 )
-        close_read_app( app )
+        close_p1( p1 )
         return
       end
 
+      set_update( p1 )
       data = data[ written..-1 ]
       p1_info[ :wbuff ] = data
 
@@ -548,8 +528,6 @@ module Girl
           add_read( app )
           app_info[ :paused ] = false
         end
-
-        app_info[ :last_sent_at ] = Time.new
       end
     end
 

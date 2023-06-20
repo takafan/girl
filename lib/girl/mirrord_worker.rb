@@ -2,14 +2,19 @@ module Girl
   class MirrordWorker
 
     def initialize( mirrord_port, p2d_host, im_infos )
+      @updates_limit = 1023 - 11 - im_infos.size * 2 # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, mirrord * 10, p1d * im_infos.size, p2d * im_infos.size ]
+      @eliminate_size = @updates_limit - 255         # 淘汰数，保留255个最近的，其余淘汰
+      @update_roles = [ :p1, :p2 ]                   # 参与淘汰的角色
       @reads = []
       @writes = []
+
+      @updates = {}    # sock => updated_at
       @roles = {}      # :infod / :mirrord / :p1 / :p1d / :p2 / :p2d
       @room_infos = {} # im => { :mirrord :p1_addrinfo :updated_at :p1d :p2d :p2d_port :p1d_port }
       @p1d_infos = {}  # p1d => { :im }
       @p2d_infos = {}  # p2d => { :im }
-      @p1_infos = {}   # p1 => { :addrinfo :im :p2 :wbuff :closing_write :paused }
-      @p2_infos = {}   # p2 => { :addrinfo :im :p1 :rbuff :wbuff :created_at :last_recv_at :last_sent_at :closing_write :paused }
+      @p1_infos = {}   # p1 => { :addrinfo :im :p2 :wbuff :closing :paused }
+      @p2_infos = {}   # p2 => { :addrinfo :im :p1 :rbuff :wbuff :closing :paused }
       @p2d_host = p2d_host
 
       new_mirrords( mirrord_port )
@@ -107,7 +112,6 @@ module Girl
       return if p2.nil? || p2.closed?
       p2_info = @p2_infos[ p2 ]
       p2_info[ :wbuff ] << data
-      p2_info[ :last_recv_at ] = Time.new
       add_write( p2 )
 
       if p2_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
@@ -131,26 +135,32 @@ module Girl
 
       if role then
         @roles[ sock ] = role
+      else
+        role = @roles[ sock ]
+      end
+
+      if @update_roles.include?( role ) then
+        set_update( sock )
       end
     end
 
     def add_write( sock )
       return if sock.nil? || sock.closed? || @writes.include?( sock )
       @writes << sock
+      role = @roles[ sock ]
+
+      if @update_roles.include?( role ) then
+        set_update( sock )
+      end
     end
 
     def close_p1( p1 )
       return if p1.nil? || p1.closed?
       # puts "debug close p1"
       close_sock( p1 )
-      @p1_infos.delete( p1 )
-    end
-
-    def close_p1d( p1d )
-      return if p1d.nil? || p1d.closed?
-      # puts "debug close p1d"
-      close_sock( p1d )
-      @p1d_infos.delete( p1d )
+      p1_info = @p1_infos.delete( p1 )
+      set_p2_closing( p1_info[ :p2 ] ) if p1_info
+      p1_info
     end
 
     def close_p2( p2 )
@@ -158,45 +168,8 @@ module Girl
       # puts "debug close p2"
       close_sock( p2 )
       p2_info = @p2_infos.delete( p2 )
-
-      if p2_info then
-        close_p1( p2_info[ :p1 ] )
-      end
-    end
-
-    def close_p2d( p2d )
-      return if p2d.nil? || p2d.closed?
-      # puts "debug close p2d"
-      close_sock( p2d )
-      @p2d_infos.delete( p2d )
-    end
-
-    def close_read_p1( p1 )
-      return if p1.nil? || p1.closed?
-      # puts "debug close read p1"
-      p1.close_read
-      @reads.delete( p1 )
-
-      if p1.closed? then
-        # puts "debug p1 closed"
-        @writes.delete( p1 )
-        @roles.delete( p1 )
-        @p1_infos.delete( p1 )
-      end
-    end
-
-    def close_read_p2( p2 )
-      return if p2.nil? || p2.closed?
-      # puts "debug close read p2"
-      p2.close_read
-      @reads.delete( p2 )
-
-      if p2.closed? then
-        # puts "debug p2 closed"
-        @writes.delete( p2 )
-        @roles.delete( p2 )
-        @p2_infos.delete( p2 )
-      end
+      set_p1_closing( p2_info[ :p1 ] ) if p2_info
+      p2_info
     end
 
     def close_sock( sock )
@@ -204,44 +177,8 @@ module Girl
       sock.close
       @reads.delete( sock )
       @writes.delete( sock )
+      @updates.delete( sock )
       @roles.delete( sock )
-    end
-
-    def close_write_p1( p1 )
-      return if p1.nil? || p1.closed?
-      # puts "debug close write p1"
-      p1.close_write
-      @writes.delete( p1 )
-
-      if p1.closed? then
-        # puts "debug p1 closed"
-        @reads.delete( p1 )
-        @roles.delete( p1 )
-        @p1_infos.delete( p1 )
-      end
-    end
-
-    def close_write_p2( p2 )
-      return if p2.nil? || p2.closed?
-      # puts "debug close write p2"
-      p2.close_write
-      @writes.delete( p2 )
-
-      if p2.closed? then
-        # puts "debug p2 closed"
-        @reads.delete( p2 )
-        @roles.delete( p2 )
-        @p2_infos.delete( p2 )
-      end
-    end
-
-    def del_room_info( im )
-      room_info = @room_infos.delete( im )
-
-      if room_info then
-        close_p1d( room_info[ :p1d ] )
-        close_p2d( room_info[ :p2d ] )
-      end
     end
 
     def loop_check_expire
@@ -321,18 +258,20 @@ module Girl
       case message_type
       when 'check-expire' then
         now = Time.new
+        socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_APP_AFTER }.keys
 
-        @p2_infos.each do | p2, p2_info |
-          last_recv_at = p2_info[ :last_recv_at ] || p2_info[ :created_at ]
-          last_sent_at = p2_info[ :last_sent_at ] || p2_info[ :created_at ]
-
-          if ( now - last_recv_at >= EXPIRE_APP_AFTER ) && ( now - last_sent_at >= EXPIRE_APP_AFTER ) then
-            puts "#{ Time.new } expire p2 #{ p2_info[ :im ].inspect } #{ p2_info[ :addrinfo ].inspect }"
-            close_p2( p2 )
+        socks.each do | sock |
+          case @roles[ sock ]
+          when :p1
+            p1_info = close_p1( sock )
+            puts "#{ Time.new } expire p1 #{ p1_info[ :im ] } #{ p1_info[ :addrinfo ].inspect }" if p1_info
+          when :p2
+            p2_info = close_p2( sock )
+            puts "#{ Time.new } expire p2 #{ p2_info[ :im ] } #{ p2_info[ :addrinfo ].inspect }" if p2_info
           end
         end
       when 'memory-info' then
-        data2 = @room_infos.sort_by{ | _, info | info[ :p2d_port ] }.map do | im, info |
+        data2 = @room_infos.sort_by{ | _, _info | _info[ :p2d_port ] }.map do | im, info |
           [
             info[ :updated_at ],
             info[ :p2d_port ],
@@ -392,21 +331,21 @@ module Girl
 
     def read_p1( p1 )
       if p1.closed? then
-        puts "#{ Time.new } read p1 but p1 closed?"
+        puts "#{ Time.new } read closed p1?"
         return
       end
-
-      p1_info = @p1_infos[ p1 ]
-      p2 = p1_info[ :p2 ]
 
       begin
         data = p1.read_nonblock( READ_SIZE )
       rescue Exception => e
         # puts "debug read p1 #{ e.class }"
-        close_read_p1( p1 )
-        set_p2_closing_write( p2 )
+        close_p1( p1 )
         return
       end
+
+      set_update( p1 )
+      p1_info = @p1_infos[ p1 ]
+      p2 = p1_info[ :p2 ]
 
       unless p2 then
         if data.bytesize < 8 then
@@ -445,7 +384,7 @@ module Girl
 
     def read_p1d( p1d )
       if p1d.closed? then
-        puts "#{ Time.new } read p1d but p1d closed?"
+        puts "#{ Time.new } read closed p1d?"
         return
       end
 
@@ -456,17 +395,16 @@ module Girl
         p1, addrinfo = p1d.accept_nonblock
       rescue Exception => e
         puts "#{ Time.new } p1d accept #{ e.class } #{ im.inspect }"
-        del_room_info( im )
         return
       end
 
       @p1_infos[ p1 ] = {
-        addrinfo: addrinfo,   # 地址
-        im: im,               # 标识
-        p2: nil,              # 对应p2
-        wbuff: '',            # 写前
-        closing_write: false, # 准备关闭写
-        paused: false         # 是否暂停
+        addrinfo: addrinfo, # 地址
+        im: im,             # 标识
+        p2: nil,            # 对应p2
+        wbuff: '',          # 写前
+        closing: false,     # 是否准备关闭
+        paused: false       # 是否已暂停
       }
 
       add_read( p1, :p1 )
@@ -475,21 +413,21 @@ module Girl
 
     def read_p2( p2 )
       if p2.closed? then
-        puts "#{ Time.new } read p2 but p2 closed?"
+        puts "#{ Time.new } read closed p2?"
         return
       end
-
-      p2_info = @p2_infos[ p2 ]
-      p1 = p2_info[ :p1 ]
 
       begin
         data = p2.read_nonblock( READ_SIZE )
       rescue Exception => e
         # puts "debug read p2 #{ e.class }"
-        close_read_p2( p2 )
-        set_p1_closing_write( p1 )
+        close_p2( p2 )
         return
       end
+
+      set_update( p2 )
+      p2_info = @p2_infos[ p2 ]
+      p1 = p2_info[ :p1 ]
 
       if p1 then
         add_p1_wbuff( p1, data )
@@ -500,7 +438,7 @@ module Girl
 
     def read_p2d( p2d )
       if p2d.closed? then
-        puts "#{ Time.new } read p2d but p2d closed?"
+        puts "#{ Time.new } read closed p2d?"
         return
       end
 
@@ -511,7 +449,6 @@ module Girl
         p2, addrinfo = p2d.accept_nonblock
       rescue Exception => e
         puts "#{ Time.new } p2d accept #{ e.class } #{ im.inspect }"
-        del_room_info( im )
         return
       end
 
@@ -526,18 +463,14 @@ module Girl
         p1: nil,              # 对应p1
         rbuff: '',            # 匹配到p1之前，暂存流量
         wbuff: '',            # 写前
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil,    # 上一次收到流量（p1读到，放入p2写前）的时间
-        last_sent_at: nil,    # 上一次中转流量（p1写）的时间
         closing: false,       # 是否准备关闭
-        closing_write: false, # 准备关闭写
-        paused: false         # 是否暂停
+        paused: false         # 是否已暂停
       }
 
       add_read( p2, :p2 )
 
       puts "#{ Time.new } here comes a p2 #{ im.inspect } #{ addrinfo.inspect } #{ p2_id }"
-      puts "rooms #{ @room_infos.size } p1ds #{ @p1d_infos.size } p2ds #{ @p2d_infos.size } p1s #{ @p1_infos.size } p2s #{ @p2_infos.size }"
+      puts "rooms #{ @room_infos.size } p1ds #{ @p1d_infos.size } p2ds #{ @p2d_infos.size } p1s #{ @p1_infos.size } p2s #{ @p2_infos.size } updates #{ @updates.size }"
       data = [ p1d_port, p2_id ].pack( 'nQ>' )
       send_data( room_info[ :mirrord ], data, room_info[ :p1_addrinfo ] )
     end
@@ -571,27 +504,42 @@ module Girl
       end
     end
 
-    def set_p1_closing_write( p1 )
+    def set_p1_closing( p1 )
       return if p1.nil? || p1.closed?
       p1_info = @p1_infos[ p1 ]
-      return if p1_info[ :closing_write ]
-      # puts "debug set p1 closing write"
-      p1_info[ :closing_write ] = true
+      return if p1_info.nil? || p1_info[ :closing ]
+      p1_info[ :closing ] = true
       add_write( p1 )
     end
 
-    def set_p2_closing_write( p2 )
+    def set_p2_closing( p2 )
       return if p2.nil? || p2.closed?
       p2_info = @p2_infos[ p2 ]
-      return if p2_info[ :closing_write ]
-      # puts "debug set p2 closing write"
-      p2_info[ :closing_write ] = true
+      return if p2_info.nil? || p2_info[ :closing ]
+      p2_info[ :closing ] = true
       add_write( p2 )
+    end
+
+    def set_update( sock )
+      if @updates.size >= @updates_limit then
+        puts "#{ Time.new } eliminate updates"
+
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
+          case @roles[ sock ]
+          when :p1
+            close_p1( sock )
+          when :p2
+            close_p2( sock )
+          end
+        end
+      end
+
+      @updates[ sock ] = Time.new
     end
 
     def write_p1( p1 )
       if p1.closed? then
-        puts "#{ Time.new } write p1 but p1 closed?"
+        puts "#{ Time.new } write closed p1?"
         return
       end
 
@@ -601,8 +549,8 @@ module Girl
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if p1_info[ :closing_write ] then
-          close_write_p1( p1 )
+        if p1_info[ :closing ] then
+          close_p1( p1 )
         else
           @writes.delete( p1 )
         end
@@ -615,11 +563,11 @@ module Girl
         written = p1.write_nonblock( data )
       rescue Exception => e
         # puts "debug write p1 #{ e.class }"
-        close_write_p1( p1 )
-        close_read_p2( p2 )
+        close_p1( p1 )
         return
       end
 
+      set_update( p1 )
       data = data[ written..-1 ]
       p1_info[ :wbuff ] = data
 
@@ -631,14 +579,12 @@ module Girl
           add_read( p2 )
           p2_info[ :paused ] = false
         end
-
-        p2_info[ :last_sent_at ] = Time.new
       end
     end
 
     def write_p2( p2 )
       if p2.closed? then
-        puts "#{ Time.new } write p2 but p2 closed?"
+        puts "#{ Time.new } write closed p2?"
         return
       end
 
@@ -648,8 +594,8 @@ module Girl
 
       # 写前为空，处理关闭写
       if data.empty? then
-        if p2_info[ :closing_write ] then
-          close_write_p2( p2 )
+        if p2_info[ :closing ] then
+          close_p2( p2 )
         else
           @writes.delete( p2 )
         end
@@ -662,11 +608,11 @@ module Girl
         written = p2.write_nonblock( data )
       rescue Exception => e
         # puts "debug write p2 #{ e.class }"
-        close_write_p2( p2 )
-        close_read_p1( p1 )
+        close_p2( p2 )
         return
       end
 
+      set_update( p2 )
       data = data[ written..-1 ]
       p2_info[ :wbuff ] = data
 
