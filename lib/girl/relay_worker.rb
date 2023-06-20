@@ -14,10 +14,10 @@ module Girl
 
       @updates = {}         # sock => updated_at
       @roles = {}           # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
-      @relay_tcp_infos = {} # relay_tcp => { :wbuff }
-      @relay_tun_infos = {} # relay_tun => { :closing, :wbuff, :paused }
-      @tcp_infos = {}       # tcp => { :wbuff }
-      @tun_infos = {}       # tun => { :closing, :wbuff, :paused }
+      @relay_tcp_infos = {} # relay_tcp => { :wbuff :closing }
+      @relay_tun_infos = {} # relay_tun => { :wbuff :closing :paused }
+      @tcp_infos = {}       # tcp => { :wbuff :closing }
+      @tun_infos = {}       # tun => { :wbuff :closing :paused }
 
       new_a_relay_tcpd( relay_proxyd_port )
       new_a_infod( relay_proxyd_port )
@@ -170,44 +170,22 @@ module Girl
       end
     end
 
-    def close_read_relay_tun( relay_tun )
-      return if relay_tun.nil? || relay_tun.closed?
-      # puts "debug close read relay tun"
-      relay_tun_info = @relay_tun_infos[ relay_tun ]
-
-      if relay_tun_info[ :wbuff ].empty? then
-        close_relay_tun( relay_tun )
-      else
-        @reads.delete( relay_tun )
-      end
-    end
-
-    def close_read_tun( tun )
-      return if tun.nil? || tun.closed?
-      # puts "debug close read tun"
-      tun_info = @tun_infos[ tun ]
-
-      if tun_info[ :wbuff ].empty? then
-        close_tun( tun )
-      else
-        @reads.delete( tun )
-      end
-    end
-
     def close_relay_tcp( relay_tcp )
-      return if relay_tcp.nil? || relay_tcp.closed?
+      return nil if relay_tcp.nil? || relay_tcp.closed?
       # puts "debug close relay tcp"
       close_sock( relay_tcp )
       relay_tcp_info = @relay_tcp_infos.delete( relay_tcp )
-      close_tcp( relay_tcp_info[ :tcp ] ) if relay_tcp_info
+      set_tcp_closing( relay_tcp_info[ :tcp ] ) if relay_tcp_info
+      relay_tcp_info
     end
 
     def close_relay_tun( relay_tun )
-      return if relay_tun.nil? || relay_tun.closed?
+      return nil if relay_tun.nil? || relay_tun.closed?
       # puts "debug close relay tun"
       close_sock( relay_tun )
       relay_tun_info = @relay_tun_infos.delete( relay_tun )
-      close_tun( relay_tun_info[ :tun ] ) if relay_tun_info
+      set_tun_closing( relay_tun_info[ :tun ] ) if relay_tun_info
+      relay_tun_info
     end
 
     def close_sock( sock )
@@ -220,17 +198,21 @@ module Girl
     end
 
     def close_tcp( tcp )
-      return if tcp.nil? || tcp.closed?
+      return nil if tcp.nil? || tcp.closed?
       # puts "debug close tcp"
       close_sock( tcp )
-      @tcp_infos.delete( tcp )
+      tcp_info = @tcp_infos.delete( tcp )
+      set_relay_tcp_closing( tcp_info[ :relay_tcp ] ) if tcp_info
+      tcp_info
     end
 
     def close_tun( tun )
-      return if tun.nil? || tun.closed?
+      return nil if tun.nil? || tun.closed?
       # puts "debug close tun"
       close_sock( tun )
-      @tun_infos.delete( tun )
+      tun_info = @tun_infos.delete( tun )
+      set_relay_tun_closing( tun_info[ :relay_tun ] ) if tun_info
+      tun_info
     end
 
     def loop_check_expire
@@ -331,7 +313,7 @@ module Girl
         if socks.any? then
           relay_tcp_count = relay_tun_count = tcp_count = tun_count = 0
 
-          socks.each do | sock, _ |
+          socks.each do | sock |
             case @roles[ sock ]
             when :relay_tcp
               close_relay_tcp( sock )
@@ -426,11 +408,13 @@ module Girl
 
       @relay_tcp_infos[ relay_tcp ] = {
         wbuff: '',
+        closing: false,
         tcp: tcp
       }
 
       @tcp_infos[ tcp ] = {
         wbuff: '',
+        closing: false,
         relay_tcp: relay_tcp
       }
 
@@ -486,12 +470,14 @@ module Girl
 
       @relay_tun_infos[ relay_tun ] = {
         wbuff: '',
+        closing: false,
         paused: false,
         tun: tun
       }
 
       @tun_infos[ tun ] = {
         wbuff: '',
+        closing: false,
         paused: false,
         relay_tun: relay_tun
       }
@@ -530,7 +516,7 @@ module Girl
         data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e
         # puts "debug read tun #{ e.class }"
-        close_read_tun( tun )
+        close_tun( tun )
         return
       end
 
@@ -556,11 +542,34 @@ module Girl
       end
     end
 
+    def set_relay_tcp_closing( relay_tcp )
+      return if relay_tcp.nil? || relay_tcp.closed?
+      relay_tcp_info = @relay_tcp_infos[ relay_tcp ]
+      return if relay_tcp_info.nil? || relay_tcp_info[ :closing ]
+      relay_tcp_info[ :closing ] = true
+      add_write( relay_tcp )
+    end
+
+    def set_relay_tun_closing( relay_tun )
+      return if relay_tun.nil? || relay_tun.closed?
+      relay_tun_info = @relay_tun_infos[ relay_tun ]
+      return if relay_tun_info.nil? || relay_tun_info[ :closing ]
+      relay_tun_info[ :closing ] = true
+      add_write( relay_tun )
+    end
+
+    def set_tcp_closing( tcp )
+      return if tcp.nil? || tcp.closed?
+      tcp_info = @tcp_infos[ tcp ]
+      return if tcp_info.nil? || tcp_info[ :closing ]
+      tcp_info[ :closing ] = true
+      add_write( tcp )
+    end
+
     def set_tun_closing( tun )
       return if tun.nil? || tun.closed?
       tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing ]
-      # puts "debug set tun closing write"
+      return if tun_info.nil? || tun_info[ :closing ]
       tun_info[ :closing ] = true
       add_write( tun )
     end
@@ -596,7 +605,12 @@ module Girl
       data = relay_tcp_info[ :wbuff ]
 
       if data.empty? then
-        @writes.delete( relay_tcp )
+        if relay_tcp_info[ :closing ] then
+          close_relay_tcp( relay_tcp )
+        else
+          @writes.delete( relay_tcp )
+        end
+
         return
       end
 
@@ -638,7 +652,6 @@ module Girl
       rescue Exception => e
         # puts "debug write relay tun #{ e.class }"
         close_relay_tun( relay_tun )
-        close_read_tun( tun )
         return
       end
 
@@ -667,7 +680,12 @@ module Girl
       data = tcp_info[ :wbuff ]
 
       if data.empty? then
-        @writes.delete( tcp )
+        if tcp_info[ :closing ] then
+          close_tcp( tcp )
+        else
+          @writes.delete( tcp )
+        end
+
         return
       end
 
@@ -709,7 +727,6 @@ module Girl
       rescue Exception => e
         # puts "debug write tun #{ e.class }"
         close_tun( tun )
-        close_read_relay_tun( relay_tun )
         return
       end
 

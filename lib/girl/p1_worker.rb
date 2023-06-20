@@ -5,8 +5,8 @@ module Girl
       @reads = []
       @writes = []
       @roles = {}     # sock => :app / :ctl / :infod / :p1
-      @p1_infos = {}  # p1 => { :wbuff, :closing_write, :paused, :app }
-      @app_infos = {} # app => { :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing_write, :paused, :p1 }
+      @p1_infos = {}  # p1 => { :wbuff :closing_write :paused :app }
+      @app_infos = {} # app => { :wbuff :created_at :last_recv_at :last_sent_at :closing_write :paused :p1 }
       @mirrord_host = mirrord_host
       @mirrord_port = mirrord_port
       @appd_addr = Socket.sockaddr_in( appd_port, appd_host )

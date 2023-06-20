@@ -5,11 +5,11 @@ module Girl
       @reads = []
       @writes = []
       @roles = {}      # :infod / :mirrord / :p1 / :p1d / :p2 / :p2d
-      @room_infos = {} # im => { :mirrord, :p1_addrinfo, :updated_at, :p1d, :p2d, :p2d_port, :p1d_port }
+      @room_infos = {} # im => { :mirrord :p1_addrinfo :updated_at :p1d :p2d :p2d_port :p1d_port }
       @p1d_infos = {}  # p1d => { :im }
       @p2d_infos = {}  # p2d => { :im }
-      @p1_infos = {}   # p1 => { :addrinfo, :im, :p2, :wbuff, :closing_write, :paused }
-      @p2_infos = {}   # p2 => { :addrinfo, :im, :p1, :rbuff, :wbuff, :created_at, :last_recv_at, :last_sent_at, :closing_write, :paused }
+      @p1_infos = {}   # p1 => { :addrinfo :im :p2 :wbuff :closing_write :paused }
+      @p2_infos = {}   # p2 => { :addrinfo :im :p1 :rbuff :wbuff :created_at :last_recv_at :last_sent_at :closing_write :paused }
       @p2d_host = p2d_host
 
       new_mirrords( mirrord_port )

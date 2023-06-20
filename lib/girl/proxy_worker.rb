@@ -23,13 +23,12 @@ module Girl
       @roles = {}            # sock =>  :dns / :dst / :infod / :redir / :src / :tcp /:tun
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
-      @tcp_infos = {}        # tcp => { :part, :wbuff, :created_at, :last_recv_at }
-      @src_infos = {}        # src => { :src_id, :addrinfo, :proxy_proto, :proxy_type, :destination_domain, :destination_port,
-                             #          :is_connect, :rbuff, :dst, :dst_id, :tcp, :tun,
-                             #          :wbuff, :closing, :paused }
-      @dst_infos = {}        # dst => { :dst_id, :src, :domain, :wbuff, :connected, :closing, :paused }
-      @tun_infos = {}        # tun => { :tun_id, :src, :domain, :wbuff, :pong, :paused }
-      @dns_infos = {}        # dns => { :dns_id, :domain, :src }
+      @tcp_infos = {}        # tcp => { :part :wbuff :created_at :last_recv_at }
+      @src_infos = {}        # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port
+                             #          :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused }
+      @dst_infos = {}        # dst => { :dst_id :src :domain :wbuff :connected :closing :paused }
+      @tun_infos = {}        # tun => { :tun_id :src :domain :wbuff :pong :closing :paused }
+      @dns_infos = {}        # dns => { :dns_id :domain :src }
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
@@ -222,57 +221,20 @@ module Girl
     end
 
     def close_dns( dns )
-      return if dns.nil? || dns.closed?
+      return nil if dns.nil? || dns.closed?
       # puts "debug close dns"
       close_sock( dns )
-      @dns_infos.delete( dns )
+      dns_info = @dns_infos.delete( dns )
+      dns_info
     end
 
     def close_dst( dst )
-      return if dst.nil? || dst.closed?
+      return nil if dst.nil? || dst.closed?
       # puts "debug close dst"
       close_sock( dst )
-      @dst_infos.delete( dst )
-    end
-
-    def close_read_dst( dst )
-      return if dst.nil? || dst.closed?
-      # puts "debug close read dst"
-      dst_info = @dst_infos[ dst ]
-
-      if dst_info[ :wbuff ].empty? then
-        close_dst( dst )
-      else
-        @reads.delete( dst )
-      end
-    end
-
-    def close_read_src( src )
-      return if src.nil? || src.closed?
-      src_info = @src_infos[ src ]
-
-      if src_info[ :wbuff ].empty? then
-        close_src( src )
-      else
-        @reads.delete( src )
-
-        if src_info[ :tun ] then
-          data = [ Girl::Custom::SOURCE_CLOSED_READ, src_info[ :src_id ] ].join( Girl::Custom::SEP )
-          add_tcp_wbuff( encode_a_msg( data ) )
-        end
-      end
-    end
-
-    def close_read_tun( tun )
-      return if tun.nil? || tun.closed?
-      # puts "debug close read tun"
-      tun_info = @tun_infos[ tun ]
-
-      if tun_info[ :wbuff ].empty? then
-        close_tun( tun )
-      else
-        @reads.delete( tun )
-      end
+      dst_info = @dst_infos.delete( dst )
+      set_src_closing( dst_info[ :src ] ) if dst_info
+      dst_info
     end
 
     def close_sock( sock )
@@ -285,15 +247,20 @@ module Girl
     end
 
     def close_src( src )
-      return if src.nil? || src.closed?
+      return nil if src.nil? || src.closed?
       # puts "debug close src"
       close_sock( src )
       src_info = @src_infos.delete( src )
 
-      if src_info[ :tun ] then
-        data = [ Girl::Custom::SOURCE_CLOSED, src_info[ :src_id ] ].join( Girl::Custom::SEP )
-        add_tcp_wbuff( encode_a_msg( data ) )
+      if src_info then
+        if src_info[ :dst ] then
+          set_dst_closing( src_info[ :dst ] )
+        else
+          set_tun_closing( src_info[ :tun ] )
+        end
       end
+
+      src_info
     end
 
     def close_tcp( tcp )
@@ -305,10 +272,12 @@ module Girl
     end
 
     def close_tun( tun )
-      return if tun.nil? || tun.closed?
+      return nil if tun.nil? || tun.closed?
       # puts "debug close tun"
       close_sock( tun )
-      @tun_infos.delete( tun )
+      tun_info = @tun_infos.delete( tun )
+      set_src_closing( tun_info[ :src ] ) if tun_info
+      tun_info
     end
 
     def deal_ctlmsg( data )
@@ -363,7 +332,7 @@ module Girl
         ip: ip,           # 目的地ip
         wbuff: '',        # 写前
         connected: false, # 是否已连接
-        closing: false,   # 准备关闭写
+        closing: false,   # 是否准备关闭
         paused: false     # 是否已暂停
       }
 
@@ -525,6 +494,7 @@ module Girl
         part: '',       # 包长+没收全的缓存
         wbuff: data,    # 写前
         pong: false,    # 是否有回应
+        closing: false, # 是否准备关闭
         paused: false   # 是否已暂停
       }
 
@@ -634,8 +604,7 @@ module Girl
         data = dst.read_nonblock( CHUNK_SIZE )
       rescue Exception => e
         # puts "debug read dst #{ e.class }"
-        close_read_dst( dst )
-        set_src_closing( src )
+        close_dst( dst )
         return
       end
 
@@ -700,6 +669,26 @@ module Girl
           puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ] }"
           close_dns( dns )
         end
+      when 'check-expire' then
+        now = Time.new
+        socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_AFTER }.keys
+
+        socks.each do | sock |
+          case @roles[ sock ]
+          when :dns
+            dns_info = close_dns( sock )
+            puts "#{ Time.new } expire dns #{ dns_info[ :domain ] }" if dns_info
+          when :dst
+            dst_info = close_dst( sock )
+            puts "#{ Time.new } expire dst #{ dst_info[ :domain ] }" if dst_info
+          when :src
+            src_info = close_src( sock )
+            puts "#{ Time.new } expire src #{ src_info[ :destination_domain ] }" if src_info
+          when :tun
+            tun_info = close_tun( sock )
+            puts "#{ Time.new } expire tun #{ tun_info[ :domain ] }" if tun_info
+          end
+        end
       when 'memory-info' then
         msg2 = {
           sizes: {
@@ -745,8 +734,8 @@ module Girl
         tun: nil,                # :remote的场合，对应的tun
         pong: false,             # :remote的场合，连接已确认
         wbuff: '',               # 从dst/tun读到的流量
-        closing: false,          # 准备关闭写
-        paused: false            # 是否暂停
+        closing: false,          # 是否准备关闭
+        paused: false            # 是否已暂停
       }
 
       add_read( src, :src )
@@ -764,15 +753,7 @@ module Girl
         data = src.read_nonblock( CHUNK_SIZE )
       rescue Exception => e
         # puts "debug read src #{ e.class }"
-        close_read_src( src )
-        dst = src_info[ :dst ]
-
-        if dst then
-          set_dst_closing( dst )
-        else
-          set_tun_closing( src_info[ :tun ] )
-        end
-
+        close_src( src )
         return
       end
 
@@ -985,8 +966,7 @@ module Girl
         data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e
         # puts "debug read tun #{ e.class }"
-        close_read_tun( tun )
-        set_src_closing( src )
+        close_tun( tun )
         return
       end
 
@@ -1122,8 +1102,7 @@ module Girl
     def set_dst_closing( dst )
       return if dst.nil? || dst.closed?
       dst_info = @dst_infos[ dst ]
-      return if dst_info[ :closing ]
-      # puts "debug set dst closing write"
+      return if dst_info.nil? || dst_info[ :closing ]
       dst_info[ :closing ] = true
       add_write( dst )
     end
@@ -1131,7 +1110,7 @@ module Girl
     def set_src_closing( src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
-      return if src_info[ :closing ]
+      return if src_info.nil? || src_info[ :closing ]
       src_info[ :closing ] = true
       add_write( src )
     end
@@ -1139,7 +1118,7 @@ module Girl
     def set_tun_closing( tun )
       return if tun.nil? || tun.closed?
       tun_info = @tun_infos[ tun ]
-      return if tun_info[ :closing ]
+      return if tun_info.nil? || tun_info[ :closing ]
       tun_info[ :closing ] = true
       add_write( tun )
     end
@@ -1215,7 +1194,6 @@ module Girl
       rescue Exception => e
         # puts "debug write dst #{ e.class }"
         close_dst( dst )
-        close_read_src( src )
         return
       end
 
@@ -1260,13 +1238,6 @@ module Girl
       rescue Exception => e
         # puts "debug write src #{ e.class }"
         close_src( src )
-
-        if dst then
-          close_read_dst( dst )
-        elsif tun then
-          close_read_tun( tun )
-        end
-
         return
       end
 
@@ -1344,7 +1315,6 @@ module Girl
       rescue Exception => e
         # puts "debug write tun #{ e.class }"
         close_tun( tun )
-        close_read_src( src )
         return
       end
 

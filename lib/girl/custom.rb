@@ -4,9 +4,6 @@ module Girl
     A_NEW_SOURCE        = 'A'
     HELLO               = 'H'
     PAIRED              = 'P'
-    SOURCE_CLOSED       = 'Q'
-    SOURCE_CLOSED_READ  = 'R'
-    SOURCE_CLOSED_WRITE = 'S'
     SEP                 = ','
 
     def encode( data )
