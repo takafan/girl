@@ -979,6 +979,8 @@ module Girl
       tun_info = @tun_infos[ tun ]
       src = tun_info[ :src ]
 
+      return if src.closed?
+
       unless tun_info[ :pong ] then
         sep_idx = data.index( Girl::Custom::SEP )
 

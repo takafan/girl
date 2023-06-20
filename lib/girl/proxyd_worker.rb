@@ -452,10 +452,10 @@ module Girl
 
       set_update( dst )
       dst_info = @dst_infos[ dst ]
-      tun = dst_info[ :tun ]
       @im_infos[ dst_info[ :im ] ][ :in ] += data.bytesize
+      tun = dst_info[ :tun ]
 
-      if tun && !tun.closed? then
+      if tun then
         add_tun_wbuff( tun, encode( data ) )
       else
         # puts "debug add dst rbuff #{ data.bytesize }"
