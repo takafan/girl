@@ -47,9 +47,9 @@
 ```
 流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit ----- 中继（应对6） -----> 远端 -> 解析域名 -> 目的地
                                               \
-                                               `- not hit -> 解析域名 -> ip命中directs.txt？-- hit -----> 目的地
-                                                                                          \
-                                                                                           `- not hit -----> 远端 -> 目的地
+                                               `- no -> 解析域名 -> ip命中directs.txt？-- hit -----> 目的地
+                                                                                     \
+                                                                                      `- no -----> 远端 -> 目的地
 ```
 
 ## 使用
@@ -59,7 +59,7 @@
 1. 安装ruby，妹子：
 
 ```bash
-apt install ruby
+yum install ruby
 gem install girl
 ```
 
@@ -93,6 +93,7 @@ ruby proxyd.run.rb
 2. 安装妹子：
 
 ```bash
+gem sources --add https://repo.huaweicloud.com/repository/rubygems/ --remove https://rubygems.org/
 gem install girl
 ```
 
@@ -125,14 +126,14 @@ ruby proxy.run.rb
 }
 ```
 
-6. 获取注册在亚太的CN的ip段：
+6. girl.direct.txt
 
 ```bash
 curl -O http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
 cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > girl.direct.txt
 ```
 
-7. girl.remote.txt的格式：
+7. girl.remote.txt
 
 ```txt
 google.com
@@ -168,7 +169,7 @@ curl --verbose -x http://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.c
 curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
 ```
 
-妹子同时支持http和socks5代理。
+妹子同时支持http, http tunnel, 和socks5。
 
 ## 中继，通常是国内专线/vps：
 
@@ -213,6 +214,10 @@ android: 设置 > WLAN > 长按一个连接 > 修改网络 > 显示高级选项 
 ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线 > 自订 > 选择一个连接 > 一路默认到Proxy伺服器 > 使用 > 填近端的地址和端口 > 继续
 
 switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
+
+## 去除特征
+
+协议本身即是特征。但人人发明自己的协议，也就没有了特征。你可以覆盖Girl::Custom，更换协议带头字符，更换带头长度字符为随机长度，更换加解密方法，创造一个自己的协议。
 
 ## 连回家
 
