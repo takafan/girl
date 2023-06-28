@@ -88,7 +88,7 @@ ruby proxyd.run.rb
 
 ### 近端，可以是本机，树莓派，内网服务器，路由器:
 
-1. 以windows为例，下载和安装ruby：https://rubyinstaller.org/
+1. 以windows为例，下载和安装ruby：https://rubyinstaller.org/ 或者 https://rubyinstaller.cn/
 
 2. 安装妹子：
 
