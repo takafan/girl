@@ -11,7 +11,7 @@ module Girl
   CHECK_APP_EXPIRE_INTERVAL = 3600             # 检查app过期间隔
   CHECK_EXPIRE_INTERVAL     = 60               # 检查淘汰池过期间隔
   RESOLV_CACHE_EXPIRE       = 300              # dns查询结果缓存多久过期
-  PING_TIMEOUT              = 2                # tun建立连接后多久没有响应，超时
+  PING_TIMEOUT              = 5                # tun建立连接后多久没有响应，超时
   RENEW_CTL_INTERVAL        = 10               # p1心跳间隔
   ROOM_TITLE_LIMIT          = 16               # 房间名称字数
 

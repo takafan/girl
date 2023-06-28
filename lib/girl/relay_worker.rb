@@ -327,6 +327,8 @@ module Girl
             when :tun
               close_tun( sock )
               tun_count += 1
+            else
+              close_sock( sock )
             end
           end
 
@@ -575,24 +577,26 @@ module Girl
     end
 
     def set_update( sock )
+      @updates[ sock ] = Time.new
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
-          case @roles[ sock ]
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+          case @roles[ _sock ]
           when :relay_tcp
-            close_relay_tcp( sock )
+            close_relay_tcp( _sock )
           when :relay_tun
-            close_relay_tun( sock )
+            close_relay_tun( _sock )
           when :tcp
-            close_tcp( sock )
+            close_tcp( _sock )
           when :tun
-            close_tun( sock )
+            close_tun( _sock )
+          else
+            close_sock( _sock )
           end
         end
       end
-
-      @updates[ sock ] = Time.new
     end
 
     def write_relay_tcp( relay_tcp )
@@ -634,7 +638,6 @@ module Girl
       end
 
       relay_tun_info = @relay_tun_infos[ relay_tun ]
-      tun = relay_tun_info[ :tun ]
       data = relay_tun_info[ :wbuff ]
 
       if data.empty? then
@@ -658,6 +661,7 @@ module Girl
       set_update( relay_tun )
       data = data[ written..-1 ]
       relay_tun_info[ :wbuff ] = data
+      tun = relay_tun_info[ :tun ]
 
       if tun && !tun.closed? then
         tun_info = @tun_infos[ tun ]
@@ -709,7 +713,6 @@ module Girl
       end
 
       tun_info = @tun_infos[ tun ]
-      relay_tun = tun_info[ :relay_tun ]
       data = tun_info[ :wbuff ]
 
       if data.empty? then
@@ -733,6 +736,7 @@ module Girl
       set_update( tun )
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
+      relay_tun = tun_info[ :relay_tun ]
 
       if relay_tun && !relay_tun.closed? then
         relay_tun_info = @relay_tun_infos[ relay_tun ]

@@ -13,7 +13,7 @@ module Girl
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
 
-      @updates_limit = 1021                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, redir ] = 1021
+      @updates_limit = 1019                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, redir, girlc, tcp ] = 1019
       @eliminate_size = @updates_limit - 255     # 淘汰数，保留255个最近的，其余淘汰
       @update_roles = [ :dns, :dst, :src, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
@@ -432,17 +432,6 @@ module Girl
       puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
       data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
       add_tcp_wbuff( encode_a_msg( data ) )
-
-      Thread.new do
-        sleep EXPIRE_NEW
-
-        msg = {
-          message_type: 'check-src-paired',
-          src_id: src_id
-        }
-
-        send_msg_to_infod( msg )
-      end
     end
 
     def new_a_tcp
@@ -482,7 +471,7 @@ module Girl
 
     def new_a_tun( src_id, dst_id )
       src, src_info = @src_infos.find{ | _, info | ( info[ :src_id ] == src_id ) && info[ :dst_id ].nil? }
-      return if src.nil? || src.closed?
+      return unless src
       src_info[ :dst_id ] = dst_id
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
@@ -642,21 +631,26 @@ module Girl
       case message_type
       when 'check-src-paired' then
         src_id = msg[ :src_id ]
-        src, src_info = @src_infos.find{ | _, _info | ( _info[ :src_id ] == src_id ) && _info[ :dst_id ].nil? }
+        src, src_info = @src_infos.find{ | _, _info | ( _info[ :src_id ] == src_id ) }
 
         if src then
-          puts "#{ Time.new } src pair timeout #{ src_id } #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }"
-          close_src( src )
+          if [ :uncheck, :checking, :negotiation ].include?( src_info[ :proxy_type ] ) then
+            puts "#{ Time.new } src check timeout #{ src_id } #{ src_info[ :proxy_type ] } #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }"
+            close_src( src )
+          elsif ( src_info[ :proxy_type ] == :remote ) && src_info[ :dst_id ].nil? then
+            puts "#{ Time.new } src pair timeout #{ src_id } #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }"
+            close_src( src )
 
-          if @tcp then
-            tcp_info = @tcp_infos[ @tcp ]
+            if @tcp then
+              tcp_info = @tcp_infos[ @tcp ]
 
-            if tcp_info && ( Time.new - ( tcp_info[ :last_recv_at ] || tcp_info[ :created_at ] ) >= EXPIRE_TCP ) then
-              puts "#{ Time.new } tcp expired"
-              close_tcp( @tcp )
+              if tcp_info && ( Time.new - ( tcp_info[ :last_recv_at ] || tcp_info[ :created_at ] ) >= EXPIRE_TCP ) then
+                puts "#{ Time.new } tcp expired"
+                close_tcp( @tcp )
+              end
+            else
+              new_a_tcp
             end
-          else
-            new_a_tcp
           end
         end
       when 'check-dst-connected' then
@@ -701,6 +695,8 @@ module Girl
           when :tun
             tun_info = close_tun( sock )
             puts "#{ Time.new } expire tun #{ tun_info[ :domain ] }" if tun_info
+          else
+            close_sock( sock )
           end
         end
       when 'memory-info' then
@@ -738,7 +734,7 @@ module Girl
         src_id: src_id,          # src id
         addrinfo: addrinfo,      # addrinfo
         proxy_proto: :uncheck,   # :uncheck / :http / :socks5
-        proxy_type: :uncheck,    # :uncheck / :checking / :direct / :remote / :negotiation
+        proxy_type: :uncheck,    # :uncheck / :checking / :negotiation / :remote / :direct
         destination_domain: nil, # 目的地域名
         destination_port: nil,   # 目的地端口
         is_connect: true,        # 代理协议是http的场合，是否是CONNECT
@@ -753,6 +749,17 @@ module Girl
       }
 
       add_read( src, :src )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        msg = {
+          message_type: 'check-src-paired',
+          src_id: src_id
+        }
+
+        send_msg_to_infod( msg )
+      end
     end
 
     def read_src( src )
@@ -776,7 +783,7 @@ module Girl
       case proxy_type
       when :uncheck then
         if data[ 0, 7 ] == 'CONNECT' then
-          # puts "debug CONNECT"
+          # puts "debug http tunnel proxy"
           domain_port = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
 
           unless domain_port then
@@ -785,7 +792,7 @@ module Girl
             return
           end
         elsif data[ 0 ].unpack( 'C' ).first == 5 then
-          # puts "debug socks5 #{ data.inspect }"
+          # puts "debug socks5 proxy #{ data.inspect }"
 
           # https://tools.ietf.org/html/rfc1928
           #
@@ -814,7 +821,7 @@ module Girl
           src_info[ :proxy_type ] = :negotiation
           return
         else
-          # puts "debug not CONNECT #{ data.inspect }"
+          # puts "debug http proxy #{ data.inspect }"
           host_line = data.split( "\r\n" ).find{ | _line | _line[ 0, 6 ] == 'Host: ' }
 
           unless host_line then
@@ -1157,24 +1164,26 @@ module Girl
     end
 
     def set_update( sock )
+      @updates[ sock ] = Time.new
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
-          case @roles[ sock ]
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+          case @roles[ _sock ]
           when :dns
-            close_dns( sock )
+            close_dns( _sock )
           when :dst
-            close_dst( sock )
+            close_dst( _sock )
           when :src
-            close_src( sock )
+            close_src( _sock )
           when :tun
-            close_tun( sock )
+            close_tun( _sock )
+          else
+            close_sock( _sock )
           end
         end
       end
-
-      @updates[ sock ] = Time.new
     end
 
     def write_dst( dst )
@@ -1185,7 +1194,6 @@ module Girl
 
       dst_info = @dst_infos[ dst ]
       dst_info[ :connected ] = true
-      src = dst_info[ :src ]
       data = dst_info[ :wbuff ]
 
       if data.empty? then
@@ -1209,6 +1217,7 @@ module Girl
       set_update( dst )
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
+      src = dst_info[ :src ]
 
       if src && !src.closed? then
         src_info = @src_infos[ src ]
@@ -1228,8 +1237,6 @@ module Girl
       end
 
       src_info = @src_infos[ src ]
-      dst = src_info[ :dst ]
-      tun = src_info[ :tun ]
       data = src_info[ :wbuff ]
 
       if data.empty? then
@@ -1253,6 +1260,8 @@ module Girl
       set_update( src )
       data = data[ written..-1 ]
       src_info[ :wbuff ] = data
+      dst = src_info[ :dst ]
+      tun = src_info[ :tun ]
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]
@@ -1306,7 +1315,6 @@ module Girl
       end
 
       tun_info = @tun_infos[ tun ]
-      src = tun_info[ :src ]
       data = tun_info[ :wbuff ]
 
       if data.empty? then
@@ -1330,6 +1338,7 @@ module Girl
       set_update( tun )
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
+      src = tun_info[ :src ]
 
       if src && !src.closed? then
         src_info = @src_infos[ src ]

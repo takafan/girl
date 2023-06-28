@@ -268,6 +268,8 @@ module Girl
           when :p2
             p2_info = close_p2( sock )
             puts "#{ Time.new } expire p2 #{ p2_info[ :im ] } #{ p2_info[ :addrinfo ].inspect }" if p2_info
+          else
+            close_sock( sock )
           end
         end
       when 'memory-info' then
@@ -521,20 +523,22 @@ module Girl
     end
 
     def set_update( sock )
+      @updates[ sock ] = Time.new
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
-          case @roles[ sock ]
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+          case @roles[ _sock ]
           when :p1
-            close_p1( sock )
+            close_p1( _sock )
           when :p2
-            close_p2( sock )
+            close_p2( _sock )
+          else
+            close_sock( _sock )
           end
         end
       end
-
-      @updates[ sock ] = Time.new
     end
 
     def write_p1( p1 )
@@ -544,7 +548,6 @@ module Girl
       end
 
       p1_info = @p1_infos[ p1 ]
-      p2 = p1_info[ :p2 ]
       data = p1_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -570,6 +573,7 @@ module Girl
       set_update( p1 )
       data = data[ written..-1 ]
       p1_info[ :wbuff ] = data
+      p2 = p1_info[ :p2 ]
 
       if p2 && !p2.closed? then
         p2_info = @p2_infos[ p2 ]
@@ -589,7 +593,6 @@ module Girl
       end
 
       p2_info = @p2_infos[ p2 ]
-      p1 = p2_info[ :p1 ]
       data = p2_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -615,6 +618,7 @@ module Girl
       set_update( p2 )
       data = data[ written..-1 ]
       p2_info[ :wbuff ] = data
+      p1 = p2_info[ :p1 ]
 
       if p1 && !p1.closed? then
         p1_info = @p1_infos[ p1 ]

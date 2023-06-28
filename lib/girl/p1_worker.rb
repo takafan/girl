@@ -348,6 +348,8 @@ module Girl
           when :p1
             p1_info = close_p1( sock )
             puts "#{ Time.new } expire p1" if p1_info
+          else
+            close_sock( sock )
           end
         end
       when 'renew-ctl' then
@@ -425,20 +427,22 @@ module Girl
     end
 
     def set_update( sock )
+      @updates[ sock ] = Time.new
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
-          case @roles[ sock ]
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+          case @roles[ _sock ]
           when :app
-            close_app( sock )
+            close_app( _sock )
           when :p1
-            close_p1( sock )
+            close_p1( _sock )
+          else
+            close_sock( _sock )
           end
         end
       end
-
-      @updates[ sock ] = Time.new
     end
 
     def write_app( app )
@@ -448,7 +452,6 @@ module Girl
       end
 
       app_info = @app_infos[ app ]
-      p1 = app_info[ :p1 ]
       data = app_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -474,6 +477,7 @@ module Girl
       set_update( app )
       data = data[ written..-1 ]
       app_info[ :wbuff ] = data
+      p1 = app_info[ :p1 ]
 
       if p1 && !p1.closed? then
         p1_info = @p1_infos[ p1 ]

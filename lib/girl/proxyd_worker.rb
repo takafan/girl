@@ -525,6 +525,8 @@ module Girl
             when :tun
               close_tun( sock )
               tun_count += 1
+            else
+              close_sock( sock )
             end
           end
 
@@ -864,24 +866,26 @@ module Girl
     end
 
     def set_update( sock )
+      @updates[ sock ] = Time.new
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | sock, _ | sock }[ 0, @eliminate_size ].each do | sock |
-          case @roles[ sock ]
+        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+          case @roles[ _sock ]
           when :dns
-            close_dns( sock )
+            close_dns( _sock )
           when :dst
-            close_dst( sock )
+            close_dst( _sock )
           when :tcp
-            close_tcp( sock )
+            close_tcp( _sock )
           when :tun
-            close_tun( sock )
+            close_tun( _sock )
+          else
+            close_sock( _sock )
           end
         end
       end
-
-      @updates[ sock ] = Time.new
     end
 
     def write_dst( dst )
@@ -892,7 +896,6 @@ module Girl
 
       dst_info = @dst_infos[ dst ]
       dst_info[ :connected ] = true
-      tun = dst_info[ :tun ]
       data = dst_info[ :wbuff ]
 
       if data.empty? then
@@ -917,6 +920,7 @@ module Girl
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
       @im_infos[ dst_info[ :im ] ][ :out ] += written
+      tun = dst_info[ :tun ]
 
       if tun && !tun.closed? then
         tun_info = @tun_infos[ tun ]
@@ -964,7 +968,6 @@ module Girl
       end
 
       tun_info = @tun_infos[ tun ]
-      dst = tun_info[ :dst ]
       data = tun_info[ :wbuff ]
 
       if data.empty? then
@@ -992,6 +995,8 @@ module Girl
       if tun_info[ :im ] then
         @im_infos[ tun_info[ :im ] ][ :out ] += written
       end
+
+      dst = tun_info[ :dst ]
 
       if dst && !dst.closed? then
         dst_info = @dst_infos[ dst ]
