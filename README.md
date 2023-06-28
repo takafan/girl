@@ -93,8 +93,8 @@ ruby proxyd.run.rb
 2. 安装妹子：
 
 ```bash
-gem sources --add https://repo.huaweicloud.com/repository/rubygems/ --remove https://rubygems.org/
-gem install girl
+gem sources --add https://mirrors.tuna.tsinghua.edu.cn/rubygems/ --remove https://rubygems.org/
+gem fetch girl && gem install girl --local
 ```
 
 3. 创建 proxy.run.rb：
