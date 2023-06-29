@@ -43,6 +43,11 @@ module Girl
       puts "girl relay #{ Girl::VERSION }"
       puts "relay #{ relay_proxyd_port } #{ relay_girl_port } to #{ proxyd_host } #{ proxyd_port } #{ girl_port }"
 
+      if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
+        Process.setrlimit( :NOFILE, 1024 )
+        puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+      end
+
       worker = Girl::RelayWorker.new( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
 
       Signal.trap( :TERM ) do

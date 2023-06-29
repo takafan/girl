@@ -12,11 +12,12 @@ module Girl
       @directs = directs
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
-      @updates_limit = 1018                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girlc, info, infod, redir, tcp ]
+      @updates_limit = 1014                      # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ girlc, info, infod, redir, tcp ]
       @update_roles = [ :dns, :dst, :src, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池
       @updates = {}                              # sock => updated_at
+      @eliminate_count = 0                       # 淘汰次数
       @roles = {}                                # sock =>  :dns / :dst / :infod / :redir / :src / :tcp /:tun
       @resolv_caches = {}                        # domain => [ ip, created_at ]
       @is_direct_caches = {}                     # ip => true / false
@@ -704,7 +705,9 @@ module Girl
             tun_infos: @tun_infos.size,
             dns_infos: @dns_infos.size,
             resolv_caches: @resolv_caches.size
-          }
+          },
+          updates_limit: @updates_limit,
+          eliminate_count: @eliminate_count
         }
 
         begin
@@ -1162,6 +1165,10 @@ module Girl
     def set_update( sock )
       @updates[ sock ] = Time.new
 
+      if @updates_limit - @updates.size <= 20 then
+        puts "updates #{ @updates.size }"
+      end
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
@@ -1179,6 +1186,8 @@ module Girl
             close_sock( _sock )
           end
         end
+
+        @eliminate_count += 1
       end
     end
 

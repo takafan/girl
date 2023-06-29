@@ -2,11 +2,12 @@ module Girl
   class MirrordWorker
 
     def initialize( mirrord_port, p2d_host, im_infos )
-      @updates_limit = 1011 - im_infos.size * 2 # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
+      @updates_limit = 1007 - im_infos.size * 2 # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
       @update_roles = [ :p1, :p2 ]              # 参与淘汰的角色
       @reads = []                               # 读池
       @writes = []                              # 写池
       @updates = {}                             # sock => updated_at
+      @eliminate_count = 0                      # 淘汰次数
       @roles = {}                               # :infod / :mirrord / :p1 / :p1d / :p2 / :p2d
       @room_infos = {}                          # im => { :mirrord :p1_addrinfo :updated_at :p1d :p2d :p2d_port :p1d_port }
       @p1d_infos = {}                           # p1d => { :im }
@@ -271,17 +272,25 @@ module Girl
           end
         end
       when 'memory-info' then
-        data2 = @room_infos.sort_by{ | _, _info | _info[ :p2d_port ] }.map do | im, info |
-          [
+        arr = []
+
+        @room_infos.sort_by{ | _, _info | _info[ :p2d_port ] }.each do | im, info |
+          arr << [
             info[ :updated_at ],
             info[ :p2d_port ],
             info[ :p1d_port ],
-            im + ' ' * ( ROOM_TITLE_LIMIT - im.size ),
-            info[ :p1_addrinfo ].ip_unpack.join( ':' )
-          ].join( ' ' )
-        end.join( "\n" )
+            im,
+            info[ :p1_addrinfo ].ip_unpack
+          ]
+        end
+
+        msg2 = {
+          room_infos: arr,
+          updates_limit: @updates_limit,
+          eliminate_count: @eliminate_count
+        }
   
-        send_data( infod, data2, addrinfo )
+        send_data( infod, JSON.generate( msg2 ), addrinfo )
       end
     end
 
@@ -523,6 +532,10 @@ module Girl
     def set_update( sock )
       @updates[ sock ] = Time.new
 
+      if @updates_limit - @updates.size <= 20 then
+        puts "updates #{ @updates.size }"
+      end
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
@@ -536,6 +549,8 @@ module Girl
             close_sock( _sock )
           end
         end
+
+        @eliminate_count += 1
       end
     end
 

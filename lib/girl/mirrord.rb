@@ -36,6 +36,11 @@ module Girl
       puts "mirrord #{ mirrord_port } p2d host #{ p2d_host }"
       puts "im infos #{ im_infos.inspect }"
 
+      if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
+        Process.setrlimit( :NOFILE, 1024 )
+        puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+      end
+
       worker = Girl::MirrordWorker.new( mirrord_port, p2d_host, im_infos )
 
       Signal.trap( :TERM ) do

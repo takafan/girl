@@ -7,11 +7,12 @@ module Girl
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @reset_traff_day = reset_traff_day
       @ims = ims
-      @updates_limit = 1018                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girl, info, infod, tcpd, tund ]
+      @updates_limit = 1014                      # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ girl, info, infod, tcpd, tund ]
       @update_roles = [ :dns, :dst, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池
       @updates = {}                              # sock => updated_at
+      @eliminate_count = 0                       # 淘汰次数
       @roles = {}                                # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
       @tcp_infos = {}                            # tcp => { :part :wbuff :im }
       @resolv_caches = {}                        # domain => [ ip, created_at ]
@@ -570,6 +571,8 @@ module Girl
             dns_infos: @dns_infos.size,
             resolv_caches: @resolv_caches.size
           },
+          updates_limit: @updates_limit,
+          eliminate_count: @eliminate_count,
           im_infos: arr
         }
 
@@ -865,6 +868,10 @@ module Girl
     def set_update( sock )
       @updates[ sock ] = Time.new
 
+      if @updates_limit - @updates.size <= 20 then
+        puts "updates #{ @updates.size }"
+      end
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
@@ -882,6 +889,8 @@ module Girl
             close_sock( _sock )
           end
         end
+
+        @eliminate_count += 1
       end
     end
 

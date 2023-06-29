@@ -60,6 +60,11 @@ module Girl
       puts "proxyd #{ proxyd_port } #{ girl_port } nameservers #{ nameservers.inspect } reset traff day #{ reset_traff_day }"
       puts "ims #{ ims.inspect }"
 
+      if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
+        Process.setrlimit( :NOFILE, 1024 )
+        puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+      end
+
       worker = Girl::ProxydWorker.new( proxyd_port, girl_port, nameservers, reset_traff_day, ims )
 
       Signal.trap( :TERM ) do

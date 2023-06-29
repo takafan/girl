@@ -74,6 +74,11 @@ module Girl
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
+      if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
+        Process.setrlimit( :NOFILE, 1024 )
+        puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+      end
+      
       worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, girl_port, nameservers, im, directs, remotes )
 
       Signal.trap( :TERM ) do

@@ -5,11 +5,12 @@ module Girl
     def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
-      @updates_limit = 1017                                  # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
+      @updates_limit = 1013                                  # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
       @update_roles = [ :relay_tcp, :relay_tun, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                            # 读池
       @writes = []                                           # 写池
       @updates = {}                                          # sock => updated_at
+      @eliminate_count = 0                                   # 淘汰次数
       @roles = {}                                            # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
       @relay_tcp_infos = {}                                  # relay_tcp => { :wbuff :closing }
       @relay_tun_infos = {}                                  # relay_tun => { :wbuff :closing :paused }
@@ -338,8 +339,10 @@ module Girl
             relay_tcp_infos: @relay_tcp_infos.size,
             relay_tun_infos: @relay_tun_infos.size,
             tcp_infos: @tcp_infos.size,
-            tun_infos: @tun_infos.size,
-          }
+            tun_infos: @tun_infos.size
+          },
+          updates_limit: @updates_limit,
+          eliminate_count: @eliminate_count
         }
 
         send_msg_to_client( msg2, addrinfo )
@@ -576,6 +579,10 @@ module Girl
     def set_update( sock )
       @updates[ sock ] = Time.new
 
+      if @updates_limit - @updates.size <= 20 then
+        puts "updates #{ @updates.size }"
+      end
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
@@ -593,6 +600,8 @@ module Girl
             close_sock( _sock )
           end
         end
+
+        @eliminate_count += 1
       end
     end
 

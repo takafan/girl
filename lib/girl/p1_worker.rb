@@ -2,11 +2,12 @@ module Girl
   class P1Worker
 
     def initialize( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
-      @updates_limit = 1020                   # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ ctl, info, infod ]
+      @updates_limit = 1016                   # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ ctl, info, infod ]
       @update_roles = [ :app, :p1 ]           # 参与淘汰的角色
       @reads = []                             # 读池
       @writes = []                            # 写池
       @updates = {}                           # sock => updated_at
+      @eliminate_count = 0                    # 淘汰次数
       @roles = {}                             # sock => :app / :ctl / :infod / :p1
       @app_infos = {}                         # app => { :p1 :wbuff :closing :paused }
       @p1_infos = {}                          # p1 => { :app :wbuff :closing :paused }
@@ -361,7 +362,9 @@ module Girl
             updates: @updates.size,
             p1_infos: @p1_infos.size,
             app_infos: @app_infos.size
-          }
+          },
+          updates_limit: @updates_limit,
+          eliminate_count: @eliminate_count
         }
 
         begin
@@ -427,6 +430,10 @@ module Girl
     def set_update( sock )
       @updates[ sock ] = Time.new
 
+      if @updates_limit - @updates.size <= 20 then
+        puts "updates #{ @updates.size }"
+      end
+
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
@@ -440,6 +447,8 @@ module Girl
             close_sock( _sock )
           end
         end
+
+        @eliminate_count += 1
       end
     end
 
