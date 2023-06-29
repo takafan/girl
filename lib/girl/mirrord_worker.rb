@@ -2,19 +2,17 @@ module Girl
   class MirrordWorker
 
     def initialize( mirrord_port, p2d_host, im_infos )
-      @updates_limit = 1023 - 11 - im_infos.size * 2 # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, mirrord * 10, p1d * im_infos.size, p2d * im_infos.size ]
-      @eliminate_size = @updates_limit - 255         # 淘汰数，保留255个最近的，其余淘汰
-      @update_roles = [ :p1, :p2 ]                   # 参与淘汰的角色
-      @reads = []
-      @writes = []
-
-      @updates = {}    # sock => updated_at
-      @roles = {}      # :infod / :mirrord / :p1 / :p1d / :p2 / :p2d
-      @room_infos = {} # im => { :mirrord :p1_addrinfo :updated_at :p1d :p2d :p2d_port :p1d_port }
-      @p1d_infos = {}  # p1d => { :im }
-      @p2d_infos = {}  # p2d => { :im }
-      @p1_infos = {}   # p1 => { :addrinfo :im :p2 :wbuff :closing :paused }
-      @p2_infos = {}   # p2 => { :addrinfo :im :p1 :rbuff :wbuff :closing :paused }
+      @updates_limit = 1011 - im_infos.size * 2 # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
+      @update_roles = [ :p1, :p2 ]              # 参与淘汰的角色
+      @reads = []                               # 读池
+      @writes = []                              # 写池
+      @updates = {}                             # sock => updated_at
+      @roles = {}                               # :infod / :mirrord / :p1 / :p1d / :p2 / :p2d
+      @room_infos = {}                          # im => { :mirrord :p1_addrinfo :updated_at :p1d :p2d :p2d_port :p1d_port }
+      @p1d_infos = {}                           # p1d => { :im }
+      @p2d_infos = {}                           # p2d => { :im }
+      @p1_infos = {}                            # p1 => { :addrinfo :im :p2 :wbuff :closing :paused }
+      @p2_infos = {}                            # p2 => { :addrinfo :im :p1 :rbuff :wbuff :closing :paused }
       @p2d_host = p2d_host
 
       new_mirrords( mirrord_port )
@@ -528,7 +526,7 @@ module Girl
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+        @updates.keys.each do | _sock |
           case @roles[ _sock ]
           when :p1
             close_p1( _sock )

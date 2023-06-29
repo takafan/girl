@@ -7,22 +7,19 @@ module Girl
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @reset_traff_day = reset_traff_day
       @ims = ims
-
-      @updates_limit = 1019                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girl, infod, tcpd, tund ] = 1019
-      @eliminate_size = @updates_limit - 255     # 淘汰数，保留255个最近的，其余淘汰
+      @updates_limit = 1018                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girl, info, infod, tcpd, tund ]
       @update_roles = [ :dns, :dst, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池
-      
-      @updates = {}       # sock => updated_at
-      @roles = {}         # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
-      @tcp_infos = {}     # tcp => { :part :wbuff :im }
-      @resolv_caches = {} # domain => [ ip, created_at ]
-      @dst_infos = {}     # dst => { :dst_id :im :domain :ip :rbuff :tun :src_id :connected :wbuff :closing :paused }
-      @tun_infos = {}     # tun => { :im :dst :domain :wbuff :closing :paused }
-      @dns_infos = {}     # dns => { :dns_id :im :src_id :domain :port :tcp }
-      @ips = {}           # im => ip
-      @im_infos = {}      # im => { :in, :out }
+      @updates = {}                              # sock => updated_at
+      @roles = {}                                # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
+      @tcp_infos = {}                            # tcp => { :part :wbuff :im }
+      @resolv_caches = {}                        # domain => [ ip, created_at ]
+      @dst_infos = {}                            # dst => { :dst_id :im :domain :ip :rbuff :tun :src_id :connected :wbuff :closing :paused }
+      @tun_infos = {}                            # tun => { :im :dst :domain :wbuff :closing :paused }
+      @dns_infos = {}                            # dns => { :dns_id :im :src_id :domain :port :tcp }
+      @ips = {}                                  # im => ip
+      @im_infos = {}                             # im => { :in, :out }
       
       new_a_tcpd( proxyd_port )
       new_a_infod( proxyd_port )
@@ -871,7 +868,7 @@ module Girl
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+        @updates.keys.each do | _sock |
           case @roles[ _sock ]
           when :dns
             close_dns( _sock )

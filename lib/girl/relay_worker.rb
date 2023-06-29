@@ -5,19 +5,16 @@ module Girl
     def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
-
-      @updates_limit = 1019                                  # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, relay_girl, relay_tcpd, relay_tund ] = 1019
-      @eliminate_size = @updates_limit - 255                 # 淘汰数，保留255个最近的，其余淘汰
+      @updates_limit = 1017                                  # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
       @update_roles = [ :relay_tcp, :relay_tun, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                            # 读池
       @writes = []                                           # 写池
-
-      @updates = {}         # sock => updated_at
-      @roles = {}           # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
-      @relay_tcp_infos = {} # relay_tcp => { :wbuff :closing }
-      @relay_tun_infos = {} # relay_tun => { :wbuff :closing :paused }
-      @tcp_infos = {}       # tcp => { :wbuff :closing }
-      @tun_infos = {}       # tun => { :wbuff :closing :paused }
+      @updates = {}                                          # sock => updated_at
+      @roles = {}                                            # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
+      @relay_tcp_infos = {}                                  # relay_tcp => { :wbuff :closing }
+      @relay_tun_infos = {}                                  # relay_tun => { :wbuff :closing :paused }
+      @tcp_infos = {}                                        # tcp => { :wbuff :closing }
+      @tun_infos = {}                                        # tun => { :wbuff :closing :paused }
 
       new_a_relay_tcpd( relay_proxyd_port )
       new_a_infod( relay_proxyd_port )
@@ -582,7 +579,7 @@ module Girl
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+        @updates.keys.each do | _sock |
           case @roles[ _sock ]
           when :relay_tcp
             close_relay_tcp( _sock )

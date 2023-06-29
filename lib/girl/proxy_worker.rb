@@ -12,23 +12,19 @@ module Girl
       @directs = directs
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
-
-      @updates_limit = 1019                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ infod, redir, girlc, tcp ] = 1019
-      @eliminate_size = @updates_limit - 255     # 淘汰数，保留255个最近的，其余淘汰
+      @updates_limit = 1018                      # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ girlc, info, infod, redir, tcp ]
       @update_roles = [ :dns, :dst, :src, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池
-
-      @updates = {}          # sock => updated_at
-      @roles = {}            # sock =>  :dns / :dst / :infod / :redir / :src / :tcp /:tun
-      @resolv_caches = {}    # domain => [ ip, created_at ]
-      @is_direct_caches = {} # ip => true / false
-      @tcp_infos = {}        # tcp => { :part :wbuff :created_at :last_recv_at }
-      @src_infos = {}        # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port
-                             #          :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused }
-      @dst_infos = {}        # dst => { :dst_id :src :domain :connected :wbuff :closing :paused }
-      @tun_infos = {}        # tun => { :tun_id :src :domain :pong :wbuff :closing :paused }
-      @dns_infos = {}        # dns => { :dns_id :domain :src }
+      @updates = {}                              # sock => updated_at
+      @roles = {}                                # sock =>  :dns / :dst / :infod / :redir / :src / :tcp /:tun
+      @resolv_caches = {}                        # domain => [ ip, created_at ]
+      @is_direct_caches = {}                     # ip => true / false
+      @tcp_infos = {}                            # tcp => { :part :wbuff :created_at :last_recv_at }
+      @src_infos = {}                            # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused }
+      @dst_infos = {}                            # dst => { :dst_id :src :domain :connected :wbuff :closing :paused }
+      @tun_infos = {}                            # tun => { :tun_id :src :domain :pong :wbuff :closing :paused }
+      @dns_infos = {}                            # dns => { :dns_id :domain :src }
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
@@ -1169,7 +1165,7 @@ module Girl
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+        @updates.keys.each do | _sock |
           case @roles[ _sock ]
           when :dns
             close_dns( _sock )

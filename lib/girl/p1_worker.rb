@@ -2,16 +2,14 @@ module Girl
   class P1Worker
 
     def initialize( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
-      @updates_limit = 1023 - 2               # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ ctl, infod ]
-      @eliminate_size = @updates_limit - 255  # 淘汰数，保留255个最近的，其余淘汰
+      @updates_limit = 1020                   # 应对 FD_SETSIZE (1024)，参与淘汰的更新池上限，1023 - [ ctl, info, infod ]
       @update_roles = [ :app, :p1 ]           # 参与淘汰的角色
-      @reads = []
-      @writes = []
-
-      @updates = {}   # sock => updated_at
-      @roles = {}     # sock => :app / :ctl / :infod / :p1
-      @app_infos = {} # app => { :p1 :wbuff :closing :paused }
-      @p1_infos = {}  # p1 => { :app :wbuff :closing :paused }
+      @reads = []                             # 读池
+      @writes = []                            # 写池
+      @updates = {}                           # sock => updated_at
+      @roles = {}                             # sock => :app / :ctl / :infod / :p1
+      @app_infos = {}                         # app => { :p1 :wbuff :closing :paused }
+      @p1_infos = {}                          # p1 => { :app :wbuff :closing :paused }
       @mirrord_host = mirrord_host
       @mirrord_port = mirrord_port
       @appd_addr = Socket.sockaddr_in( appd_port, appd_host )
@@ -432,7 +430,7 @@ module Girl
       if @updates.size >= @updates_limit then
         puts "#{ Time.new } eliminate updates"
 
-        @updates.sort_by{ | _, updated_at | updated_at }.map{ | _sock, _ | _sock }[ 0, @eliminate_size ].each do | _sock |
+        @updates.keys.each do | _sock |
           case @roles[ _sock ]
           when :app
             close_app( _sock )
