@@ -7,7 +7,7 @@ module Girl
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @reset_traff_day = reset_traff_day
       @ims = ims
-      @updates_limit = 1014                      # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ girl, info, infod, tcpd, tund ]
+      @updates_limit = 1014                      # 淘汰池上限，1019 - [ girl, info, infod, tcpd, tund ]
       @update_roles = [ :dns, :dst, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池
@@ -354,7 +354,7 @@ module Girl
     def new_a_girl( girl_port )
       girl_addr = Socket.sockaddr_in( girl_port, '0.0.0.0' )
       girl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      girl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      girl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       girl.bind( girl_addr )
       puts "#{ Time.new } girl bind on #{ girl_port }"
       add_read( girl, :girl )
@@ -363,7 +363,7 @@ module Girl
     def new_a_infod( infod_port )
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
@@ -376,9 +376,9 @@ module Girl
     def new_a_tcpd( tcpd_port )
       tcpd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       tcpd.bind( Socket.sockaddr_in( tcpd_port, '0.0.0.0' ) )
-      tcpd.listen( 127 )
+      tcpd.listen( BACKLOG )
       puts "#{ Time.new } tcpd listen on #{ tcpd_port }"
       add_read( tcpd, :tcpd )
     end
@@ -386,9 +386,9 @@ module Girl
     def new_a_tund( girl_port )
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+      tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       tund.bind( Socket.sockaddr_in( girl_port, '0.0.0.0' ) )
-      tund.listen( 127 )
+      tund.listen( BACKLOG )
       add_read( tund, :tund )
     end
 

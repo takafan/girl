@@ -44,7 +44,7 @@ module Girl
       puts "relay #{ relay_proxyd_port } #{ relay_girl_port } to #{ proxyd_host } #{ proxyd_port } #{ girl_port }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
-        Process.setrlimit( :NOFILE, 1024 )
+        Process.setrlimit( :NOFILE, RLIMIT )
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
 

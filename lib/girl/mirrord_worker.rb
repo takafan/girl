@@ -2,7 +2,7 @@ module Girl
   class MirrordWorker
 
     def initialize( mirrord_port, p2d_host, im_infos )
-      @updates_limit = 1007 - im_infos.size * 2 # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
+      @updates_limit = 1007 - im_infos.size * 2 # 淘汰池上限，1019 - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
       @update_roles = [ :p1, :p2 ]              # 参与淘汰的角色
       @reads = []                               # 读池
       @writes = []                              # 写池
@@ -198,11 +198,7 @@ module Girl
       infod_port = mirrord_port + 10
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
@@ -216,13 +212,9 @@ module Girl
       listener = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       listener.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       listener.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        listener.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      listener.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       listener.bind( Socket.sockaddr_in( port, host ) )
-      listener.listen( 127 )
+      listener.listen( BACKLOG )
       listener
     end
 
@@ -230,11 +222,7 @@ module Girl
       10.times do | i |
         mirrord_port = begin_port + i
         mirrord = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-
-        if RUBY_PLATFORM.include?( 'linux' ) then
-          mirrord.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-        end
-        
+        mirrord.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
         mirrord.bind( Socket.sockaddr_in( mirrord_port, '0.0.0.0' ) )
         puts "#{ Time.new } mirrord bind on #{ mirrord_port }"
         add_read( mirrord, :mirrord )

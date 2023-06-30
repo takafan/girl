@@ -37,7 +37,7 @@ module Girl
       puts "im infos #{ im_infos.inspect }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
-        Process.setrlimit( :NOFILE, 1024 )
+        Process.setrlimit( :NOFILE, RLIMIT )
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
 

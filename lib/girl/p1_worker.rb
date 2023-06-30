@@ -2,7 +2,7 @@ module Girl
   class P1Worker
 
     def initialize( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
-      @updates_limit = 1016                   # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ ctl, info, infod ]
+      @updates_limit = 1015                   # 淘汰池上限，1019 - 1 (pair) - [ ctl, info, infod ]
       @update_roles = [ :app, :p1 ]           # 参与淘汰的角色
       @reads = []                             # 读池
       @writes = []                            # 写池
@@ -202,11 +202,7 @@ module Girl
     def new_a_ctl
       ctl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       ctl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        ctl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      ctl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       mirrord_port = @mirrord_port + 10.times.to_a.sample
       mirrord_addr = Socket.sockaddr_in( mirrord_port, @mirrord_host )
 
@@ -223,11 +219,7 @@ module Girl
     def new_a_infod( infod_port )
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )

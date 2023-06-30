@@ -12,7 +12,7 @@ module Girl
       @directs = directs
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
-      @updates_limit = 1014                      # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ girlc, info, infod, redir, tcp ]
+      @updates_limit = 1014                      # 淘汰池上限，1019 - [ girlc, info, infod, redir, tcp ]
       @update_roles = [ :dns, :dst, :src, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池
@@ -387,11 +387,7 @@ module Girl
     def new_a_infod( infod_port )
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
@@ -405,13 +401,9 @@ module Girl
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
-      redir.listen( 127 )
+      redir.listen( BACKLOG )
       puts "#{ Time.new } redir listen on #{ redir_port }"
       add_read( redir, :redir )
       @redir_port = redir_port

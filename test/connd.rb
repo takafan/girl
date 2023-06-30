@@ -1,11 +1,32 @@
 require 'json'
 require 'socket'
 
-is_nonblock = ARGV[ 0 ] ? ( ARGV[ 0 ] == "true" ) : true
-puts "is_nonblock #{ is_nonblock }"
+=begin
+
+ulimit -n
+1024
+
+cat /proc/sys/net/ipv4/tcp_max_syn_backlog
+128
+
+cat /proc/sys/net/core/somaxconn
+4096
+
+cat /proc/sys/net/core/netdev_max_backlog
+1000
+
+ss -lt
+netstat -s | grep "SYNs to LISTEN"
+
+=end
+
+BACKLOG = 512
+RLIMIT = 1024
+
+puts "BACKLOG #{ BACKLOG } RLIMIT #{ RLIMIT }"
 
 if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
-  Process.setrlimit( :NOFILE, 2048 )
+  Process.setrlimit( :NOFILE, RLIMIT )
   puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
 end
 
@@ -21,26 +42,22 @@ server = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
 server.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
 server.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 server.bind( Socket.sockaddr_in( server_port, '0.0.0.0' ) )
-server.listen( 5 )
+server.listen( BACKLOG )
 reads << server
 roles[ server ] = :server
 rcount = 0
+ecount = 0
 
 loop do
-  # puts 'select'
-  rs, _ = IO.select( reads )
+  print " s#{ reads.size }"
+  rs, _, es = IO.select( reads )
 
   rs.each do | sock |
     role = roles[ sock ]
 
     case role
     when :server
-      if is_nonblock then
-        client, addrinfo = sock.accept_nonblock
-      else
-        client, addrinfo = sock.accept
-      end
-      
+      client, addrinfo = sock.accept_nonblock
       reads << client
       roles[ client ] = :client
       print " a#{ reads.size }"
@@ -50,14 +67,11 @@ loop do
         rcount += 1
         print " #{ rcount }"
 
-        # puts "read client #{ data.inspect }"
-        # data2 = "ok"
-        # puts "write #{ data2 }"
-        # sock.write_nonblock( data2 )
-        # sock.close
-        # reads.delete( sock )
+        data2 = "ok"
+        sock.write_nonblock( data2 )
       rescue Exception => e
-        puts "read client #{ e.class }"
+        ecount += 1
+        print " e#{ ecount }"
         sock.close
         reads.delete( sock )
         roles.delete( sock )
@@ -65,4 +79,10 @@ loop do
 
     end
   end
+
+  es.each do | sock |
+    puts " select error ??? "
+  end
+
+  break if reads.empty?
 end

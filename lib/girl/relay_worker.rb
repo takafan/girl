@@ -5,7 +5,7 @@ module Girl
     def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
-      @updates_limit = 1013                                  # 应对 FD_SETSIZE，参与淘汰的更新池上限，1019 - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
+      @updates_limit = 1012                                  # 淘汰池上限，1019 - 1 (pair) - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
       @update_roles = [ :relay_tcp, :relay_tun, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                            # 读池
       @writes = []                                           # 写池
@@ -235,11 +235,7 @@ module Girl
     def new_a_relay_girl( relay_girl_port )
       relay_girl_addr = Socket.sockaddr_in( relay_girl_port, '0.0.0.0' )
       relay_girl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        relay_girl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      relay_girl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       relay_girl.bind( relay_girl_addr )
       puts "#{ Time.new } relay girl bind on #{ relay_girl_port }"
       add_read( relay_girl, :relay_girl )
@@ -248,11 +244,7 @@ module Girl
     def new_a_infod( infod_port )
       infod_addr = Socket.sockaddr_in( infod_port, '127.0.0.1' )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
       puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
@@ -265,13 +257,9 @@ module Girl
     def new_a_relay_tcpd( relay_tcpd_port )
       relay_tcpd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relay_tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        relay_tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-
+      relay_tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       relay_tcpd.bind( Socket.sockaddr_in( relay_tcpd_port, '0.0.0.0' ) )
-      relay_tcpd.listen( 127 )
+      relay_tcpd.listen( BACKLOG )
       puts "#{ Time.new } relay tcpd listen on #{ relay_tcpd_port }"
       add_read( relay_tcpd, :relay_tcpd )
     end
@@ -279,13 +267,9 @@ module Girl
     def new_a_relay_tund( relay_girl_port )
       relay_tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relay_tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        relay_tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-      end
-      
+      relay_tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       relay_tund.bind( Socket.sockaddr_in( relay_girl_port, '0.0.0.0' ) )
-      relay_tund.listen( 127 )
+      relay_tund.listen( BACKLOG )
       puts "#{ Time.new } relay tund listen on #{ relay_girl_port }"
       add_read( relay_tund, :relay_tund )
     end

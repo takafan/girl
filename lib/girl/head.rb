@@ -1,8 +1,10 @@
 module Girl
+  BACKLOG                   = 512              # 听队列大小，满后掉SYN包
+  RLIMIT                    = 1024             # sock数上限，淘汰池要求RLIMIT不低于1024
   READ_SIZE                 = 1024 * 1024      # 一次读多少
   WBUFF_LIMIT               = 20 * 1024 * 1024 # 写前上限，超过上限暂停读
   RESUME_BELOW              = WBUFF_LIMIT / 2  # 降到多少以下恢复读
-  EXPIRE_NEW                = 7                # 多久没有建立通道，过期
+  EXPIRE_NEW                = 5                # 多久没有建立通道，过期
   EXPIRE_CONNECTING         = 5                # 连接中，多久没连上过期
   EXPIRE_APP_AFTER          = 86400            # app多久没有新流量，过期
   EXPIRE_TCP                = 60               # 多久没有收到控制流量，在A_NEW_SOURCE超时时过期tcp

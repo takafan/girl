@@ -18,8 +18,9 @@ module Girl
         conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
         proxyd_port = conf[ :proxyd_port ]
         girl_port = conf[ :girl_port ]
-        ims = conf[ :ims ]
+        nameserver = conf[ :nameserver ]
         reset_traff_day = conf[ :reset_traff_day ]
+        ims = conf[ :ims ]
       end
 
       unless proxyd_port then
@@ -30,15 +31,23 @@ module Girl
         girl_port = 8080
       end
 
-      text = IO.read( '/etc/resolv.conf' )
-      nameservers = []
+      if nameserver then
+        nameservers = nameserver.split( ' ' )
+      else
+        nameservers = []
+        resolv_path = '/etc/resolv.conf'
 
-      text.split( "\n" ).each do | line |
-        match_data = /^nameserver \d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}/.match( line )
+        if File.exist?( resolv_path ) then
+          text = IO.read( '/etc/resolv.conf' )
 
-        if match_data then
-          nameservers << match_data[ 0 ].split(' ')[ 1 ].strip
-          break if nameservers.size >= 3
+          text.split( "\n" ).each do | line |
+            match_data = /^nameserver \d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}/.match( line )
+    
+            if match_data then
+              nameservers << match_data[ 0 ].split(' ')[ 1 ].strip
+              break if nameservers.size >= 3
+            end
+          end
         end
       end
 
@@ -61,7 +70,7 @@ module Girl
       puts "ims #{ ims.inspect }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
-        Process.setrlimit( :NOFILE, 1024 )
+        Process.setrlimit( :NOFILE, RLIMIT )
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
 
