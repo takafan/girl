@@ -5,7 +5,7 @@ module Girl
     def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
-      @updates_limit = 1012                                  # 淘汰池上限，1019 - 1 (pair) - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
+      @updates_limit = 1008                                  # 淘汰池上限，1015(mac) - 1 (pair) - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
       @update_roles = [ :relay_tcp, :relay_tun, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                            # 读池
       @writes = []                                           # 写池

@@ -12,7 +12,7 @@ module Girl
       @directs = directs
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
-      @updates_limit = 1014                      # 淘汰池上限，1019 - [ girlc, info, infod, redir, tcp ]
+      @updates_limit = 1010                      # 淘汰池上限，1015(mac) - [ girlc, info, infod, redir, tcp ]
       @update_roles = [ :dns, :dst, :src, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池

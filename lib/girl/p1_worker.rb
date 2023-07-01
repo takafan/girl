@@ -2,7 +2,7 @@ module Girl
   class P1Worker
 
     def initialize( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
-      @updates_limit = 1015                   # 淘汰池上限，1019 - 1 (pair) - [ ctl, info, infod ]
+      @updates_limit = 1011                   # 淘汰池上限，1015(mac) - 1 (pair) - [ ctl, info, infod ]
       @update_roles = [ :app, :p1 ]           # 参与淘汰的角色
       @reads = []                             # 读池
       @writes = []                            # 写池

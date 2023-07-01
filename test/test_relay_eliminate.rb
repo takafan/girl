@@ -1,6 +1,11 @@
 require 'json'
 require 'socket'
 
+if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
+  Process.setrlimit( :NOFILE, 2048 )
+  puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+end
+
 config_path = File.expand_path( '../test.conf.json', __FILE__ )
 config = JSON.parse( IO.binread( config_path ), symbolize_names: true )
 puts config.inspect
@@ -16,7 +21,7 @@ ecount = 0
 girlc = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 girlc.sendmsg( im.reverse, 0, girl_addr )
 
-1018.times do | i |
+2000.times do | i |
   print " #{ i }"
   client = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
   client.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )

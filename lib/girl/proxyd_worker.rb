@@ -7,7 +7,7 @@ module Girl
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @reset_traff_day = reset_traff_day
       @ims = ims
-      @updates_limit = 1014                      # 淘汰池上限，1019 - [ girl, info, infod, tcpd, tund ]
+      @updates_limit = 1010                      # 淘汰池上限，1015(mac) - [ girl, info, infod, tcpd, tund ]
       @update_roles = [ :dns, :dst, :tcp, :tun ] # 参与淘汰的角色
       @reads = []                                # 读池
       @writes = []                               # 写池
