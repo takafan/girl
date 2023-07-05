@@ -47,18 +47,18 @@ module Girl
         im = 'office-pi'
       end
 
-      puts "girl p1 #{ Girl::VERSION }"
-      puts "mirrord #{ mirrord_host } #{ mirrord_port } appd #{ appd_host } #{ appd_port } im #{ im }"
+      # puts "girl p1 #{ Girl::VERSION }"
+      # puts "mirrord #{ mirrord_host } #{ mirrord_port } appd #{ appd_host } #{ appd_port } im #{ im }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
         Process.setrlimit( :NOFILE, RLIMIT )
-        puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+        # puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
 
       worker = Girl::P1Worker.new( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
 
       Signal.trap( :TERM ) do
-        puts 'exit'
+        # puts 'exit'
         worker.quit!
       end
 

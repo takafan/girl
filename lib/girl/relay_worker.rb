@@ -25,7 +25,7 @@ module Girl
     end
 
     def looping
-      puts "#{ Time.new } looping"
+      # puts "#{ Time.new } looping"
       loop_check_expire
 
       loop do
@@ -52,7 +52,7 @@ module Girl
           when :tun then
             read_tun( sock )
           else
-            puts "#{ Time.new } read unknown role #{ role }"
+            # puts "#{ Time.new } read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -70,13 +70,13 @@ module Girl
           when :tun then
             write_tun( sock )
           else
-            puts "#{ Time.new } write unknown role #{ role }"
+            # puts "#{ Time.new } write unknown role #{ role }"
             close_sock( sock )
           end
         end
       end
     rescue Interrupt => e
-      puts e.class
+      # puts e.class
       quit!
     end
 
@@ -122,7 +122,7 @@ module Girl
           tun_info = @tun_infos[ tun ]
 
           if tun_info then
-            puts "#{ Time.new } pause tun"
+            # puts "#{ Time.new } pause tun"
             @reads.delete( tun )
             tun_info[ :paused ] = true
           end
@@ -150,7 +150,7 @@ module Girl
           relay_tun_info = @relay_tun_infos[ relay_tun ]
 
           if relay_tun_info then
-            puts "#{ Time.new } pause relay tun"
+            # puts "#{ Time.new } pause relay tun"
             @reads.delete( relay_tun )
             relay_tun_info[ :paused ] = true
           end
@@ -237,7 +237,7 @@ module Girl
       relay_girl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       relay_girl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       relay_girl.bind( relay_girl_addr )
-      puts "#{ Time.new } relay girl bind on #{ relay_girl_port }"
+      # puts "#{ Time.new } relay girl bind on #{ relay_girl_port }"
       add_read( relay_girl, :relay_girl )
     end
 
@@ -246,7 +246,7 @@ module Girl
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
-      puts "#{ Time.new } infod bind on #{ infod_port }"
+      # puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
       info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       @infod_addr = infod_addr
@@ -260,7 +260,7 @@ module Girl
       relay_tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       relay_tcpd.bind( Socket.sockaddr_in( relay_tcpd_port, '0.0.0.0' ) )
       relay_tcpd.listen( BACKLOG )
-      puts "#{ Time.new } relay tcpd listen on #{ relay_tcpd_port }"
+      # puts "#{ Time.new } relay tcpd listen on #{ relay_tcpd_port }"
       add_read( relay_tcpd, :relay_tcpd )
     end
 
@@ -270,7 +270,7 @@ module Girl
       relay_tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       relay_tund.bind( Socket.sockaddr_in( relay_girl_port, '0.0.0.0' ) )
       relay_tund.listen( BACKLOG )
-      puts "#{ Time.new } relay tund listen on #{ relay_girl_port }"
+      # puts "#{ Time.new } relay tund listen on #{ relay_girl_port }"
       add_read( relay_tund, :relay_tund )
     end
 
@@ -314,7 +314,7 @@ module Girl
             end
           end
 
-          puts "#{ now } expire relay tcp #{ relay_tcp_count } relay tun #{ relay_tun_count } tcp #{ tcp_count } tun #{ tun_count }"
+          # puts "#{ now } expire relay tcp #{ relay_tcp_count } relay tun #{ relay_tun_count } tcp #{ tcp_count } tun #{ tun_count }"
         end
       when 'memory-info' then
         msg2 = {
@@ -657,7 +657,7 @@ module Girl
         tun_info = @tun_infos[ tun ]
 
         if tun_info[ :paused ] && ( relay_tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume tun"
+          # puts "#{ Time.new } resume tun"
           add_read( tun )
           tun_info[ :paused ] = false
         end
@@ -732,7 +732,7 @@ module Girl
         relay_tun_info = @relay_tun_infos[ relay_tun ]
 
         if relay_tun_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume relay tun"
+          # puts "#{ Time.new } resume relay tun"
           add_read( relay_tun )
           relay_tun_info[ :paused ] = false
         end

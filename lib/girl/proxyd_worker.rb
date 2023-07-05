@@ -57,7 +57,7 @@ module Girl
           when :tun then
             read_tun( sock )
           else
-            puts "#{ Time.new } read unknown role #{ role }"
+            # puts "#{ Time.new } read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -73,7 +73,7 @@ module Girl
           when :tun then
             write_tun( sock )
           else
-            puts "#{ Time.new } write unknown role #{ role }"
+            # puts "#{ Time.new } write unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -491,7 +491,7 @@ module Girl
         dst, dst_info = @dst_infos.find{ | _, _info | ( _info[ :dst_id ] == dst_id ) && !_info[ :connected ] }
 
         if dst then
-          puts "#{ Time.new } dst connect timeout #{ dst_info[ :dst_id ] } #{ dst_info[ :domain ] }"
+          puts "#{ Time.new } dst connect timeout #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ] }"
           close_dst( dst )
         end
       when 'check-dns-closed' then
@@ -528,7 +528,7 @@ module Girl
             end
           end
 
-          puts "#{ now } expire dns #{ dns_count } dst #{ dst_count } tcp #{ tcp_count } tun #{ tun_count }"
+          # puts "debug expire dns #{ dns_count } dst #{ dst_count } tcp #{ tcp_count } tun #{ tun_count }"
         end
       when 'check-tcp-im' then
         tcp_id = msg[ :tcp_id ]

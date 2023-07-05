@@ -21,7 +21,7 @@ module Girl
     end
 
     def looping
-      puts "#{ Time.new } looping"
+      # puts "#{ Time.new } looping"
       loop_renew_ctl
       loop_check_expire
 
@@ -41,7 +41,7 @@ module Girl
           when :p1 then
             read_p1( sock )
           else
-            puts "#{ Time.new } read unknown role #{ role }"
+            # puts "#{ Time.new } read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -55,13 +55,13 @@ module Girl
           when :p1 then
             write_p1( sock )
           else
-            puts "#{ Time.new } write unknown role #{ role }"
+            # puts "#{ Time.new } write unknown role #{ role }"
             close_sock( sock )
           end
         end
       end
     rescue Interrupt => e
-      puts e.class
+      # puts e.class
       quit!
     end
 
@@ -85,7 +85,7 @@ module Girl
           p1_info = @p1_infos[ p1 ]
 
           if p1_info then
-            puts "#{ Time.new } pause p1"
+            # puts "#{ Time.new } pause p1"
             @reads.delete( p1 )
             p1_info[ :paused ] = true
           end
@@ -106,7 +106,7 @@ module Girl
           app_info = @app_infos[ app ]
 
           if app_info then
-            puts "#{ Time.new } pause app"
+            # puts "#{ Time.new } pause app"
             @reads.delete( app )
             app_info[ :paused ] = true
           end
@@ -141,7 +141,7 @@ module Girl
 
     def close_app( app )
       return if app.nil? || app.closed?
-      puts "#{ Time.new } close app"
+      # puts "#{ Time.new } close app"
       close_sock( app )
       app_info = @app_infos.delete( app )
       set_p1_closing( app_info[ :p1 ] ) if app_info
@@ -155,7 +155,7 @@ module Girl
 
     def close_p1( p1 )
       return if p1.nil? || p1.closed?
-      puts "#{ Time.new } close p1"
+      # puts "#{ Time.new } close p1"
       close_sock( p1 )
       p1_info = @p1_infos.delete( p1 )
       set_app_closing( p1_info[ :app ] ) if p1_info
@@ -212,7 +212,7 @@ module Girl
       }
 
       add_read( ctl, :ctl )
-      puts "#{ Time.new } send im #{ @im.inspect } #{ @mirrord_host } #{ mirrord_port }"
+      # puts "#{ Time.new } send im #{ @im.inspect } #{ @mirrord_host } #{ mirrord_port }"
       send_im
     end
 
@@ -221,7 +221,7 @@ module Girl
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
-      puts "#{ Time.new } infod bind on #{ infod_port }"
+      # puts "#{ Time.new } infod bind on #{ infod_port }"
       add_read( infod, :infod )
       info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       @infod_addr = infod_addr
@@ -272,7 +272,7 @@ module Girl
       add_read( app, :app )
       add_read( p1, :p1 )
       add_write( p1 )
-      puts "#{ Time.new } new app and p1 #{ p1d_port } #{ p2_id } app infos #{ @app_infos.size } p1 infos #{ @p1_infos.size }"
+      # puts "#{ Time.new } new app and p1 #{ p1d_port } #{ p2_id } app infos #{ @app_infos.size } p1 infos #{ @p1_infos.size }"
     end
 
     def read_app( app )
@@ -284,7 +284,7 @@ module Girl
       begin
         data = app.read_nonblock( READ_SIZE )
       rescue Exception => e
-        puts "#{ Time.new } read app #{ e.class }"
+        # puts "#{ Time.new } read app #{ e.class }"
         close_app( app )
         return
       end
@@ -335,10 +335,10 @@ module Girl
           case @roles[ sock ]
           when :app
             app_info = close_app( sock )
-            puts "#{ Time.new } expire app" if app_info
+            # puts "#{ Time.new } expire app" if app_info
           when :p1
             p1_info = close_p1( sock )
-            puts "#{ Time.new } expire p1" if p1_info
+            # puts "#{ Time.new } expire p1" if p1_info
           else
             close_sock( sock )
           end
@@ -376,7 +376,7 @@ module Girl
       begin
         data = p1.read_nonblock( READ_SIZE )
       rescue Exception => e
-        puts "#{ Time.new } read p1 #{ e.class }"
+        # puts "#{ Time.new } read p1 #{ e.class }"
         close_p1( p1 )
         return
       end
@@ -468,7 +468,7 @@ module Girl
       begin
         written = app.write_nonblock( data )
       rescue Exception => e
-        puts "#{ Time.new } write app #{ e.class }"
+        # puts "#{ Time.new } write app #{ e.class }"
         close_app( app )
         return
       end
@@ -482,7 +482,7 @@ module Girl
         p1_info = @p1_infos[ p1 ]
 
         if p1_info[ :paused ] && ( app_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume p1"
+          # puts "#{ Time.new } resume p1"
           add_read( p1 )
           p1_info[ :paused ] = false
         end
@@ -514,7 +514,7 @@ module Girl
       begin
         written = p1.write_nonblock( data )
       rescue Exception => e
-        puts "#{ Time.new } write p1 #{ e.class }"
+        # puts "#{ Time.new } write p1 #{ e.class }"
         close_p1( p1 )
         return
       end
@@ -527,7 +527,7 @@ module Girl
         app_info = @app_infos[ app ]
 
         if app_info[ :paused ] && ( p1_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "#{ Time.new } resume app"
+          # puts "#{ Time.new } resume app"
           add_read( app )
           app_info[ :paused ] = false
         end
