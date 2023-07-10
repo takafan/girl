@@ -16,8 +16,8 @@ module Girl
       @roles = {}                                # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
       @tcp_infos = {}                            # tcp => { :part :wbuff :im }
       @resolv_caches = {}                        # domain => [ ip, created_at ]
-      @dst_infos = {}                            # dst => { :dst_id :im :domain :ip :rbuff :tun :src_id :connected :wbuff :closing :paused }
-      @tun_infos = {}                            # tun => { :im :dst :domain :wbuff :closing :paused }
+      @dst_infos = {}                            # dst => { :dst_id :im :domain :ip :rbuff :tun :src_id :connected :wbuff :closing :paused :left }
+      @tun_infos = {}                            # tun => { :im :dst :domain :part :wbuff :closing :paused }
       @dns_infos = {}                            # dns => { :dns_id :im :src_id :domain :port :tcp }
       @ips = {}                                  # im => ip
       @im_infos = {}                             # im => { :in, :out }
@@ -328,7 +328,8 @@ module Girl
         connected: false, # 是否已连接
         wbuff: '',        # 写前
         closing: false,   # 是否准备关闭
-        paused: false     # 是否已暂停
+        paused: false,    # 是否已暂停
+        left: 0           # 剩余加密波数
       }
 
       @dst_infos[ dst ] = dst_info
@@ -454,7 +455,13 @@ module Girl
       tun = dst_info[ :tun ]
 
       if tun then
-        add_tun_wbuff( tun, encode( data ) )
+        if dst_info[ :left ] > 0 then
+          data = encode( data )
+          dst_info[ :left ] -= 1
+          data << Girl::Custom::TERM if dst_info[ :left ] == 0
+        end
+
+        add_tun_wbuff( tun, data )
       else
         # puts "debug add dst rbuff #{ data.bytesize }"
         add_dst_rbuff( dst, data )
@@ -698,10 +705,13 @@ module Girl
         end
       end
 
-      data = "#{ tun_info[ :part ] }#{ data }"
-      data, part = decode( data )
+      if tun_info[ :part ] != Girl::Custom::TERM then
+        data = "#{ tun_info[ :part ] }#{ data }"
+        data, part = decode( data )
+        tun_info[ :part ] = part
+      end
+
       add_dst_wbuff( dst, data )
-      tun_info[ :part ] = part
     end
 
     def read_tund( tund )
@@ -838,12 +848,19 @@ module Girl
 
     def set_dst_info_tun( dst_info, tun )
       dst_info[ :tun ] = tun
+      dst_info[ :left ] = Girl::Custom::WAVE
       src_id = dst_info[ :src_id ]
       # puts "debug add pong #{ src_id }"
       data = "#{ src_id }#{ Girl::Custom::SEP }"
 
       unless dst_info[ :rbuff ].empty? then
-        data << encode( dst_info[ :rbuff ] )
+        data = dst_info[ :rbuff ]
+
+        if dst_info[ :left ] > 0 then
+          data = encode( data )
+          dst_info[ :left ] -= 1
+          data << Girl::Custom::TERM if dst_info[ :left ] == 0
+        end
       end
 
       add_tun_wbuff( tun, data )

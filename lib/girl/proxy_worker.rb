@@ -22,9 +22,9 @@ module Girl
       @resolv_caches = {}                        # domain => [ ip, created_at ]
       @is_direct_caches = {}                     # ip => true / false
       @tcp_infos = {}                            # tcp => { :part :wbuff :created_at :last_recv_at }
-      @src_infos = {}                            # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused }
+      @src_infos = {}                            # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused :left }
       @dst_infos = {}                            # dst => { :dst_id :src :domain :connected :wbuff :closing :paused }
-      @tun_infos = {}                            # tun => { :tun_id :src :domain :pong :wbuff :closing :paused }
+      @tun_infos = {}                            # tun => { :tun_id :src :domain :pong :part :wbuff :closing :paused }
       @dns_infos = {}                            # dns => { :dns_id :domain :src }
       
       new_a_redir( redir_port )
@@ -484,8 +484,8 @@ module Girl
         tun_id: tun_id, # tun id
         src: src,       # 对应src
         domain: domain, # 目的地
-        part: '',       # 包长+没收全的缓存
         pong: false,    # 是否有回应
+        part: '',       # 包长+没收全的缓存，或者解密完成符
         wbuff: data,    # 写前
         closing: false, # 是否准备关闭
         paused: false   # 是否已暂停
@@ -733,10 +733,10 @@ module Girl
         dst: nil,                # :direct的场合，对应的dst
         dst_id: nil,             # :remote的场合，远端dst id
         tun: nil,                # :remote的场合，对应的tun
-        pong: false,             # :remote的场合，连接已确认
         wbuff: '',               # 从dst/tun读到的流量
         closing: false,          # 是否准备关闭
-        paused: false            # 是否已暂停
+        paused: false,           # 是否已暂停
+        left: 0                  # 剩余加密波数
       }
 
       add_read( src, :src )
@@ -919,7 +919,13 @@ module Girl
         tun = src_info[ :tun ]
 
         if tun then
-          add_tun_wbuff( tun, encode( data ) )
+          if src_info[ :left ] > 0 then
+            data = encode( data )
+            src_info[ :left ] -= 1
+            data << Girl::Custom::TERM if src_info[ :left ] == 0
+          end
+
+          add_tun_wbuff( tun, data )
         else
           # puts "debug add src rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
@@ -998,7 +1004,7 @@ module Girl
         end
 
         # puts "debug got pong #{ data.bytesize }"
-        set_tun_info_pong( tun, src )
+        set_pong( tun, src )
         data = data[ ( sep_idx + 1 )..-1 ]
 
         if data.empty? then
@@ -1006,10 +1012,13 @@ module Girl
         end
       end
 
-      data = "#{ tun_info[ :part ] }#{ data }"
-      data, part = decode( data )
+      if tun_info[ :part ] != Girl::Custom::TERM then
+        data = "#{ tun_info[ :part ] }#{ data }"
+        data, part = decode( data )
+        tun_info[ :part ] = part
+      end
+      
       add_src_wbuff( src, data )
-      tun_info[ :part ] = part
     end
 
     def resolve_domain( domain, src )
@@ -1114,6 +1123,34 @@ module Girl
       add_write( dst )
     end
 
+    def set_pong( tun, src )
+      tun_info = @tun_infos[ tun ]
+      tun_info[ :pong ] = true
+      src_info = @src_infos[ src ]
+      src_info[ :left ] = Girl::Custom::WAVE
+
+      if src_info[ :proxy_proto ] == :http then
+        if src_info[ :is_connect ] then
+          # puts "debug add src wbuff http ok"
+          add_src_wbuff( src, HTTP_OK )
+        end
+      elsif src_info[ :proxy_proto ] == :socks5 then
+        add_socks5_conn_reply( src )
+      end
+      
+      unless src_info[ :rbuff ].empty? then
+        data = src_info[ :rbuff ]
+
+        if src_info[ :left ] > 0 then
+          data = encode( data )
+          src_info[ :left ] -= 1
+          data << Girl::Custom::TERM if src_info[ :left ] == 0
+        end
+
+        add_tun_wbuff( tun, data )
+      end
+    end
+
     def set_src_closing( src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
@@ -1128,30 +1165,6 @@ module Girl
       return if tun_info.nil? || tun_info[ :closing ]
       tun_info[ :closing ] = true
       add_write( tun )
-    end
-
-    def set_tun_info_pong( tun, src )
-      tun_info = @tun_infos[ tun ]
-      tun_info[ :pong ] = true
-      src_info = @src_infos[ src ]
-
-      unless src_info[ :pong ] then
-        if src_info[ :proxy_proto ] == :http then
-          if src_info[ :is_connect ] then
-            # puts "debug add src wbuff http ok"
-            add_src_wbuff( src, HTTP_OK )
-          end
-        elsif src_info[ :proxy_proto ] == :socks5 then
-          add_socks5_conn_reply( src )
-        end
-
-        src_info[ :pong ] = true
-      end
-
-      unless src_info[ :rbuff ].empty? then
-        data = encode( src_info[ :rbuff ] )
-        add_tun_wbuff( tun, data )
-      end
     end
 
     def set_update( sock )

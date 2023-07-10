@@ -1,22 +1,26 @@
 module Girl
   module Custom
 
-    A_NEW_SOURCE        = 'A'
-    HELLO               = 'H'
-    PAIRED              = 'P'
-    SEP                 = ','
+    A_NEW_SOURCE = 'A'
+    CHUNK_SIZE   = 255
+    HELLO        = 'H'
+    OFFSET       = 0
+    PAIRED       = 'P'
+    SEP          = ','
+    TERM         = [ 0 ].pack( 'C' )
+    WAVE         = 2
 
     def encode( data )
       buff = ''
       i = 0
 
       loop do
-        chunk = data[ i, 95 ]
+        chunk = data[ i, CHUNK_SIZE ]
         break if chunk.nil? || chunk.empty?
 
         chunk = chunk.reverse
         len = chunk.bytesize
-        packet = [ len + 31 ].pack( 'C' ) + chunk
+        packet = [ len + OFFSET ].pack( 'C' ) + chunk
         buff << packet
         i += len
       end
@@ -33,9 +37,15 @@ module Girl
         h = data[ i ]
         break unless h
 
-        len = h.unpack( 'C' ).first - 31
+        if h == TERM then
+          buff << data[ ( i + 1 )..-1 ] if data.bytesize > ( i + 1 )
+          part = TERM
+          break
+        end
 
-        if ( len <= 0 ) || ( len > 95 ) then
+        len = h.unpack( 'C' ).first - OFFSET
+
+        if ( len <= 0 ) || ( len > CHUNK_SIZE ) then
           puts "#{ Time.new } decode invalid len? #{ h.inspect }"
           break
         end
@@ -44,7 +54,7 @@ module Girl
         break unless chunk
 
         if chunk.bytesize < len then
-          part = [ len + 31 ].pack( 'C' ) + chunk
+          part = [ len + OFFSET ].pack( 'C' ) + chunk
           break
         end
 
@@ -59,12 +69,12 @@ module Girl
     def encode_a_msg( data )
       len = data.bytesize
 
-      if ( len == 0 ) || ( len > 224 ) then
+      if ( len == 0 ) || ( len > CHUNK_SIZE ) then
         puts "#{ Time.new } encode a msg invalid len? #{ data.inspect }"
         return ''
       end
 
-      [ len + 31 ].pack( 'C' ) + data.reverse
+      [ len + OFFSET ].pack( 'C' ) + data.reverse
     end
 
     def decode_to_msgs( data )
@@ -76,9 +86,9 @@ module Girl
         h = data[ i ]
         break unless h
 
-        len = h.unpack( 'C' ).first - 31
+        len = h.unpack( 'C' ).first - OFFSET
 
-        if len <= 0 then
+        if len <= 0 || ( len > CHUNK_SIZE ) then
           puts "#{ Time.new } decode to msgs invalid len? #{ h.inspect }"
           break
         end
@@ -87,7 +97,7 @@ module Girl
         break unless chunk
 
         if chunk.bytesize < len then
-          part = [ len + 31 ].pack( 'C' ) + chunk
+          part = [ len + OFFSET ].pack( 'C' ) + chunk
           break
         end
 
