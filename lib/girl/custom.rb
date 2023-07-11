@@ -11,6 +11,7 @@ module Girl
     WAVE         = 2
 
     def encode( data )
+      # puts "debug encode #{ data.inspect }"
       buff = ''
       i = 0
 
