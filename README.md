@@ -86,7 +86,7 @@ ruby proxyd.run.rb
 }
 ```
 
-### 近端，可以是本机，树莓派，内网服务器，路由器:
+### 近端，可以是本机，内网服务器，路由器，各种派:
 
 1. 以windows为例，下载和安装ruby：https://rubyinstaller.org/ 或者 https://rubyinstaller.cn/
 
@@ -291,5 +291,5 @@ ruby p1.run.rb
 5. 镜子端本地，ssh连p2影子端口：
 
 ```bash
-ssh -p2222 pi@localhost
+ssh -p2222 localhost
 ```
