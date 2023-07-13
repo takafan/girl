@@ -5,17 +5,17 @@ module Girl
     def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
-      @updates_limit = 1008                                  # 淘汰池上限，1015(mac) - 1 (pair) - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
       @update_roles = [ :relay_tcp, :relay_tun, :tcp, :tun ] # 参与淘汰的角色
-      @reads = []                                            # 读池
-      @writes = []                                           # 写池
-      @updates = {}                                          # sock => updated_at
-      @eliminate_count = 0                                   # 淘汰次数
-      @roles = {}                                            # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
-      @relay_tcp_infos = {}                                  # relay_tcp => { :wbuff :closing }
-      @relay_tun_infos = {}                                  # relay_tun => { :wbuff :closing :paused }
-      @tcp_infos = {}                                        # tcp => { :wbuff :closing }
-      @tun_infos = {}                                        # tun => { :wbuff :closing :paused }
+      @updates_limit = 1008 # 淘汰池上限，1015(mac) - 1 (pair) - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
+      @reads = []           # 读池
+      @writes = []          # 写池
+      @updates = {}         # sock => updated_at
+      @eliminate_count = 0  # 淘汰次数
+      @roles = {}           # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
+      @relay_tcp_infos = {} # relay_tcp => { :wbuff :closing }
+      @relay_tun_infos = {} # relay_tun => { :wbuff :closing :paused }
+      @tcp_infos = {}       # tcp => { :wbuff :closing }
+      @tun_infos = {}       # tun => { :wbuff :closing :paused }
 
       new_a_relay_tcpd( relay_proxyd_port )
       new_a_infod( relay_proxyd_port )

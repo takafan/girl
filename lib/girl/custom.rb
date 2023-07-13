@@ -6,6 +6,8 @@ module Girl
     HELLO        = 'H'
     OFFSET       = 0
     PAIRED       = 'P'
+    QUERY        = 'Q'
+    RESPONSE     = 'R'
     SEP          = ','
     TERM         = [ 0 ].pack( 'C' )
     WAVE         = 2

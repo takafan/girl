@@ -2,20 +2,20 @@ module Girl
   class P1Worker
 
     def initialize( mirrord_host, mirrord_port, infod_port, appd_host, appd_port, im )
-      @updates_limit = 1011                   # 淘汰池上限，1015(mac) - 1 (pair) - [ ctl, info, infod ]
-      @update_roles = [ :app, :p1 ]           # 参与淘汰的角色
-      @reads = []                             # 读池
-      @writes = []                            # 写池
-      @updates = {}                           # sock => updated_at
-      @eliminate_count = 0                    # 淘汰次数
-      @roles = {}                             # sock => :app / :ctl / :infod / :p1
-      @app_infos = {}                         # app => { :p1 :wbuff :closing :paused }
-      @p1_infos = {}                          # p1 => { :app :wbuff :closing :paused }
       @mirrord_host = mirrord_host
       @mirrord_port = mirrord_port
       @appd_addr = Socket.sockaddr_in( appd_port, appd_host )
       @im = im
-
+      @update_roles = [ :app, :p1 ] # 参与淘汰的角色
+      @updates_limit = 1011         # 淘汰池上限，1015(mac) - 1 (pair) - [ ctl, info, infod ]
+      @reads = []                   # 读池
+      @writes = []                  # 写池
+      @updates = {}                 # sock => updated_at
+      @eliminate_count = 0          # 淘汰次数
+      @roles = {}                   # sock => :app / :ctl / :infod / :p1
+      @app_infos = {}               # app => { :p1 :wbuff :closing :paused }
+      @p1_infos = {}                # p1 => { :app :wbuff :closing :paused }
+      
       new_a_ctl
       new_a_infod( infod_port )
     end

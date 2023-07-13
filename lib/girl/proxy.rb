@@ -26,6 +26,8 @@ module Girl
       proxyd_host = conf[ :proxyd_host ]
       proxyd_port = conf[ :proxyd_port ]
       girl_port = conf[ :girl_port ]
+      rsvd_port = conf[ :rsvd_port ]
+      tspd_port = conf[ :tspd_port ]
       nameserver = conf[ :nameserver ]
       im = conf[ :im ]
       direct_path = conf[ :direct_path ]
@@ -43,6 +45,14 @@ module Girl
 
       unless girl_port then
         girl_port = 8080
+      end
+
+      unless rsvd_port then
+        rsvd_port = 7777
+      end
+
+      unless tspd_port then
+        tspd_port = 8888
       end
 
       unless nameserver then
@@ -70,7 +80,7 @@ module Girl
       end
 
       puts "girl proxy #{ Girl::VERSION }"
-      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } nameservers #{ nameservers.inspect } im #{ im }"
+      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } #{ rsvd_port } #{ tspd_port } nameservers #{ nameservers.inspect } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
@@ -79,7 +89,7 @@ module Girl
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
       
-      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, girl_port, nameservers, im, directs, remotes )
+      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, girl_port, rsvd_port, tspd_port, nameservers, im, directs, remotes )
 
       Signal.trap( :TERM ) do
         puts 'exit'

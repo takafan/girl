@@ -3,7 +3,7 @@ module Girl
     include Custom
     include Dns
 
-    def initialize( redir_port, proxyd_host, proxyd_port, girl_port, nameservers, im, directs, remotes )
+    def initialize( redir_port, proxyd_host, proxyd_port, girl_port, rsvd_port, tspd_port, nameservers, im, directs, remotes )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
@@ -12,23 +12,26 @@ module Girl
       @directs = directs
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
-      @updates_limit = 1010                      # 淘汰池上限，1015(mac) - [ girlc, info, infod, redir, tcp ]
-      @update_roles = [ :dns, :dst, :src, :tun ] # 参与淘汰的角色
-      @reads = []                                # 读池
-      @writes = []                               # 写池
-      @updates = {}                              # sock => updated_at
-      @eliminate_count = 0                       # 淘汰次数
-      @roles = {}                                # sock =>  :dns / :dst / :infod / :redir / :src / :tcp /:tun
-      @resolv_caches = {}                        # domain => [ ip, created_at ]
-      @is_direct_caches = {}                     # ip => true / false
-      @tcp_infos = {}                            # tcp => { :part :wbuff :created_at :last_recv_at }
-      @src_infos = {}                            # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused :left }
-      @dst_infos = {}                            # dst => { :dst_id :src :domain :connected :wbuff :closing :paused }
-      @tun_infos = {}                            # tun => { :tun_id :src :domain :pong :part :wbuff :closing :paused }
-      @dns_infos = {}                            # dns => { :dns_id :domain :src }
+      @update_roles = [ :dns, :dst, :src, :tun, :rsv, :tsp ] # 参与淘汰的角色
+      @updates_limit = 1009  # 淘汰池上限，1014(mac) - [ girlc, info, infod, redir, rsvd, tcp ]
+      @reads = []            # 读池
+      @writes = []           # 写池
+      @updates = {}          # sock => updated_at
+      @eliminate_count = 0   # 淘汰次数
+      @roles = {}            # sock =>  :dns / :dst / :infod / :redir / :src / :tcp /:tun
+      @resolv_caches = {}    # domain => [ ip, created_at ]
+      @is_direct_caches = {} # ip => true / false
+      @tcp_infos = {}        # tcp => { :part :wbuff :created_at :last_recv_at }
+      @src_infos = {}        # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port :is_connect :rbuff :dst :dst_id :tcp :tun :wbuff :closing :paused :left }
+      @dst_infos = {}        # dst => { :dst_id :src :domain :connected :wbuff :closing :paused }
+      @tun_infos = {}        # tun => { :tun_id :src :domain :pong :part :wbuff :closing :paused }
+      @dns_infos = {}        # dns => { :dns_id :domain :src }
+      @rsv_infos = {}        # rsv => { :rsv_id :addrinfo :domain }
+      @addrinfos = {}        # rsv_id => addrinfo
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
+      new_a_rsvd( rsvd_port )
       new_a_girlc
       new_a_tcp
     end
@@ -52,6 +55,10 @@ module Girl
             read_infod( sock )
           when :redir then
             read_redir( sock )
+          when :rsvd then
+            read_rsvd( sock )
+          when :rsv then
+            read_rsv( sock )
           when :src then
             read_src( sock )
           when :tcp then
@@ -233,6 +240,14 @@ module Girl
       dst_info = @dst_infos.delete( dst )
       set_src_closing( dst_info[ :src ] ) if dst_info
       dst_info
+    end
+
+    def close_rsv( rsv )
+      return nil if rsv.nil? || rsv.closed?
+      # puts "debug close rsv"
+      close_sock( rsv )
+      rsv_info = @rsv_infos.delete( rsv )
+      rsv_info
     end
 
     def close_sock( sock )
@@ -423,6 +438,50 @@ module Girl
       add_tcp_wbuff( encode_a_msg( data ) )
     end
 
+    def new_a_rsvd( rsvd_port )
+      rsvd_addr = Socket.sockaddr_in( rsvd_port, '0.0.0.0' )
+      rsvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      rsvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      rsvd.bind( rsvd_addr )
+      puts "#{ Time.new } rsvd bind on #{ rsvd_port }"
+      add_read( rsvd, :rsvd )
+      @rsvd = rsvd
+    end
+
+    def new_a_rsv( data, addrinfo, domain )
+      rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      
+      begin
+        # puts "debug rsv query #{ domain }"
+        @nameserver_addrs.each{ | addr | rsv.sendmsg_nonblock( data, 0, addr ) }
+      rescue Exception => e
+        puts "#{ Time.new } rsv send data #{ e.class }"
+        rsv.close
+        return
+      end
+
+      rsv_id = rand( ( 2 ** 64 ) - 2 ) + 1
+      rsv_info = {
+        rsv_id: rsv_id,
+        addrinfo: addrinfo,
+        domain: domain
+      }
+
+      @rsv_infos[ rsv ] = rsv_info
+      add_read( rsv, :rsv )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        msg = {
+          message_type: 'check-rsv-closed',
+          rsv_id: rsv_id
+        }
+
+        send_msg_to_infod( msg )
+      end
+    end
+
     def new_a_tcp
       begin
         @girlc.sendmsg( encode_im( @im ), 0, @girl_addr )
@@ -453,7 +512,7 @@ module Girl
       add_read( tcp, :tcp )
       @tcp = tcp
 
-      puts "#{ Time.new } hello i'm #{ @im } updates #{ @updates.size } src infos #{ @src_infos.size } dst infos #{ @dst_infos.size } tun infos #{ @tun_infos.size } dns infos #{ @dns_infos.size }"
+      puts "#{ Time.new } #{ @im }"
       data = [ Girl::Custom::HELLO, @im ].join( Girl::Custom::SEP )
       add_tcp_wbuff( encode_a_msg( data ) )
     end
@@ -684,9 +743,20 @@ module Girl
           when :tun
             tun_info = close_tun( sock )
             puts "#{ Time.new } expire tun #{ tun_info[ :domain ] }" if tun_info
+          when :rsv
+            rsv_info = close_rsv( sock )
+            puts "#{ Time.new } expire rsv #{ rsv_info[ :domain ] }" if rsv_info
           else
             close_sock( sock )
           end
+        end
+      when 'check-rsv-closed' then
+        rsv_id = msg[ :rsv_id ]
+        rsv, rsv_info = @rsv_infos.find{ | _, _info | _info[ :rsv_id ] == rsv_id }
+
+        if rsv then
+          puts "#{ Time.new } rsv expired #{ rsv_info[ :rsv_id ] } #{ rsv_info[ :domain ] }"
+          close_rsv( rsv )
         end
       when 'memory-info' then
         msg2 = {
@@ -696,7 +766,9 @@ module Girl
             dst_infos: @dst_infos.size,
             tun_infos: @tun_infos.size,
             dns_infos: @dns_infos.size,
-            resolv_caches: @resolv_caches.size
+            resolv_caches: @resolv_caches.size,
+            rsv_infos: @rsv_infos.size,
+            addrinfos: @addrinfos.size
           },
           updates_limit: @updates_limit,
           eliminate_count: @eliminate_count
@@ -751,6 +823,57 @@ module Girl
 
         send_msg_to_infod( msg )
       end
+    end
+
+    def read_rsvd( rsvd )
+      begin
+        data, addrinfo, rflags, *controls = rsvd.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } rsvd recvmsg #{ e.class }"
+        return
+      end
+
+      return if data.empty?
+      # puts "debug recv rsvd #{ data.inspect } #{ data.bytesize }"
+
+      begin
+        domain = seek_question_dn( data )
+      rescue Exception => e
+        puts "#{ Time.new } seek question dn #{ e.class } #{ e.message }"
+        return
+      end
+
+      if @remotes.any?{ | r | domain.include?( r ) } then
+        rsv_id = rand( ( 2 ** 64 ) - 2 ) + 1
+        @addrinfos[ rsv_id ] = addrinfo
+        data2 = [ Girl::Custom::QUERY, rsv_id, domain ].join( Girl::Custom::SEP )
+        puts "#{ Time.new } query #{ rsv_id } #{ domain }"
+        add_tcp_wbuff( encode_a_msg( data2 ) )
+      else
+        new_a_rsv( data, addrinfo, domain )
+      end
+    end
+
+    def read_rsv( rsv )
+      if rsv.closed? then
+        puts "#{ Time.new } read closed rsv?"
+        return
+      end
+
+      begin
+        data, addrinfo, rflags, *controls = rsv.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } rsv recvmsg #{ e.class }"
+        close_rsv( rsv )
+        return
+      end
+
+      return if data.empty?
+      # puts "debug recv rsv #{ data.inspect } #{ data.bytesize }"
+
+      rsv_info = @rsv_infos[ rsv ]
+      send_data_to_src( data, rsv_info[ :addrinfo ] )
+      close_rsv( rsv )
     end
 
     def read_src( src )
@@ -1107,6 +1230,14 @@ module Girl
       end
     end
 
+    def send_data_to_src( data, addrinfo )
+      begin
+        @rsvd.sendmsg( data, 0, addrinfo )
+      rescue Exception => e
+        puts "#{ Time.new } send data to src #{ e.class }"
+      end
+    end
+
     def send_msg_to_infod( msg )
       begin
         @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
@@ -1187,6 +1318,8 @@ module Girl
             close_src( _sock )
           when :tun
             close_tun( _sock )
+          when :rsv
+            close_rsv( _sock )
           else
             close_sock( _sock )
           end

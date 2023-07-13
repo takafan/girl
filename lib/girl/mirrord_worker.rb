@@ -2,8 +2,9 @@ module Girl
   class MirrordWorker
 
     def initialize( mirrord_port, p2d_host, im_infos )
-      @updates_limit = 1003 - im_infos.size * 2 # 淘汰池上限，1015(mac) - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
+      @p2d_host = p2d_host
       @update_roles = [ :p1, :p2 ]              # 参与淘汰的角色
+      @updates_limit = 1003 - im_infos.size * 2 # 淘汰池上限，1015(mac) - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
       @reads = []                               # 读池
       @writes = []                              # 写池
       @updates = {}                             # sock => updated_at
@@ -14,7 +15,6 @@ module Girl
       @p2d_infos = {}                           # p2d => { :im }
       @p1_infos = {}                            # p1 => { :addrinfo :im :p2 :wbuff :closing :paused }
       @p2_infos = {}                            # p2 => { :addrinfo :im :p1 :rbuff :wbuff :closing :paused }
-      @p2d_host = p2d_host
 
       new_mirrords( mirrord_port )
       new_a_infod( mirrord_port )

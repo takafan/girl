@@ -89,6 +89,21 @@ module Girl
       offset += 5
       offset
     end
+
+    def seek_question_dn( data )
+      parts = []
+      offset = 12
+  
+      loop do
+        len = data.unpack( "@#{ offset } C" ).first
+        # puts "debug len #{ len } #{ data[ offset + 1, len ] }"
+        break if len == 0
+        parts << data[ offset + 1, len ]
+        offset += ( 1 + len )
+      end
+  
+      parts.join( '.' )
+    end
   
     def seek_rr_ip( data, offset )
       ip = nil
