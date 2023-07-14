@@ -80,6 +80,7 @@ module Girl
       p1_info = @p1_infos[ p1 ]
       p1_info[ :wbuff ] << data
       add_write( p1 )
+      return if p1.closed?
 
       if p1_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         p2 = p1_info[ :p2 ]
@@ -112,6 +113,7 @@ module Girl
       p2_info = @p2_infos[ p2 ]
       p2_info[ :wbuff ] << data
       add_write( p2 )
+      return if p2.closed?
 
       if p2_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         p1 = p2_info[ :p1 ]
@@ -366,6 +368,7 @@ module Girl
 
         unless p1_info[ :wbuff ].empty? then
           add_write( p1 )
+          return if p1.closed?
         end
 
         p2_info[ :p1 ] = p1
@@ -405,6 +408,8 @@ module Girl
       }
 
       add_read( p1, :p1 )
+      return if p1.closed?
+
       puts "#{ Time.new } here comes a p1 #{ im.inspect } #{ addrinfo.inspect }"
     end
 
@@ -465,6 +470,7 @@ module Girl
       }
 
       add_read( p2, :p2 )
+      return if p2.closed?
 
       puts "#{ Time.new } here comes a p2 #{ im.inspect } #{ addrinfo.inspect } #{ p2_id }"
       puts "rooms #{ @room_infos.size } p1ds #{ @p1d_infos.size } p2ds #{ @p2d_infos.size } p1s #{ @p1_infos.size } p2s #{ @p2_infos.size } updates #{ @updates.size }"
@@ -582,7 +588,7 @@ module Girl
         if p2_info[ :paused ] && ( p1_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume p2 #{ p2_info[ :im ].inspect } #{ p2_info[ :addrinfo ].inspect }"
           add_read( p2 )
-          p2_info[ :paused ] = false
+          p2_info[ :paused ] = false unless p2.closed?
         end
       end
     end
@@ -627,7 +633,7 @@ module Girl
         if p1_info[ :paused ] && ( p2_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume p1 #{ p1_info[ :im ].inspect } #{ p1_info[ :addrinfo ].inspect }"
           add_read( p1 )
-          p1_info[ :paused ] = false
+          p1_info[ :paused ] = false unless p1.closed?
         end
       end
     end

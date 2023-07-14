@@ -109,6 +109,7 @@ module Girl
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       add_write( dst )
+      return if dst.closed?
 
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         tun = dst_info[ :tun ]
@@ -152,6 +153,7 @@ module Girl
       tun_info = @tun_infos[ tun ]
       tun_info[ :wbuff ] << data
       add_write( tun )
+      return if tun.closed?
 
       if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         dst = tun_info[ :dst ]
@@ -251,8 +253,7 @@ module Girl
           @im_infos[ im ] = im_info
         end
 
-        print "#{ Time.new } got hello #{ im.inspect } im #{ @im_infos.size } updates #{ @updates.size } "
-        puts "tcp #{ @tcp_infos.size } dst #{ @dst_infos.size } tun #{ @tun_infos.size } dns #{ @dns_infos.size }"
+        puts "#{ Time.new } got hello #{ im.inspect }"
       when Girl::Custom::A_NEW_SOURCE then
         return unless tcp_info[ :im ]
         _, src_id, domain_port = data.split( Girl::Custom::SEP )
@@ -315,7 +316,7 @@ module Girl
       begin
         dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       rescue Exception => e
-        puts "#{ Time.new } new a dst #{ e.class } #{ im } #{ domain }:#{ port }"
+        puts "#{ Time.new } new a dst #{ e.class } #{ im.inspect } #{ domain }:#{ port }"
         return
       end
 
@@ -326,7 +327,7 @@ module Girl
         dst.connect_nonblock( destination_addr )
       rescue IO::WaitWritable
       rescue Exception => e
-        puts "#{ Time.new } connect destination #{ e.class } #{ im } #{ domain }:#{ port }"
+        puts "#{ Time.new } connect destination #{ e.class } #{ im.inspect } #{ domain }:#{ port }"
         dst.close
         return
       end
@@ -351,10 +352,12 @@ module Girl
       @dst_infos[ dst ] = dst_info
       add_read( dst, :dst )
       add_write( dst )
+      return if dst.closed?
 
       data = [ Girl::Custom::PAIRED, src_id, dst_id ].join( Girl::Custom::SEP )
       # puts "debug add paired #{ im.inspect } #{ src_id } #{ dst_id } #{ ip }:#{ port }"
       add_tcp_wbuff( tcp, encode_a_msg( data ) )
+      return if tcp.closed?
 
       Thread.new do
         sleep EXPIRE_CONNECTING
@@ -420,6 +423,7 @@ module Girl
 
       @rsv_infos[ rsv ] = rsv_info
       add_read( rsv, :rsv )
+      return if rsv.closed?
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -535,7 +539,7 @@ module Girl
       return if @ims.any? && !@ims.include?( im )
       
       @ips[ im ] = addrinfo.ip_address
-      puts "#{ Time.new } set ip #{ im.inspect } #{ addrinfo.ip_address } ips #{ @ips.size }"
+      # puts "debug set ip #{ im.inspect } #{ addrinfo.ip_address } ips #{ @ips.size }"
     end
 
     def read_infod( infod )
@@ -689,12 +693,12 @@ module Girl
         part = data[ 0, limit ]
         data = data[ limit..-1 ]
         data2 = [ Girl::Custom::INCOMPLETE, near_id, part ].join( Girl::Custom::SEP )
-        puts "#{ Time.new } incomplete #{ near_id } #{ im } #{ domain } #{ part.bytesize }"
+        puts "#{ Time.new } incomplete #{ near_id } #{ im.inspect } #{ domain } #{ part.bytesize }"
         add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
       end
 
       data2 = [ Girl::Custom::RESPONSE, near_id, data ].join( Girl::Custom::SEP )
-      puts "#{ Time.new } response #{ near_id } #{ im } #{ domain } #{ data.bytesize }"
+      puts "#{ Time.new } response #{ near_id } #{ im.inspect } #{ domain } #{ data.bytesize }"
       add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
       close_rsv( rsv )
     end
@@ -753,6 +757,7 @@ module Girl
       }
       
       add_read( tcp, :tcp )
+      return if tcp.closed?
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -856,6 +861,7 @@ module Girl
       }
 
       add_read( tun, :tun )
+      return if tun.closed?
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -934,6 +940,7 @@ module Girl
 
       @dns_infos[ dns ] = dns_info
       add_read( dns, :dns )
+      return if dns.closed?
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -1060,7 +1067,7 @@ module Girl
         if tun_info[ :paused ] && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume tun #{ tun_info[ :im ].inspect } #{ tun_info[ :domain ] }"
           add_read( tun )
-          tun_info[ :paused ] = false
+          tun_info[ :paused ] = false unless tun.closed?
         end
       end
     end
@@ -1136,7 +1143,7 @@ module Girl
         if dst_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume dst #{ dst_info[ :im ].inspect } #{ dst_info[ :domain ] }"
           add_read( dst )
-          dst_info[ :paused ] = false
+          dst_info[ :paused ] = false unless dst.closed?
         end
       end
     end

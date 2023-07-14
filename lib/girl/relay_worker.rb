@@ -114,6 +114,7 @@ module Girl
       relay_tun_info = @relay_tun_infos[ relay_tun ]
       relay_tun_info[ :wbuff ] << data
       add_write( relay_tun )
+      return if relay_tun.closed?
 
       if relay_tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         tun = relay_tun_info[ :tun ]
@@ -142,6 +143,7 @@ module Girl
       tun_info = @tun_infos[ tun ]
       tun_info[ :wbuff ] << data
       add_write( tun )
+      return if tun.closed?
 
       if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         relay_tun = tun_info[ :relay_tun ]
@@ -659,7 +661,7 @@ module Girl
         if tun_info[ :paused ] && ( relay_tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           # puts "#{ Time.new } resume tun"
           add_read( tun )
-          tun_info[ :paused ] = false
+          tun_info[ :paused ] = false unless tun.closed?
         end
       end
     end
@@ -734,7 +736,7 @@ module Girl
         if relay_tun_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           # puts "#{ Time.new } resume relay tun"
           add_read( relay_tun )
-          relay_tun_info[ :paused ] = false
+          relay_tun_info[ :paused ] = false unless relay_tun.closed?
         end
       end
     end

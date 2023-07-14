@@ -77,6 +77,7 @@ module Girl
       app_info = @app_infos[ app ]
       app_info[ :wbuff ] << data
       add_write( app )
+      return if app.closed?
 
       if app_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         p1 = app_info[ :p1 ]
@@ -98,6 +99,7 @@ module Girl
       p1_info = @p1_infos[ p1 ]
       p1_info[ :wbuff ] << data
       add_write( p1 )
+      return if p1.closed?
 
       if p1_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         app = p1_info[ :app ]
@@ -484,7 +486,7 @@ module Girl
         if p1_info[ :paused ] && ( app_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           # puts "#{ Time.new } resume p1"
           add_read( p1 )
-          p1_info[ :paused ] = false
+          p1_info[ :paused ] = false unless p1.closed?
         end
       end
     end
@@ -529,7 +531,7 @@ module Girl
         if app_info[ :paused ] && ( p1_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           # puts "#{ Time.new } resume app"
           add_read( app )
-          app_info[ :paused ] = false
+          app_info[ :paused ] = false unless app.closed?
         end
       end
     end

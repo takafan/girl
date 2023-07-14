@@ -13,12 +13,12 @@ module Girl
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
       @update_roles = [ :dns, :dst, :src, :tun, :rsv, :tsp ] # 参与淘汰的角色
-      @updates_limit = 1009  # 淘汰池上限，1014(mac) - [ girlc, info, infod, redir, rsvd, tcp ]
+      @updates_limit = 1008  # 淘汰池上限，1015(mac) - [ girlc, info, infod, redir, rsvd, tcp, tspd ]
       @reads = []            # 读池
       @writes = []           # 写池
       @updates = {}          # sock => updated_at
       @eliminate_count = 0   # 淘汰次数
-      @roles = {}            # sock =>  :dns / :dst / :infod / :redir / :src / :tcp /:tun
+      @roles = {}            # sock =>  :dns / :dst / :infod / :redir / :rsvd / :rsv / :src / :tcp / :tspd /:tun
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
       @tcp_infos = {}        # tcp => { :part :wbuff :created_at :last_recv_at }
@@ -33,6 +33,7 @@ module Girl
       new_a_redir( redir_port )
       new_a_infod( redir_port )
       new_a_rsvd( rsvd_port )
+      new_a_tspd( tspd_port )
       new_a_girlc
     end
 
@@ -63,6 +64,8 @@ module Girl
             read_src( sock )
           when :tcp then
             read_tcp( sock )
+          when :tspd then
+            read_tspd( sock )
           when :tun then
             read_tun( sock )
           else
@@ -106,6 +109,7 @@ module Girl
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       add_write( dst )
+      return if dst.closed?
 
       if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         src = dst_info[ :src ]
@@ -162,6 +166,7 @@ module Girl
       src_info = @src_infos[ src ]
       src_info[ :wbuff ] << data
       add_write( src )
+      return if src.closed?
 
       if src_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         dst = src_info[ :dst ]
@@ -209,6 +214,7 @@ module Girl
       tun_info = @tun_infos[ tun ]
       tun_info[ :wbuff ] << data
       add_write( tun )
+      return if tun.closed?
 
       if tun_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
         src = tun_info[ :src ]
@@ -350,6 +356,42 @@ module Girl
       end
     end
 
+    def make_tunnel( ip, src )
+      return if src.nil? || src.closed?
+      src_info = @src_infos[ src ]
+      domain = src_info[ :destination_domain ]
+      port = src_info[ :destination_port ]
+
+      if @local_ips.include?( ip ) && [ @redir_port, @tspd_port ].include?( port ) then
+        puts "#{ Time.new } ignore #{ ip }:#{ port }"
+        close_src( src )
+        return
+      end
+
+      if [ domain, ip ].include?( @proxyd_host )  then
+        # 访问远端，直连
+        puts "#{ Time.new } direct #{ ip } #{ port }"
+        new_a_dst( ip, src )
+        return
+      end
+
+      if @is_direct_caches.include?( ip ) then
+        is_direct = @is_direct_caches[ ip ]
+      else
+        is_direct = @directs.any?{ | direct | direct.include?( ip ) }
+        puts "#{ Time.new } cache is direct #{ domain } #{ ip } #{ is_direct }"
+        @is_direct_caches[ ip ] = is_direct
+      end
+
+      if is_direct then
+        # puts "debug hit directs #{ ip }"
+        new_a_dst( ip, src )
+      else
+        # puts "debug go remote #{ ip }"
+        set_remote( src )
+      end
+    end
+
     def new_a_dst( ip, src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
@@ -409,6 +451,7 @@ module Girl
 
       add_read( dst, :dst )
       add_write( dst )
+      return if dst.closed?
 
       Thread.new do
         sleep EXPIRE_CONNECTING
@@ -453,17 +496,16 @@ module Girl
       @redir_local_address = redir.local_address
     end
 
-    def new_a_remote( src )
-      return if src.nil? || src.closed?
-      src_info = @src_infos[ src ]
-      src_info[ :proxy_type ] = :remote
-      src_id = src_info[ :src_id ]
-      destination_domain = src_info[ :destination_domain ]
-      destination_port = src_info[ :destination_port ]
-      domain_port = [ destination_domain, destination_port ].join( ':' )
-      puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
-      data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
-      add_tcp_wbuff( encode_a_msg( data ) )
+    def new_a_tspd( tspd_port )
+      tspd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      tspd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+      tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      tspd.bind( Socket.sockaddr_in( tspd_port, '0.0.0.0' ) )
+      tspd.listen( BACKLOG )
+      puts "#{ Time.new } tspd listen on #{ tspd_port }"
+      add_read( tspd, :tspd )
+      @tspd_port = tspd_port
     end
 
     def new_a_rsvd( rsvd_port )
@@ -497,6 +539,7 @@ module Girl
 
       @rsv_infos[ rsv ] = rsv_info
       add_read( rsv, :rsv )
+      return if rsv.closed?
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -579,7 +622,8 @@ module Girl
       src_info[ :tun ] = tun
       add_read( tun, :tun )
       add_write( tun )
-
+      return if tun.closed?
+ 
       Thread.new do
         sleep PING_TIMEOUT
 
@@ -589,41 +633,6 @@ module Girl
         }
 
         send_msg_to_infod( msg )
-      end
-    end
-
-    def new_a_tunnel( ip, src )
-      return if src.nil? || src.closed?
-      src_info = @src_infos[ src ]
-      port = src_info[ :destination_port ]
-
-      if @local_ips.include?( ip ) && ( port == @redir_port ) then
-        puts "#{ Time.new } ignore #{ ip }:#{ port }"
-        close_src( src )
-        return
-      end
-
-      if ( src_info[ :destination_domain ] == @proxyd_host ) && ![ 80, 443 ].include?( port ) then
-        # 访问远端非80/443端口，直连
-        puts "#{ Time.new } direct #{ ip } #{ port }"
-        new_a_dst( ip, src )
-        return
-      end
-
-      if @is_direct_caches.include?( ip ) then
-        is_direct = @is_direct_caches[ ip ]
-      else
-        is_direct = @directs.any?{ | direct | direct.include?( ip ) }
-        puts "#{ Time.new } cache is direct #{ src_info[ :destination_domain ] } #{ ip } #{ is_direct }"
-        @is_direct_caches[ ip ] = is_direct
-      end
-
-      if is_direct then
-        # puts "debug hit directs #{ ip }"
-        new_a_dst( ip, src )
-      else
-        # puts "debug go remote #{ ip }"
-        new_a_remote( src )
       end
     end
 
@@ -658,7 +667,7 @@ module Girl
 
       if ip then
         src = dns_info[ :src ]
-        new_a_tunnel( ip, src )
+        make_tunnel( ip, src )
         @resolv_caches[ domain ] = [ ip, Time.new ]
       else
         puts "#{ Time.new } no ip in answer #{ domain }"
@@ -810,12 +819,12 @@ module Girl
       begin
         src, addrinfo = redir.accept_nonblock
       rescue IO::WaitReadable, Errno::EINTR => e
-        puts "accept #{ e.class }"
+        puts "redir accept #{ e.class }"
         return
       end
 
       src_id = rand( ( 2 ** 64 ) - 2 ) + 1
-      # puts "debug accept a src #{ src_id } #{ addrinfo.ip_unpack.inspect }"
+      # puts "debug redir accept a src #{ src_id } #{ addrinfo.ip_unpack.inspect }"
 
       @src_infos[ src ] = {
         src_id: src_id,          # src id
@@ -836,6 +845,7 @@ module Girl
       }
 
       add_read( src, :src )
+      return if src.closed?
 
       Thread.new do
         sleep EXPIRE_NEW
@@ -980,6 +990,7 @@ module Girl
           # +----+--------+
           data2 = [ 5, 0 ].pack( 'CC' )
           add_src_wbuff( src, data2 )
+          return if src.closed?
           src_info[ :proxy_proto ] = :socks5
           src_info[ :proxy_type ] = :negotiation
           return
@@ -1067,7 +1078,7 @@ module Girl
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
             # puts "debug IP V4 address #{ destination_ip } #{ destination_port }"
-            new_a_tunnel( destination_ip, src )
+            make_tunnel( destination_ip, src )
           elsif atyp == 3 then
             domain_len = data[ 4 ].unpack( 'C' ).first
 
@@ -1135,6 +1146,64 @@ module Girl
       msgs, part = decode_to_msgs( data )
       msgs.each{ | msg | deal_ctlmsg( msg ) }
       tcp_info[ :part ] = part
+    end
+
+    def read_tspd( tspd )
+      begin
+        src, addrinfo = tspd.accept_nonblock
+      rescue IO::WaitReadable, Errno::EINTR => e
+        puts "tspd accept #{ e.class }"
+        return
+      end
+
+      begin
+        # /usr/include/linux/netfilter_ipv4.h
+        option = src.getsockopt( Socket::SOL_IP, 80 )
+      rescue Exception => e
+        puts "get SO_ORIGINAL_DST #{ e.class }"
+        src.close
+      end
+
+      dest_family, dest_port, dest_host = option.unpack( 'nnN' )
+      dest_addr = Socket.sockaddr_in( dest_port, dest_host )
+      dest_addrinfo = Addrinfo.new( dest_addr )
+      dest_ip = dest_addrinfo.ip_address
+
+      src_id = rand( ( 2 ** 64 ) - 2 ) + 1
+      # puts "debug tspd accept a src #{ src_id } #{ addrinfo.ip_unpack.inspect } #{ dest_ip } #{ dest_port }"
+
+      @src_infos[ src ] = {
+        src_id: src_id,              # src id
+        addrinfo: addrinfo,          # addrinfo
+        proxy_proto: :uncheck,       # :uncheck / :http / :socks5
+        proxy_type: :uncheck,        # :uncheck / :checking / :negotiation / :remote / :direct
+        destination_domain: dest_ip, # 目的地域名
+        destination_port: dest_port, # 目的地端口
+        is_connect: true,            # 代理协议是http的场合，是否是CONNECT
+        rbuff: '',                   # 读到的流量
+        dst: nil,                    # :direct的场合，对应的dst
+        dst_id: nil,                 # :remote的场合，远端dst id
+        tun: nil,                    # :remote的场合，对应的tun
+        wbuff: '',                   # 从dst/tun读到的流量
+        closing: false,              # 是否准备关闭
+        paused: false,               # 是否已暂停
+        left: 0                      # 剩余加密波数
+      }
+
+      add_read( src, :src )
+      return if src.closed?
+      make_tunnel( dest_ip, src )
+
+      Thread.new do
+        sleep EXPIRE_NEW
+
+        msg = {
+          message_type: 'check-src-paired',
+          src_id: src_id
+        }
+
+        send_msg_to_infod( msg )
+      end
     end
 
     def read_tun( tun )
@@ -1209,13 +1278,13 @@ module Girl
       
       if domain =~ /^\d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}$/ then
         # ipv4
-        new_a_tunnel( domain, src )
+        make_tunnel( domain, src )
         return
       end
 
       if @remotes.any?{ | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) } then
         # puts "debug hit remotes #{ domain }"
-        new_a_remote( src )
+        set_remote( src )
         return
       end
 
@@ -1226,7 +1295,7 @@ module Girl
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
           # puts "debug hit resolv cache #{ domain } #{ ip }"
-          new_a_tunnel( ip, src )
+          make_tunnel( ip, src )
           return
         end
 
@@ -1264,9 +1333,11 @@ module Girl
 
       @dns_infos[ dns ] = dns_info
       add_read( dns, :dns )
+      return if dns.closed?
+
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :checking
-
+    
       Thread.new do
         sleep EXPIRE_NEW
 
@@ -1313,9 +1384,11 @@ module Girl
         if src_info[ :is_connect ] then
           # puts "debug add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
+          return if src.closed?
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
         add_socks5_conn_reply( src )
+        return if src.closed?
       end
       
       unless src_info[ :rbuff ].empty? then
@@ -1329,6 +1402,19 @@ module Girl
 
         add_tun_wbuff( tun, data )
       end
+    end
+
+    def set_remote( src )
+      return if src.nil? || src.closed?
+      src_info = @src_infos[ src ]
+      src_info[ :proxy_type ] = :remote
+      src_id = src_info[ :src_id ]
+      destination_domain = src_info[ :destination_domain ]
+      destination_port = src_info[ :destination_port ]
+      domain_port = [ destination_domain, destination_port ].join( ':' )
+      puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
+      data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
+      add_tcp_wbuff( encode_a_msg( data ) )
     end
 
     def set_src_closing( src )
@@ -1417,7 +1503,7 @@ module Girl
         if src_info[ :paused ] && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume direct src #{ src_info[ :destination_domain ] }"
           add_read( src )
-          src_info[ :paused ] = false
+          src_info[ :paused ] = false unless src.closed?
         end
       end
     end
@@ -1461,7 +1547,7 @@ module Girl
         if dst_info[ :paused ] && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume dst #{ dst_info[ :domain ] }"
           add_read( dst )
-          dst_info[ :paused ] = false
+          dst_info[ :paused ] = false unless dst.closed?
         end
       elsif tun && !tun.closed? then
         tun_info = @tun_infos[ tun ]
@@ -1469,7 +1555,7 @@ module Girl
         if tun_info[ :paused ] && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume tun #{ tun_info[ :domain ] }"
           add_read( tun )
-          tun_info[ :paused ] = false
+          tun_info[ :paused ] = false unless tun.closed?
         end
       end
     end
@@ -1538,7 +1624,7 @@ module Girl
         if src_info[ :paused ] && ( tun_info[ :wbuff ].bytesize < RESUME_BELOW ) then
           puts "#{ Time.new } resume remote src #{ src_info[ :destination_domain ] }"
           add_read( src )
-          src_info[ :paused ] = false
+          src_info[ :paused ] = false unless src.closed?
         end
       end
     end

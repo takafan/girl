@@ -88,7 +88,17 @@ ruby proxyd.run.rb
 
 ### 近端，可以是本机，内网服务器，路由器，各种派:
 
-1. 以windows为例，下载和安装ruby：https://rubyinstaller.org/ 或者 https://rubyinstaller.cn/
+1. 安装ruby：
+
+windows：
+
+访问 https://rubyinstaller.org/ 或者 https://rubyinstaller.cn/ 下载和安装ruby
+
+openwrt: 
+
+```bash
+opkg install ruby ruby-gems ruby-did-you-mean ruby-enc-extra
+```
 
 2. 安装妹子：
 
