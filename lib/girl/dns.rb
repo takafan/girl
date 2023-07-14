@@ -91,6 +91,7 @@ module Girl
     end
 
     def seek_question_dn( data )
+      id = data[ 0, 2 ]
       parts = []
       offset = 12
   
@@ -102,7 +103,7 @@ module Girl
         offset += ( 1 + len )
       end
   
-      parts.join( '.' )
+      [ id, parts.join( '.' ) ]
     end
   
     def seek_rr_ip( data, offset )

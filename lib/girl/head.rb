@@ -1,7 +1,7 @@
 module Girl
   BACKLOG                   = 512              # 听队列大小，满后掉SYN包
   RLIMIT                    = 1024             # sock数上限，淘汰池要求RLIMIT不低于1024
-  READ_SIZE                 = 1024 * 1024      # 一次读多少
+  READ_SIZE                 = 4 * 1024 * 1024  # 一次读多少
   WBUFF_LIMIT               = 20 * 1024 * 1024 # 写前上限，超过上限暂停读
   RESUME_BELOW              = WBUFF_LIMIT / 2  # 降到多少以下恢复读
   EXPIRE_NEW                = 5                # 多久没有建立通道，过期

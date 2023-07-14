@@ -19,7 +19,7 @@ module Girl
       @dst_infos = {}       # dst => { :dst_id :im :domain :ip :rbuff :tun :src_id :connected :wbuff :closing :paused :left }
       @tun_infos = {}       # tun => { :im :dst :domain :part :wbuff :closing :paused }
       @dns_infos = {}       # dns => { :dns_id :im :src_id :domain :port :tcp }
-      @rsv_infos = {}       # rsv => { :rsv_id :near_id :domain :tcp  }
+      @rsv_infos = {}       # rsv => { :rsv_id :im :near_id :domain :tcp  }
       @ips = {}             # im => ip
       @im_infos = {}        # im => { :in, :out }
       
@@ -265,13 +265,13 @@ module Girl
           return
         end
 
-        # puts "debug got a new source #{ tcp_info[ :im ].inspect } #{ src_id } #{ domain_port.inspect }"
-        resolve_domain_port( domain_port, src_id, tcp )
+        # puts "debug got a new source #{ tcp_info[ :im ] } #{ src_id } #{ domain_port.inspect }"
+        resolve_domain_port( domain_port, src_id, tcp, tcp_info[ :im ] )
       when Girl::Custom::QUERY then
         return unless tcp_info[ :im ]
         _, near_id, domain = data.split( Girl::Custom::SEP )
         return if near_id.nil? || domain.nil?
-        new_a_rsv( domain, near_id, tcp )
+        new_a_rsv( domain, near_id, tcp, tcp_info[ :im ] )
       end
     end
 
@@ -390,7 +390,7 @@ module Girl
       @info = info
     end
 
-    def new_a_rsv( domain, near_id, tcp )
+    def new_a_rsv( domain, near_id, tcp, im )
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       begin
@@ -412,6 +412,7 @@ module Girl
       rsv_id = rand( ( 2 ** 64 ) - 2 ) + 1
       rsv_info = {
         rsv_id: rsv_id,
+        im: im,
         near_id: near_id,
         domain: domain,
         tcp: tcp
@@ -564,7 +565,7 @@ module Girl
         dns, dns_info = @dns_infos.find{ | _, _info | _info[ :dns_id ] == dns_id }
 
         if dns then
-          puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :domain ] }"
+          puts "#{ Time.new } dns expired #{ dns_info[ :dns_id ] } #{ dns_info[ :im ] } #{ dns_info[ :domain ] }"
           close_dns( dns )
         end
       when 'check-expire' then
@@ -603,7 +604,7 @@ module Girl
         rsv, rsv_info = @rsv_infos.find{ | _, _info | _info[ :rsv_id ] == rsv_id }
 
         if rsv then
-          puts "#{ Time.new } rsv expired #{ rsv_info[ :rsv_id ] } #{ rsv_info[ :domain ] }"
+          puts "#{ Time.new } rsv expired #{ rsv_info[ :rsv_id ] } #{ rsv_info[ :im ] } #{ rsv_info[ :domain ] }"
           close_rsv( rsv )
         end
       when 'check-tcp-im' then
@@ -677,11 +678,23 @@ module Girl
 
       return if data.empty?
 
+      rsv_info = @rsv_infos[ rsv ]
       near_id = rsv_info[ :near_id ]
+      im = rsv_info[ :im ]
       domain = rsv_info[ :domain ]
       tcp = rsv_info[ :tcp ]
+      limit = Girl::Custom::CHUNK_SIZE - 4 - near_id.to_s.size
+
+      if data.bytesize > limit then
+        part = data[ 0, limit ]
+        data = data[ limit..-1 ]
+        data2 = [ Girl::Custom::INCOMPLETE, near_id, part ].join( Girl::Custom::SEP )
+        puts "#{ Time.new } incomplete #{ near_id } #{ im } #{ domain } #{ part.bytesize }"
+        add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
+      end
+
       data2 = [ Girl::Custom::RESPONSE, near_id, data ].join( Girl::Custom::SEP )
-      puts "#{ Time.new } response #{ near_id } #{ domain } #{ data.bytesize }"
+      puts "#{ Time.new } response #{ near_id } #{ im } #{ domain } #{ data.bytesize }"
       add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
       close_rsv( rsv )
     end
@@ -856,7 +869,7 @@ module Girl
       end
     end
 
-    def resolve_domain_port( domain_port, src_id, tcp )
+    def resolve_domain_port( domain_port, src_id, tcp, im )
       colon_idx = domain_port.rindex( ':' )
       return unless colon_idx
 
@@ -913,6 +926,7 @@ module Girl
       dns_info = {
         dns_id: dns_id,
         src_id: src_id,
+        im: im,
         domain: domain,
         port: port,
         tcp: tcp

@@ -27,13 +27,13 @@ module Girl
       @tun_infos = {}        # tun => { :tun_id :src :domain :pong :part :wbuff :closing :paused }
       @dns_infos = {}        # dns => { :dns_id :domain :src }
       @rsv_infos = {}        # rsv => { :rsv_id :addrinfo :domain }
-      @addrinfos = {}        # rsv_id => addrinfo
+      @near_infos = {}       # near_id => { :addrinfo :id :domain :part }
+      @response_caches = {}  # domain => [ response, created_at ]
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
       new_a_rsvd( rsvd_port )
       new_a_girlc
-      new_a_tcp
     end
 
     def looping
@@ -191,8 +191,15 @@ module Girl
     end
 
     def add_tcp_wbuff( data )
-      return if @tcp.nil? || @tcp.closed?
-      tcp_info = @tcp_infos[ @tcp ]
+      if @tcp.nil? || @tcp.closed? then
+        tcp_info = new_a_tcp
+        puts "#{ Time.new } #{ @im }"
+        data2 = [ Girl::Custom::HELLO, @im ].join( Girl::Custom::SEP )
+        tcp_info[ :wbuff ] << encode_a_msg( data2 )
+      else
+        tcp_info = @tcp_infos[ @tcp ]
+      end
+
       tcp_info[ :wbuff ] << data
       add_write( @tcp )
     end
@@ -281,7 +288,6 @@ module Girl
       # puts "debug close tcp"
       close_sock( tcp )
       @tcp_infos.delete( tcp )
-      new_a_tcp
     end
 
     def close_tun( tun )
@@ -305,6 +311,28 @@ module Girl
         dst_id = dst_id.to_i
         # puts "debug got paired #{ src_id } #{ dst_id }"
         new_a_tun( src_id, dst_id )
+      when Girl::Custom::INCOMPLETE then
+        _, near_id, data2 = data.split( Girl::Custom::SEP )
+        return if near_id.nil? || data2.nil?
+        # puts "debug got incomplete #{ near_id } #{ data2.bytesize }"
+        near_id = near_id.to_i
+        near_info = @near_infos[ near_id ]
+        near_info[ :part ] << data2 if near_info
+      when Girl::Custom::RESPONSE then
+        _, near_id, data2 = data.split( Girl::Custom::SEP )
+        return if near_id.nil? || data2.nil?
+        # puts "debug got response #{ near_id } #{ data2.bytesize }"
+        near_id = near_id.to_i
+        near_info = @near_infos.delete( near_id )
+
+        if near_info then
+          addrinfo = near_info[ :addrinfo ]
+          domain = near_info[ :domain ]
+          data2 = near_info[ :part ] + data2
+          data2[ 0, 2 ] = near_info[ :id ]
+          send_data_to_src( data2, addrinfo )
+          @response_caches[ domain ] = [ data2, Time.new ]
+        end
       end
     end
 
@@ -508,13 +536,10 @@ module Girl
         last_recv_at: nil     # 上一次收到控制流量时间
       }
 
-      @tcp_infos[ tcp ] = tcp_info
       add_read( tcp, :tcp )
       @tcp = tcp
-
-      puts "#{ Time.new } #{ @im }"
-      data = [ Girl::Custom::HELLO, @im ].join( Girl::Custom::SEP )
-      add_tcp_wbuff( encode_a_msg( data ) )
+      @tcp_infos[ tcp ] = tcp_info
+      tcp_info
     end
 
     def new_a_tun( src_id, dst_id )
@@ -696,8 +721,6 @@ module Girl
                 puts "#{ Time.new } tcp expired"
                 close_tcp( @tcp )
               end
-            else
-              new_a_tcp
             end
           end
         end
@@ -768,7 +791,8 @@ module Girl
             dns_infos: @dns_infos.size,
             resolv_caches: @resolv_caches.size,
             rsv_infos: @rsv_infos.size,
-            addrinfos: @addrinfos.size
+            near_infos: @near_infos.size,
+            response_caches: @response_caches.size
           },
           updates_limit: @updates_limit,
           eliminate_count: @eliminate_count
@@ -837,17 +861,39 @@ module Girl
       # puts "debug recv rsvd #{ data.inspect } #{ data.bytesize }"
 
       begin
-        domain = seek_question_dn( data )
+        id, domain = seek_question_dn( data )
       rescue Exception => e
         puts "#{ Time.new } seek question dn #{ e.class } #{ e.message }"
         return
       end
 
+      response_cache = @response_caches[ domain ]
+
+      if response_cache then
+        response, created_at = response_cache
+
+        if Time.new - created_at < RESOLV_CACHE_EXPIRE then
+          puts "debug hit response cache #{ domain }"
+          response[ 0, 2 ] = id
+          send_data_to_src( response, addrinfo )
+          return
+        end
+
+        @response_caches.delete( domain )
+      end
+
       if @remotes.any?{ | r | domain.include?( r ) } then
-        rsv_id = rand( ( 2 ** 64 ) - 2 ) + 1
-        @addrinfos[ rsv_id ] = addrinfo
-        data2 = [ Girl::Custom::QUERY, rsv_id, domain ].join( Girl::Custom::SEP )
-        puts "#{ Time.new } query #{ rsv_id } #{ domain }"
+        near_id = rand( ( 2 ** 64 ) - 2 ) + 1
+        
+        @near_infos[ near_id ] = {
+          addrinfo: addrinfo,
+          id: id,
+          domain: domain,
+          part: ''
+        }
+
+        data2 = [ Girl::Custom::QUERY, near_id, domain ].join( Girl::Custom::SEP )
+        puts "debug query #{ near_id } #{ id } #{ domain }"
         add_tcp_wbuff( encode_a_msg( data2 ) )
       else
         new_a_rsv( data, addrinfo, domain )
@@ -872,7 +918,10 @@ module Girl
       # puts "debug recv rsv #{ data.inspect } #{ data.bytesize }"
 
       rsv_info = @rsv_infos[ rsv ]
-      send_data_to_src( data, rsv_info[ :addrinfo ] )
+      addrinfo = rsv_info[ :addrinfo ]
+      domain = rsv_info[ :domain ]
+      send_data_to_src( data, addrinfo )
+      @response_caches[ domain ] = [ data, Time.new ]
       close_rsv( rsv )
     end
 

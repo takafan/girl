@@ -4,6 +4,7 @@ module Girl
     A_NEW_SOURCE = 'A'
     CHUNK_SIZE   = 255
     HELLO        = 'H'
+    INCOMPLETE   = 'I'
     OFFSET       = 0
     PAIRED       = 'P'
     QUERY        = 'Q'
