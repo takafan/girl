@@ -250,6 +250,9 @@ table ip nat {
 }
 ```
 
+* 本地dns查询，由dnsmasq转给妹子： `echo -e 'no-resolv\nserver=127.0.0.1#7777\n' > /etc/dnsmasq.d/server.conf`
+* 设备端dns只设妹子一个，避免得到假ip
+
 ## 去除特征
 
 协议本身即是特征。但人人发明自己的协议，也就没有了特征。覆盖Girl::Custom，更换协议带头字符，更换加解密方法，创造一个自己的协议。
