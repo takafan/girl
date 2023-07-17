@@ -968,14 +968,15 @@ module Girl
       src_id = dst_info[ :src_id ]
       # puts "debug add pong #{ src_id }"
       data = "#{ src_id }#{ Girl::Custom::SEP }"
+      data2 = dst_info[ :rbuff ]
 
-      unless dst_info[ :rbuff ].empty? then
-        data = dst_info[ :rbuff ]
-
+      unless data2.empty? then
         if dst_info[ :left ] > 0 then
-          data = encode( data )
+          data << encode( data2 )
           dst_info[ :left ] -= 1
           data << Girl::Custom::TERM if dst_info[ :left ] == 0
+        else
+          data << data2
         end
       end
 

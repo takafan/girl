@@ -125,7 +125,8 @@ ruby proxy.run.rb
 
 ```javascript
 {
-  "redir_port": 6666,                           // 近端（本地）端口
+  "redir_port": 6666,                           // 代理端口
+  "tspd_port": 7777,                            // 透明代理端口
   "proxyd_host": "1.2.3.4",                     // 远端服务器
   "proxyd_port": 6060,                          // 远端端口
   "girl_port": 8080,                            // 妹子端口，防重放
@@ -179,7 +180,7 @@ curl --verbose -x http://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.c
 curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
 ```
 
-妹子同时支持http, http tunnel, 和socks5。
+妹子同时支持http, http tunnel, socks5, 以及透明代理。
 
 ## 中继，通常是国内专线/vps：
 
@@ -224,6 +225,30 @@ android: 设置 > WLAN > 长按一个连接 > 修改网络 > 显示高级选项 
 ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线 > 自订 > 选择一个连接 > 一路默认到Proxy伺服器 > 使用 > 填近端的地址和端口 > 继续
 
 switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
+
+## 透明代理
+
+用nft命令把dns查询和tcp流量指向妹子的透明代理端口，设备端把网关和dns设成妹子即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
+
+一些无视系统代理的应用，例如switch上的youtube，经透明代理可以打开。
+
+```bash
+nft -f transparent.conf
+```
+
+transparent.conf 样例：
+
+```bash
+flush ruleset ip
+
+table ip nat {
+    chain prerouting {
+        type nat hook prerouting priority -100;
+		    ip daddr 192.168.1.59 udp dport 53 redirect to :7777
+        ip daddr != { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255/32 } tcp dport 1-65535 redirect to :7777
+    }
+}
+```
 
 ## 去除特征
 

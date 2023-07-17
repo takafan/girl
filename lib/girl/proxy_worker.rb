@@ -3,7 +3,7 @@ module Girl
     include Custom
     include Dns
 
-    def initialize( redir_port, proxyd_host, proxyd_port, girl_port, rsvd_port, tspd_port, nameservers, im, directs, remotes )
+    def initialize( redir_port, proxyd_host, proxyd_port, girl_port, tspd_port, nameservers, im, directs, remotes )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
@@ -32,7 +32,7 @@ module Girl
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
-      new_a_rsvd( rsvd_port )
+      new_a_rsvd( tspd_port )
       new_a_tspd( tspd_port )
       new_a_girlc
     end
@@ -56,10 +56,10 @@ module Girl
             read_infod( sock )
           when :redir then
             read_redir( sock )
-          when :rsvd then
-            read_rsvd( sock )
           when :rsv then
             read_rsv( sock )
+          when :rsvd then
+            read_rsvd( sock )
           when :src then
             read_src( sock )
           when :tcp then
@@ -323,7 +323,7 @@ module Girl
         # puts "debug got incomplete #{ near_id } #{ data2.bytesize }"
         near_id = near_id.to_i
         near_info = @near_infos[ near_id ]
-        near_info[ :part ] << data2 if near_info
+        near_info[ :part ] = data2 if near_info
       when Girl::Custom::RESPONSE then
         _, near_id, data2 = data.split( Girl::Custom::SEP )
         return if near_id.nil? || data2.nil?
@@ -379,7 +379,7 @@ module Girl
         is_direct = @is_direct_caches[ ip ]
       else
         is_direct = @directs.any?{ | direct | direct.include?( ip ) }
-        puts "#{ Time.new } cache is direct #{ domain } #{ ip } #{ is_direct }"
+        # puts "debug cache is direct #{ domain } #{ ip } #{ is_direct }"
         @is_direct_caches[ ip ] = is_direct
       end
 
@@ -508,16 +508,6 @@ module Girl
       @tspd_port = tspd_port
     end
 
-    def new_a_rsvd( rsvd_port )
-      rsvd_addr = Socket.sockaddr_in( rsvd_port, '0.0.0.0' )
-      rsvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      rsvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
-      rsvd.bind( rsvd_addr )
-      puts "#{ Time.new } rsvd bind on #{ rsvd_port }"
-      add_read( rsvd, :rsvd )
-      @rsvd = rsvd
-    end
-
     def new_a_rsv( data, addrinfo, domain )
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       
@@ -551,6 +541,16 @@ module Girl
 
         send_msg_to_infod( msg )
       end
+    end
+
+    def new_a_rsvd( rsvd_port )
+      rsvd_addr = Socket.sockaddr_in( rsvd_port, '0.0.0.0' )
+      rsvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      rsvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      rsvd.bind( rsvd_addr )
+      puts "#{ Time.new } rsvd bind on #{ rsvd_port }"
+      add_read( rsvd, :rsvd )
+      @rsvd = rsvd
     end
 
     def new_a_tcp
@@ -792,6 +792,8 @@ module Girl
         end
       when 'memory-info' then
         msg2 = {
+          resolv_caches: @resolv_caches.keys.sort,
+          response_caches: @response_caches.keys.sort,
           sizes: {
             updates: @updates.size,
             src_infos: @src_infos.size,
@@ -804,7 +806,8 @@ module Girl
             response_caches: @response_caches.size
           },
           updates_limit: @updates_limit,
-          eliminate_count: @eliminate_count
+          eliminate_count: @eliminate_count,
+
         }
 
         begin
@@ -859,6 +862,32 @@ module Girl
       end
     end
 
+    def read_rsv( rsv )
+      if rsv.closed? then
+        puts "#{ Time.new } read closed rsv?"
+        return
+      end
+
+      begin
+        data, addrinfo, rflags, *controls = rsv.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } rsv recvmsg #{ e.class }"
+        close_rsv( rsv )
+        return
+      end
+
+      return if data.empty?
+      # puts "debug recv rsv #{ data.inspect } #{ data.bytesize }"
+
+      rsv_info = @rsv_infos[ rsv ]
+      addrinfo = rsv_info[ :addrinfo ]
+      domain = rsv_info[ :domain ]
+      # puts "debug send to #{ addrinfo.inspect }"
+      send_data_to_src( data, addrinfo )
+      @response_caches[ domain ] = [ data, Time.new ]
+      close_rsv( rsv )
+    end
+
     def read_rsvd( rsvd )
       begin
         data, addrinfo, rflags, *controls = rsvd.recvmsg
@@ -883,7 +912,7 @@ module Girl
         response, created_at = response_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          puts "debug hit response cache #{ domain }"
+          # puts "debug hit response cache #{ domain }"
           response[ 0, 2 ] = id
           send_data_to_src( response, addrinfo )
           return
@@ -903,36 +932,11 @@ module Girl
         }
 
         data2 = [ Girl::Custom::QUERY, near_id, domain ].join( Girl::Custom::SEP )
-        puts "debug query #{ near_id } #{ id } #{ domain }"
+        puts "#{ Time.new } query #{ near_id } #{ domain } #{ addrinfo.ip_address }"
         add_tcp_wbuff( encode_a_msg( data2 ) )
       else
         new_a_rsv( data, addrinfo, domain )
       end
-    end
-
-    def read_rsv( rsv )
-      if rsv.closed? then
-        puts "#{ Time.new } read closed rsv?"
-        return
-      end
-
-      begin
-        data, addrinfo, rflags, *controls = rsv.recvmsg
-      rescue Exception => e
-        puts "#{ Time.new } rsv recvmsg #{ e.class }"
-        close_rsv( rsv )
-        return
-      end
-
-      return if data.empty?
-      # puts "debug recv rsv #{ data.inspect } #{ data.bytesize }"
-
-      rsv_info = @rsv_infos[ rsv ]
-      addrinfo = rsv_info[ :addrinfo ]
-      domain = rsv_info[ :domain ]
-      send_data_to_src( data, addrinfo )
-      @response_caches[ domain ] = [ data, Time.new ]
-      close_rsv( rsv )
     end
 
     def read_src( src )
@@ -1230,7 +1234,7 @@ module Girl
         sep_idx = data.index( Girl::Custom::SEP )
 
         unless sep_idx then
-          puts "#{ Time.new } miss pong sep?"
+          puts "#{ Time.new } miss pong sep? #{ data.inspect[ 0, 255 ] }"
           close_tun( tun )
           return
         end
@@ -1412,7 +1416,7 @@ module Girl
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
-      puts "#{ Time.new } add a new source #{ src_id } #{ domain_port }"
+      puts "#{ Time.new } a new source #{ src_id } #{ domain_port } #{ src_info[ :addrinfo ].ip_address }"
       data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
       add_tcp_wbuff( encode_a_msg( data ) )
     end
