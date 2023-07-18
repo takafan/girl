@@ -251,7 +251,7 @@ table ip nat {
     chain output {
         type nat hook output priority -100;
         ip daddr 127.0.0.1 udp dport 53 redirect to :7777
-	}
+    }
 }
 ```
 
