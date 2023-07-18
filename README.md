@@ -244,7 +244,7 @@ flush ruleset ip
 table ip nat {
     chain prerouting {
         type nat hook prerouting priority -100;
-		    ip daddr 192.168.1.59 udp dport 53 redirect to :7777
+        ip daddr 192.168.1.59 udp dport 53 redirect to :7777
         ip daddr != { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255/32 } tcp dport 1-65535 redirect to :7777
     }
 
