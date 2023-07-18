@@ -267,7 +267,7 @@ disable_ipv6
 
 树莓派：/boot/cmdline.txt 开头加：
 
-```txt
+```bash
 ipv6.disable=1 
 ```
 
