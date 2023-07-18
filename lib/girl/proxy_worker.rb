@@ -660,7 +660,7 @@ module Girl
       begin
         ip = seek_ip( data )
       rescue Exception => e
-        puts "#{ Time.new } seek ip #{ e.class } #{ e.message }"
+        puts "#{ Time.new } dns seek ip #{ e.class } #{ e.message }"
         close_dns( dns )
         return
       end
@@ -887,7 +887,20 @@ module Girl
       domain = rsv_info[ :domain ]
       # puts "debug send to #{ addrinfo.inspect }"
       send_data_to_src( data, addrinfo )
-      @response_caches[ domain ] = [ data, Time.new ]
+
+      begin
+        ip = seek_ip( data )
+      rescue Exception => e
+        puts "#{ Time.new } rsv seek ip #{ e.class } #{ e.message }"
+        close_rsv( rsv )
+        return
+      end
+
+      # 不缓存反向DNS
+      if ip then
+        @response_caches[ domain ] = [ data, Time.new ]
+      end
+
       close_rsv( rsv )
     end
 
