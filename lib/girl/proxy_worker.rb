@@ -1180,8 +1180,9 @@ module Girl
         # /usr/include/linux/netfilter_ipv4.h
         option = src.getsockopt( Socket::SOL_IP, 80 )
       rescue Exception => e
-        puts "get SO_ORIGINAL_DST #{ e.class }"
+        puts "get SO_ORIGINAL_DST #{ e.class } #{ addrinfo.ip_unpack.inspect }"
         src.close
+        return
       end
 
       dest_family, dest_port, dest_host = option.unpack( 'nnN' )
