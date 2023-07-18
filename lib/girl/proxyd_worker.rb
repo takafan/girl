@@ -238,7 +238,7 @@ module Girl
       case ctl_chr
       when Girl::Custom::HELLO then
         return if tcp_info[ :im ]
-        _, im = data.split( Girl::Custom::SEP )
+        _, im = data.split( Girl::Custom::SEP, 2 )
         return unless im
 
         tcp_info[ :im ] = im
@@ -256,9 +256,10 @@ module Girl
         puts "#{ Time.new } got hello #{ im.inspect }"
       when Girl::Custom::A_NEW_SOURCE then
         return unless tcp_info[ :im ]
-        _, src_id, domain_port = data.split( Girl::Custom::SEP )
+        _, src_id, domain_port = data.split( Girl::Custom::SEP, 3 )
         return if src_id.nil? || domain_port.nil?
         src_id = src_id.to_i
+        return if src_id <= 0
         dst_info = @dst_infos.values.find{ | info | info[ :src_id ] == src_id }
 
         if dst_info then
@@ -270,8 +271,10 @@ module Girl
         resolve_domain_port( domain_port, src_id, tcp, tcp_info[ :im ] )
       when Girl::Custom::QUERY then
         return unless tcp_info[ :im ]
-        _, near_id, domain = data.split( Girl::Custom::SEP )
+        _, near_id, domain = data.split( Girl::Custom::SEP, 3 )
         return if near_id.nil? || domain.nil?
+        near_id = near_id.to_i
+        return if near_id <= 0
         new_a_rsv( domain, near_id, tcp, tcp_info[ :im ] )
       end
     end

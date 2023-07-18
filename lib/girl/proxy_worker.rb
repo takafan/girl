@@ -311,24 +311,27 @@ module Girl
 
       case ctl_chr
       when Girl::Custom::PAIRED then
-        _, src_id, dst_id = data.split( Girl::Custom::SEP )
+        _, src_id, dst_id = data.split( Girl::Custom::SEP, 3 )
         return if src_id.nil? || dst_id.nil?
         src_id = src_id.to_i
         dst_id = dst_id.to_i
+        return if src_id <= 0 || dst_id <= 0
         # puts "debug got paired #{ src_id } #{ dst_id }"
         new_a_tun( src_id, dst_id )
       when Girl::Custom::INCOMPLETE then
-        _, near_id, data2 = data.split( Girl::Custom::SEP )
+        _, near_id, data2 = data.split( Girl::Custom::SEP, 3 )
         return if near_id.nil? || data2.nil?
-        # puts "debug got incomplete #{ near_id } #{ data2.bytesize }"
         near_id = near_id.to_i
+        return if near_id <= 0
+        # puts "debug got incomplete #{ near_id } #{ data2.bytesize }"
         near_info = @near_infos[ near_id ]
         near_info[ :part ] = data2 if near_info
       when Girl::Custom::RESPONSE then
-        _, near_id, data2 = data.split( Girl::Custom::SEP )
+        _, near_id, data2 = data.split( Girl::Custom::SEP, 3 )
         return if near_id.nil? || data2.nil?
-        # puts "debug got response #{ near_id } #{ data2.bytesize }"
         near_id = near_id.to_i
+        return if near_id <= 0
+        # puts "debug got response #{ near_id } #{ data2.bytesize }"
         near_info = @near_infos.delete( near_id )
 
         if near_info then
