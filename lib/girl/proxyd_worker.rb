@@ -288,7 +288,7 @@ module Girl
             message_type: 'check-expire'
           }
 
-          send_msg_to_infod( msg )
+          send_data( @info, JSON.generate( msg ), @infod_addr )
         end
       end
     end
@@ -304,7 +304,7 @@ module Girl
                 message_type: 'reset-traffic'
               }
 
-              send_msg_to_infod( msg )
+              send_data( @info, JSON.generate( msg ), @infod_addr )
             end
           end
         end
@@ -370,7 +370,7 @@ module Girl
           dst_id: dst_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
@@ -408,7 +408,7 @@ module Girl
       
       begin
         # puts "debug rsv query #{ domain }"
-        @nameserver_addrs.each{ | addr | rsv.sendmsg_nonblock( data, 0, addr ) }
+        @nameserver_addrs.each{ | addr | rsv.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } rsv send data #{ e.class }"
         rsv.close
@@ -436,7 +436,7 @@ module Girl
           rsv_id: rsv_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
@@ -460,11 +460,6 @@ module Girl
     end
 
     def read_dns( dns )
-      if dns.closed? then
-        puts "#{ Time.new } read closed dns?"
-        return
-      end
-
       begin
         data, addrinfo, rflags, *controls = dns.recvmsg
       rescue Exception => e
@@ -535,7 +530,13 @@ module Girl
     end
 
     def read_girl( girl )
-      data, addrinfo, rflags, *controls = girl.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = girl.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } girl recvmsg #{ e.class }"
+        return
+      end
+
       return if data.empty?
 
       im = decode_im( data )
@@ -546,7 +547,13 @@ module Girl
     end
 
     def read_infod( infod )
-      data, addrinfo, rflags, *controls = infod.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = infod.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } infod recvmsg #{ e.class }"
+        return
+      end
+
       return if data.empty?
 
       begin
@@ -661,20 +668,11 @@ module Girl
           im_infos: arr
         }
 
-        begin
-          @infod.sendmsg_nonblock( JSON.generate( msg2 ), 0, addrinfo )
-        rescue Exception => e
-          puts "#{ Time.new } send memory info #{ e.class } #{ addrinfo.ip_unpack.inspect }"
-        end
+        send_data( @infod, JSON.generate( msg2 ), addrinfo )
       end
     end
 
     def read_rsv( rsv )
-      if rsv.closed? then
-        puts "#{ Time.new } read closed rsv?"
-        return
-      end
-
       begin
         data, addrinfo, rflags, *controls = rsv.recvmsg
       rescue Exception => e
@@ -770,7 +768,7 @@ module Girl
           tcp_id: tcp_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
@@ -874,7 +872,7 @@ module Girl
           tun_id: tun_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
@@ -923,7 +921,7 @@ module Girl
 
       begin
         # puts "debug dns query #{ domain }"
-        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( data, 0, addr ) }
+        @nameserver_addrs.each{ | addr | dns.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } dns send data #{ e.class } #{ domain }"
         dns.close
@@ -953,15 +951,15 @@ module Girl
           dns_id: dns_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
-    def send_msg_to_infod( msg )
+    def send_data( sock, data, target_addr )
       begin
-        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
+        sock.sendmsg( data, 0, target_addr )
       rescue Exception => e
-        puts "#{ Time.new } send msg to infod #{ e.class }"
+        puts "#{ Time.new } sendmsg #{ e.class }"
       end
     end
 

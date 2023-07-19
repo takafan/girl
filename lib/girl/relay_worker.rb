@@ -224,7 +224,7 @@ module Girl
             message_type: 'check-expire'
           }
 
-          send_msg_to_infod( msg )
+          send_data( @info, JSON.generate( msg ), @infod_addr )
         end
       end
     end
@@ -277,7 +277,13 @@ module Girl
     end
 
     def read_infod( infod )
-      data, addrinfo, rflags, *controls = infod.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = infod.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } infod recvmsg #{ e.class }"
+        return
+      end
+
       return if data.empty?
 
       begin
@@ -331,21 +337,20 @@ module Girl
           eliminate_count: @eliminate_count
         }
 
-        send_msg_to_client( msg2, addrinfo )
+        send_data( @infod, JSON.generate( msg2 ), addrinfo )
       end
     end
 
     def read_relay_girl( relay_girl )
-      data, addrinfo, rflags, *controls = relay_girl.recvmsg
-      return if data.empty?
-
-      # puts "debug girlc relay #{ data.inspect }"
-
       begin
-        @girlc.sendmsg( data, 0, @girl_addr )
+        data, addrinfo, rflags, *controls = relay_girl.recvmsg
       rescue Exception => e
-        puts "#{ Time.new } relay data to girl #{ e.class }"
+        puts "#{ Time.new } relay girl recvmsg #{ e.class }"
+        return
       end
+
+      return if data.empty?
+      send_data( @girlc, data, @girl_addr )
     end
 
     def read_relay_tcp( relay_tcp )
@@ -514,19 +519,11 @@ module Girl
       add_relay_tun_wbuff( relay_tun, data )
     end
 
-    def send_msg_to_infod( msg )
+    def send_data( sock, data, target_addr )
       begin
-        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
+        sock.sendmsg( data, 0, target_addr )
       rescue Exception => e
-        puts "#{ Time.new } send msg to infod #{ e.class }"
-      end
-    end
-
-    def send_msg_to_client( msg, addrinfo )
-      begin
-        @infod.sendmsg_nonblock( JSON.generate( msg ), 0, addrinfo )
-      rescue Exception => e
-        puts "#{ Time.new } send msg to client #{ e.class } #{ addrinfo.ip_unpack.inspect }"
+        puts "#{ Time.new } sendmsg #{ e.class }"
       end
     end
 

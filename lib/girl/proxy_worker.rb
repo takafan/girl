@@ -339,7 +339,7 @@ module Girl
           domain = near_info[ :domain ]
           data2 = near_info[ :part ] + data2
           data2[ 0, 2 ] = near_info[ :id ]
-          send_data_to_src( data2, addrinfo )
+          send_data( @rsvd, data2, addrinfo )
           @response_caches[ domain ] = [ data2, Time.new ]
         end
       end
@@ -354,7 +354,7 @@ module Girl
             message_type: 'check-expire'
           }
 
-          send_msg_to_infod( msg )
+          send_data( @info, JSON.generate( msg ), @infod_addr )
         end
       end
     end
@@ -464,7 +464,7 @@ module Girl
           dst_id: dst_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
@@ -516,7 +516,7 @@ module Girl
       
       begin
         # puts "debug rsv query #{ domain }"
-        @nameserver_addrs.each{ | addr | rsv.sendmsg_nonblock( data, 0, addr ) }
+        @nameserver_addrs.each{ | addr | rsv.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } rsv send data #{ e.class }"
         rsv.close
@@ -542,7 +542,7 @@ module Girl
           rsv_id: rsv_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
@@ -557,12 +557,7 @@ module Girl
     end
 
     def new_a_tcp
-      begin
-        @girlc.sendmsg( encode_im( @im ), 0, @girl_addr )
-      rescue Exception => e
-        puts "#{ Time.new } send im to girld #{ e.class }"
-      end
-
+      send_data( @girlc, encode_im( @im ), @girl_addr )
       tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
@@ -635,16 +630,11 @@ module Girl
           tun_id: tun_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
     def read_dns( dns )
-      if dns.closed? then
-        puts "#{ Time.new } read closed dns?"
-        return
-      end
-
       begin
         data, addrinfo, rflags, *controls = dns.recvmsg
       rescue Exception => e
@@ -701,7 +691,13 @@ module Girl
     end
 
     def read_infod( infod )
-      data, addrinfo, rflags, *controls = infod.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = infod.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } infod recvmsg #{ e.class }"
+        return
+      end
+
       return if data.empty?
 
       begin
@@ -813,11 +809,7 @@ module Girl
 
         }
 
-        begin
-          @infod.sendmsg_nonblock( JSON.generate( msg2 ), 0, addrinfo )
-        rescue Exception => e
-          puts "#{ Time.new } send memory info #{ e.class } #{ addrinfo.ip_unpack.inspect }"
-        end
+        send_data( @infod, JSON.generate( msg2 ), addrinfo )
       end
     end
 
@@ -861,16 +853,11 @@ module Girl
           src_id: src_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
     def read_rsv( rsv )
-      if rsv.closed? then
-        puts "#{ Time.new } read closed rsv?"
-        return
-      end
-
       begin
         data, addrinfo, rflags, *controls = rsv.recvmsg
       rescue Exception => e
@@ -886,7 +873,7 @@ module Girl
       addrinfo = rsv_info[ :addrinfo ]
       domain = rsv_info[ :domain ]
       # puts "debug send to #{ addrinfo.inspect }"
-      send_data_to_src( data, addrinfo )
+      send_data( @rsvd, data, addrinfo )
 
       begin
         ip = seek_ip( data )
@@ -930,7 +917,7 @@ module Girl
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
           # puts "debug hit response cache #{ domain }"
           response[ 0, 2 ] = id
-          send_data_to_src( response, addrinfo )
+          send_data( @rsvd, response, addrinfo )
           return
         end
 
@@ -1223,7 +1210,7 @@ module Girl
           src_id: src_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
@@ -1336,7 +1323,7 @@ module Girl
 
       begin
         # puts "debug dns query #{ domain }"
-        @nameserver_addrs.each{ | addr | dns.sendmsg_nonblock( data, 0, addr ) }
+        @nameserver_addrs.each{ | addr | dns.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } dns send data #{ e.class }"
         dns.close
@@ -1367,23 +1354,15 @@ module Girl
           dns_id: dns_id
         }
 
-        send_msg_to_infod( msg )
+        send_data( @info, JSON.generate( msg ), @infod_addr )
       end
     end
 
-    def send_data_to_src( data, addrinfo )
+    def send_data( sock, data, target_addr )
       begin
-        @rsvd.sendmsg( data, 0, addrinfo )
+        sock.sendmsg( data, 0, target_addr )
       rescue Exception => e
-        puts "#{ Time.new } send data to src #{ e.class }"
-      end
-    end
-
-    def send_msg_to_infod( msg )
-      begin
-        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
-      rescue Exception => e
-        puts "#{ Time.new } send msg to infod #{ e.class }"
+        puts "#{ Time.new } sendmsg #{ e.class }"
       end
     end
 

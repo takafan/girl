@@ -182,7 +182,7 @@ module Girl
             message_type: 'check-expire'
           }
 
-          send_msg_to_infod( msg )
+          send_data( @info, JSON.generate( msg ), @infod_addr )
         end
       end
     end
@@ -196,7 +196,7 @@ module Girl
             message_type: 'renew-ctl'
           }
 
-          send_msg_to_infod( msg )
+          send_data( @info, JSON.generate( msg ), @infod_addr )
         end
       end
     end
@@ -215,7 +215,7 @@ module Girl
 
       add_read( ctl, :ctl )
       # puts "#{ Time.new } send im #{ @im.inspect } #{ @mirrord_host } #{ mirrord_port }"
-      send_im
+      send_data( ctl, @im, mirrord_addr )
     end
 
     def new_a_infod( infod_port )
@@ -298,12 +298,13 @@ module Girl
     end
 
     def read_ctl( ctl )
-      if ctl.closed? then
-        puts "#{ Time.new } read closed ctl?"
+      begin
+        data, addrinfo, rflags, *controls = ctl.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } ctl recvmsg #{ e.class }"
         return
       end
 
-      data, addrinfo, rflags, *controls = ctl.recvmsg
       return if data.empty?
 
       if addrinfo.to_sockaddr != @ctl_info[ :mirrord_addr ] then
@@ -316,7 +317,13 @@ module Girl
     end
 
     def read_infod( infod )
-      data, addrinfo, rflags, *controls = infod.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = infod.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } infod recvmsg #{ e.class }"
+        return
+      end
+
       return if data.empty?
 
       begin
@@ -361,11 +368,7 @@ module Girl
           eliminate_count: @eliminate_count
         }
 
-        begin
-          @infod.sendmsg_nonblock( JSON.generate( msg2 ), 0, addrinfo )
-        rescue Exception => e
-          puts "#{ Time.new } send memory info #{ e.class } #{ addrinfo.ip_unpack.inspect }"
-        end
+        send_data( @infod, JSON.generate( msg2 ), addrinfo )
       end
     end
 
@@ -389,19 +392,11 @@ module Girl
       add_app_wbuff( app, data )
     end
 
-    def send_im
+    def send_data( sock, data, target_addr )
       begin
-        @ctl.sendmsg( @im, 0, @ctl_info[ :mirrord_addr ] )
+        sock.sendmsg( data, 0, target_addr )
       rescue Exception => e
-        puts "#{ Time.new } ctl sendmsg #{ e.class }"
-      end
-    end
-
-    def send_msg_to_infod( msg )
-      begin
-        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
-      rescue Exception => e
-        puts "#{ Time.new } send msg to infod #{ e.class }"
+        puts "#{ Time.new } sendmsg #{ e.class }"
       end
     end
 

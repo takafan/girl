@@ -191,7 +191,7 @@ module Girl
             message_type: 'check-expire'
           }
 
-          send_msg_to_infod( msg )
+          send_data( @info, JSON.generate( msg ), @infod_addr )
         end
       end
     end
@@ -232,7 +232,13 @@ module Girl
     end
 
     def read_infod( infod )
-      data, addrinfo, rflags, *controls = infod.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = infod.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } infod recvmsg #{ e.class }"
+        return
+      end
+
       return if data.empty?
 
       begin
@@ -285,7 +291,13 @@ module Girl
     end
 
     def read_mirrord( mirrord )
-      data, addrinfo, rflags, *controls = mirrord.recvmsg
+      begin
+        data, addrinfo, rflags, *controls = mirrord.recvmsg
+      rescue Exception => e
+        puts "#{ Time.new } mirrord recvmsg #{ e.class }"
+        return
+      end
+
       return if data.empty? || ( data.size > ROOM_TITLE_LIMIT ) || data =~ /\r|\n/
 
       im = data
@@ -480,17 +492,9 @@ module Girl
 
     def send_data( sock, data, target_addr )
       begin
-        sock.sendmsg_nonblock( data, 0, target_addr )
+        sock.sendmsg( data, 0, target_addr )
       rescue Exception => e
         puts "#{ Time.new } sendmsg #{ e.class }"
-      end
-    end
-
-    def send_msg_to_infod( msg )
-      begin
-        @info.sendmsg( JSON.generate( msg ), 0, @infod_addr )
-      rescue Exception => e
-        puts "#{ Time.new } send msg to infod #{ e.class }"
       end
     end
 
