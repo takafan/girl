@@ -251,20 +251,6 @@ table ip nat {
 ```
 
 * 设备端dns只设妹子一个，避免得到假ip
-* 关闭sysctl里的ipv6并使用上面规则，会导致访问网页有15秒停顿，避免这个bug请用下面的关法
-
-friendlywrt:
-
-```bash
-. /root/setup.sh
-disable_ipv6
-```
-
-树莓派：/boot/cmdline.txt 开头加：
-
-```bash
-ipv6.disable=1 
-```
 
 ## 去除特征
 
