@@ -97,7 +97,7 @@ windows：
 openwrt: 
 
 ```bash
-opkg install ruby ruby-gems ruby-did-you-mean ruby-enc-extra
+opkg install ruby ruby-gems ruby-did-you-mean ruby-enc-extra ruby-rdoc
 ```
 
 2. 安装妹子：
