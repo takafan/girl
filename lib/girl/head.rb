@@ -2,7 +2,7 @@ module Girl
   BACKLOG                   = 512              # 听队列大小，满后掉SYN包
   RLIMIT                    = 1024             # sock数上限，淘汰池要求RLIMIT不低于1024
   READ_SIZE                 = 4 * 1024 * 1024  # 一次读多少
-  WBUFF_LIMIT               = 20 * 1024 * 1024 # 写前上限，超过上限暂停读
+  WBUFF_LIMIT               = 30 * 1024 * 1024 # 写前上限，超过上限暂停读
   RESUME_BELOW              = WBUFF_LIMIT / 2  # 降到多少以下恢复读
   EXPIRE_NEW                = 5                # 多久没有建立通道，过期
   EXPIRE_CONNECTING         = 5                # 连接中，多久没连上过期
@@ -16,7 +16,7 @@ module Girl
   PING_TIMEOUT              = 5                # tun建立连接后多久没有响应，超时
   RENEW_CTL_INTERVAL        = 10               # p1心跳间隔
   ROOM_TITLE_LIMIT          = 16               # 房间名称字数
-
+  
   HTTP_OK = "HTTP/1.1 200 OK\r\n\r\n"
   RESERVED_ROUTE = <<EOF
 0.0.0.0/8

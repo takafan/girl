@@ -16,7 +16,7 @@ module Girl
       @roles = {}           # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
       @tcp_infos = {}       # tcp => { :part :wbuff :im }
       @resolv_caches = {}   # domain => [ ip, created_at ]
-      @dst_infos = {}       # dst => { :dst_id :im :domain :ip :rbuff :tun :src_id :connected :wbuff :closing :paused :left }
+      @dst_infos = {}       # dst => { :dst_id :im :domain :ip :rbuffs :tun :src_id :connected :wbuff :closing :paused :left }
       @tun_infos = {}       # tun => { :im :dst :domain :part :wbuff :closing :paused }
       @dns_infos = {}       # dns => { :dns_id :im :src_id :domain :port :tcp }
       @rsv_infos = {}       # rsv => { :rsv_id :im :near_id :domain :tcp  }
@@ -96,9 +96,9 @@ module Girl
     def add_dst_rbuff( dst, data )
       return if dst.nil? || dst.closed?
       dst_info = @dst_infos[ dst ]
-      dst_info[ :rbuff ] << data
+      dst_info[ :rbuffs ] << data
 
-      if dst_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
+      if dst_info[ :rbuffs ].join.bytesize >= WBUFF_LIMIT then
         puts "#{ Time.new } dst rbuff full"
         close_dst( dst )
       end
@@ -342,7 +342,7 @@ module Girl
         im: im,           # 标识
         domain: domain,   # 目的地域名
         ip: ip,           # 目的地ip
-        rbuff: '',        # 对应的tun没准备好，暂存读到的流量
+        rbuffs: [],       # 对应的tun没准备好，暂存读到的流量
         tun: nil,         # 对应的tun
         src_id: src_id,   # 近端src id
         connected: false, # 是否已连接
@@ -652,6 +652,7 @@ module Girl
         end
 
         msg2 = {
+          resolv_caches: @resolv_caches.keys.sort,
           sizes: {
             ips: @ips.size,
             im_infos: @im_infos.size,
@@ -689,18 +690,26 @@ module Girl
       domain = rsv_info[ :domain ]
       tcp = rsv_info[ :tcp ]
       limit = Girl::Custom::CHUNK_SIZE - 4 - near_id.to_s.size
+      i = 0
 
-      if data.bytesize > limit then
-        part = data[ 0, limit ]
-        data = data[ limit..-1 ]
-        data2 = [ Girl::Custom::INCOMPLETE, near_id, part ].join( Girl::Custom::SEP )
-        puts "#{ Time.new } incomplete #{ near_id } #{ im.inspect } #{ domain } #{ part.bytesize }"
+      loop do
+        part = data[ i, limit ]
+        i += part.bytesize
+        is_last = ( i >= data.bytesize )
+
+        if is_last then
+          prefix = Girl::Custom::RESPONSE
+          puts "#{ prefix } #{ part.bytesize } #{ near_id } #{ im.inspect } #{ domain }"
+        else
+          prefix = Girl::Custom::INCOMPLETE
+          print "#{ prefix } #{ part.bytesize } "
+        end
+        
+        data2 = [ prefix, near_id, part ].join( Girl::Custom::SEP )
         add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
+        break if is_last
       end
 
-      data2 = [ Girl::Custom::RESPONSE, near_id, data ].join( Girl::Custom::SEP )
-      puts "#{ Time.new } response #{ near_id } #{ im.inspect } #{ domain } #{ data.bytesize }"
-      add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
       close_rsv( rsv )
     end
 
@@ -969,16 +978,15 @@ module Girl
       src_id = dst_info[ :src_id ]
       # puts "debug add pong #{ src_id }"
       data = "#{ src_id }#{ Girl::Custom::SEP }"
-      data2 = dst_info[ :rbuff ]
 
-      unless data2.empty? then
+      dst_info[ :rbuffs ].each do | data2 |
         if dst_info[ :left ] > 0 then
-          data << encode( data2 )
+          data2 = encode( data2 )
           dst_info[ :left ] -= 1
-          data << Girl::Custom::TERM if dst_info[ :left ] == 0
-        else
-          data << data2
+          data2 << Girl::Custom::TERM if dst_info[ :left ] == 0
         end
+
+        data << data2
       end
 
       add_tun_wbuff( tun, data )
