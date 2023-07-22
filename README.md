@@ -99,6 +99,7 @@ windows：
 openwrt: 
 
 ```bash
+opkg update
 opkg install ruby ruby-gems ruby-did-you-mean ruby-enc-extra ruby-rdoc
 ```
 
