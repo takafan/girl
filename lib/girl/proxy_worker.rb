@@ -28,7 +28,7 @@ module Girl
       @dns_infos = {}        # dns => { :dns_id :domain :src }
       @rsv_infos = {}        # rsv => { :rsv_id :addrinfo :domain }
       @near_infos = {}       # near_id => { :addrinfo :id :domain :part }
-      @response_caches = {}  # domain => [ response, created_at ]
+      @response_caches = {}  # domain => [ response, created_at, ip, is_remote ]
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
@@ -340,7 +340,14 @@ module Girl
           data2 = near_info[ :part ] + data2
           data2[ 0, 2 ] = near_info[ :id ]
           send_data( @rsvd, data2, addrinfo )
-          @response_caches[ domain ] = [ data2, Time.new ]
+
+          begin
+            ip = seek_ip( data2 )
+          rescue Exception => e
+            puts "#{ Time.new } response seek ip  #{ e.class } #{ e.message }"
+          end
+
+          @response_caches[ domain ] = [ data2, Time.new, ip, true ]
         end
       end
     end
@@ -802,8 +809,8 @@ module Girl
         end
       when 'memory-info' then
         msg2 = {
-          resolv_caches: @resolv_caches.keys.sort,
-          response_caches: @response_caches.keys.sort,
+          resolv_caches: @resolv_caches.sort,
+          response_caches: @response_caches.sort.map{ | a | [ a[ 0 ], a[ 1 ][ 2 ], a[ 1 ][ 3 ] ] },
           sizes: {
             updates: @updates.size,
             src_infos: @src_infos.size,
@@ -896,7 +903,7 @@ module Girl
 
       # 不缓存反向DNS
       if ip then
-        @response_caches[ domain ] = [ data, Time.new ]
+        @response_caches[ domain ] = [ data, Time.new, ip, false ]
       end
 
       close_rsv( rsv )

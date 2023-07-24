@@ -15,7 +15,7 @@ module Girl
       @eliminate_count = 0  # 淘汰次数
       @roles = {}           # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
       @tcp_infos = {}       # tcp => { :part :wbuff :im }
-      @resolv_caches = {}   # domain => [ ip, created_at ]
+      @resolv_caches = {}   # domain => [ ip, created_at, im ]
       @dst_infos = {}       # dst => { :dst_id :im :domain :ip :rbuffs :tun :src_id :connected :wbuff :closing :paused :left }
       @tun_infos = {}       # tun => { :im :dst :domain :part :wbuff :closing :paused }
       @dns_infos = {}       # dns => { :dns_id :im :src_id :domain :port :tcp }
@@ -487,8 +487,9 @@ module Girl
         port = dns_info[ :port ]
         src_id = dns_info[ :src_id ]
         tcp = dns_info[ :tcp ]
+        im = dns_info[ :im ]
         new_a_dst( domain, ip, port, src_id, tcp )
-        @resolv_caches[ domain ] = [ ip, Time.new ]
+        @resolv_caches[ domain ] = [ ip, Time.new, im ]
       else
         puts "#{ Time.new } no ip in answer #{ domain }"
       end
@@ -652,7 +653,7 @@ module Girl
         end
 
         msg2 = {
-          resolv_caches: @resolv_caches.keys.sort,
+          resolv_caches: @resolv_caches.sort,
           sizes: {
             ips: @ips.size,
             im_infos: @im_infos.size,
@@ -699,10 +700,10 @@ module Girl
 
         if is_last then
           prefix = Girl::Custom::RESPONSE
-          puts "#{ prefix } #{ part.bytesize } #{ near_id } #{ im.inspect } #{ domain }"
+          # puts "#{ prefix } #{ part.bytesize } #{ near_id } #{ im.inspect } #{ domain }"
         else
           prefix = Girl::Custom::INCOMPLETE
-          print "#{ prefix } #{ part.bytesize } "
+          # print "#{ prefix } #{ part.bytesize } "
         end
         
         data2 = [ prefix, near_id, part ].join( Girl::Custom::SEP )
@@ -892,7 +893,7 @@ module Girl
       domain = domain_port[ 0...colon_idx ]
       port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
 
-      if ( domain !~ /^[0-9a-zA-Z\-\.]{1,63}$/ ) || ( domain =~ /^(0\.\d{1,3}\.\d{1,3}\.\d{1,3})|(10\.\d{1,3}\.\d{1,3}\.\d{1,3})|(127\.\d{1,3}\.\d{1,3}\.\d{1,3})|(169\.254\.\d{1,3}\.\d{1,3})|(172\.((1[6-9])|(2\d)|(3[01]))\.\d{1,3}\.\d{1,3})|(192\.168\.\d{1,3}\.\d{1,3})|(255\.255\.255\.255)|(localhost)$/ ) then
+      if ( domain !~ /^[0-9a-zA-Z\-\.]{1,63}$/ ) || ( domain =~ /^((0\.\d{1,3}\.\d{1,3}\.\d{1,3})|(10\.\d{1,3}\.\d{1,3}\.\d{1,3})|(127\.\d{1,3}\.\d{1,3}\.\d{1,3})|(169\.254\.\d{1,3}\.\d{1,3})|(172\.((1[6-9])|(2\d)|(3[01]))\.\d{1,3}\.\d{1,3})|(192\.168\.\d{1,3}\.\d{1,3})|(255\.255\.255\.255)|(localhost))$/ ) then
         # 忽略非法域名，内网地址
         puts "#{ Time.new } ignore #{ domain }"
         return
@@ -907,7 +908,7 @@ module Girl
       resolv_cache = @resolv_caches[ domain ]
 
       if resolv_cache then
-        ip, created_at = resolv_cache
+        ip, created_at, im = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
           # puts "debug #{ domain } hit resolv cache #{ ip }"
