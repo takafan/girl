@@ -335,13 +335,7 @@ ruby p1.run.rb
 }
 ```
 
-5. 镜子端本地，ssh连p2影子端口：
-
-```bash
-ssh -p2222 localhost
-```
-
-6. /etc/init.d/p1
+5. /etc/init.d/p1
 
 ```bash
 #!/bin/sh /etc/rc.common
@@ -360,4 +354,10 @@ start_service() {
 } 
 ```
 
-openwrt下重启p1需用screen: `screen -dm service p1 restart`
+6. 镜子端本地，ssh连p2影子端口：
+
+```bash
+ssh -p2222 localhost
+```
+
+连进去后（openwrt），重启p1需用screen: `screen -dm service p1 restart`
