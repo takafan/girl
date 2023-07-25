@@ -22,7 +22,7 @@ module Girl
 
     def looping
       # puts "#{ Time.new } looping"
-      loop_renew_ctl
+      loop_send_im
       loop_check_expire
 
       loop do
@@ -73,7 +73,7 @@ module Girl
     private
 
     def add_app_wbuff( app, data )
-      return if app.nil? || app.closed?
+      return if app.nil? || app.closed? || data.empty?
       app_info = @app_infos[ app ]
       app_info[ :wbuff ] << data
       add_write( app )
@@ -95,7 +95,7 @@ module Girl
     end
 
     def add_p1_wbuff( p1, data )
-      return if p1.nil? || p1.closed?
+      return if p1.nil? || p1.closed? || data.empty?
       p1_info = @p1_infos[ p1 ]
       p1_info[ :wbuff ] << data
       add_write( p1 )
@@ -150,11 +150,6 @@ module Girl
       app_info
     end
 
-    def close_ctl
-      return if @ctl.nil? || @ctl.closed?
-      close_sock( @ctl )
-    end
-
     def close_p1( p1 )
       return if p1.nil? || p1.closed?
       # puts "#{ Time.new } close p1"
@@ -187,13 +182,13 @@ module Girl
       end
     end
 
-    def loop_renew_ctl
+    def loop_send_im
       Thread.new do
         loop do
           sleep RENEW_CTL_INTERVAL
 
           msg = {
-            message_type: 'renew-ctl'
+            message_type: 'send-im'
           }
 
           send_data( @info, JSON.generate( msg ), @infod_addr )
@@ -205,17 +200,9 @@ module Girl
       ctl = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       ctl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       ctl.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
-      mirrord_port = @mirrord_port + 10.times.to_a.sample
-      mirrord_addr = Socket.sockaddr_in( mirrord_port, @mirrord_host )
-
       @ctl = ctl
-      @ctl_info = {
-        mirrord_addr: mirrord_addr
-      }
-
       add_read( ctl, :ctl )
-      # puts "#{ Time.new } send im #{ @im.inspect } #{ @mirrord_host } #{ mirrord_port }"
-      send_data( ctl, @im, mirrord_addr )
+      send_im
     end
 
     def new_a_infod( infod_port )
@@ -300,12 +287,12 @@ module Girl
         return
       end
 
-      return if data.empty?
-
-      if addrinfo.to_sockaddr != @ctl_info[ :mirrord_addr ] then
+      if addrinfo.to_sockaddr != @mirrord_addr then
         puts "#{ Time.new } mirrord addr not match #{ addrinfo.inspect }"
         return
       end
+
+      return if data.empty? || data.bytesize != 10
 
       p1d_port, p2_id = data.unpack( 'nQ>' )
       new_app_and_p1( p1d_port, p2_id )
@@ -347,11 +334,8 @@ module Girl
             close_sock( sock )
           end
         end
-      when 'renew-ctl' then
-        if @ctl && !@ctl.closed? then
-          close_ctl
-          new_a_ctl
-        end
+      when 'send-im' then
+        send_im
       when 'memory-info' then
         msg2 = {
           sizes: {
@@ -390,6 +374,13 @@ module Girl
       end
     end
 
+    def send_im
+      mirrord_port = @mirrord_port + 10.times.to_a.sample
+      mirrord_addr = Socket.sockaddr_in( mirrord_port, @mirrord_host )
+      @mirrord_addr = mirrord_addr
+      send_data( @ctl, @im, mirrord_addr )
+    end
+
     def set_app_closing( app )
       return if app.nil? || app.closed?
       app_info = @app_infos[ app ]
@@ -401,7 +392,7 @@ module Girl
     def set_p1_closing( p1 )
       return if p1.nil? || p1.closed?
       p1_info = @p1_infos[ p1 ]
-      return if p1_info.nil? || p1_info[ :closing_write ]
+      return if p1_info.nil? || p1_info[ :closing ]
       p1_info[ :closing ] = true
       add_write( p1 )
     end
@@ -483,7 +474,6 @@ module Girl
       end
 
       p1_info = @p1_infos[ p1 ]
-      app = p1_info[ :app ]
       data = p1_info[ :wbuff ]
 
       # 写前为空，处理关闭写
@@ -509,6 +499,7 @@ module Girl
       set_update( p1 )
       data = data[ written..-1 ]
       p1_info[ :wbuff ] = data
+      app = p1_info[ :app ]
 
       if app && !app.closed? then
         app_info = @app_infos[ app ]

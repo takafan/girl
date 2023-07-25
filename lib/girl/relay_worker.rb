@@ -103,14 +103,14 @@ module Girl
     end
 
     def add_relay_tcp_wbuff( relay_tcp, data )
-      return if relay_tcp.nil? || relay_tcp.closed?
+      return if relay_tcp.nil? || relay_tcp.closed? || data.empty?
       relay_tcp_info = @relay_tcp_infos[ relay_tcp ]
       relay_tcp_info[ :wbuff ] << data
       add_write( relay_tcp )
     end
 
     def add_relay_tun_wbuff( relay_tun, data )
-      return if relay_tun.nil? || relay_tun.closed?
+      return if relay_tun.nil? || relay_tun.closed? || data.empty?
       relay_tun_info = @relay_tun_infos[ relay_tun ]
       relay_tun_info[ :wbuff ] << data
       add_write( relay_tun )
@@ -132,14 +132,14 @@ module Girl
     end
 
     def add_tcp_wbuff( tcp, data )
-      return if tcp.nil? || tcp.closed?
+      return if tcp.nil? || tcp.closed? || data.empty?
       tcp_info = @tcp_infos[ tcp ]
       tcp_info[ :wbuff ] << data
       add_write( tcp )
     end
 
     def add_tun_wbuff( tun, data )
-      return if tun.nil? || tun.closed?
+      return if tun.nil? || tun.closed? || data.empty?
       tun_info = @tun_infos[ tun ]
       tun_info[ :wbuff ] << data
       add_write( tun )

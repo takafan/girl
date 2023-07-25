@@ -113,7 +113,7 @@ module Girl
     private
 
     def add_dst_wbuff( dst, data )
-      return if dst.nil? || dst.closed?
+      return if dst.nil? || dst.closed? || data.empty?
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       add_write( dst )
@@ -132,7 +132,7 @@ module Girl
     end
 
     def add_mem_wbuff( mem, data )
-      return if mem.nil? || mem.closed?
+      return if mem.nil? || mem.closed? || data.empty?
       mem_info = @mem_infos[ mem ]
       mem_info[ :wbuff ] << data
       add_write( mem )
@@ -166,7 +166,7 @@ module Girl
     end
 
     def add_src_rbuff( src, data )
-      return if src.nil? || src.closed?
+      return if src.nil? || src.closed? || data.empty?
       src_info = @src_infos[ src ]
       src_info[ :rbuffs ] << data
 
@@ -177,7 +177,7 @@ module Girl
     end
 
     def add_src_wbuff( src, data )
-      return if src.nil? || src.closed?
+      return if src.nil? || src.closed? || data.empty?
       src_info = @src_infos[ src ]
       src_info[ :wbuff ] << data
       add_write( src )
@@ -211,6 +211,8 @@ module Girl
     end
 
     def add_tcp_wbuff( data )
+      return if data.empty?
+
       if @tcp.nil? || @tcp.closed? then
         tcp_info = new_a_tcp
         puts "#{ Time.new } #{ @im }"
@@ -225,7 +227,7 @@ module Girl
     end
 
     def add_tun_wbuff( tun, data )
-      return if tun.nil? || tun.closed?
+      return if tun.nil? || tun.closed? || data.empty?
       tun_info = @tun_infos[ tun ]
       tun_info[ :wbuff ] << data
       add_write( tun )
@@ -855,6 +857,7 @@ module Girl
         response_caches: @response_caches.sort.map{ | a | [ a[ 0 ], a[ 1 ][ 2 ], a[ 1 ][ 3 ] ] },
         sizes: {
           updates: @updates.size,
+          mem_infos: @mem_infos.size,
           src_infos: @src_infos.size,
           dst_infos: @dst_infos.size,
           tun_infos: @tun_infos.size,
@@ -1008,7 +1011,7 @@ module Girl
         }
 
         data2 = [ Girl::Custom::QUERY, near_id, domain ].join( Girl::Custom::SEP )
-        puts "#{ Time.new } query #{ near_id } #{ domain } #{ addrinfo.ip_address }"
+        # puts "debug query #{ near_id } #{ domain } #{ addrinfo.ip_address }"
         add_tcp_wbuff( encode_a_msg( data2 ) )
       else
         new_a_rsv( data, addrinfo, domain )
@@ -1454,7 +1457,7 @@ module Girl
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
-      puts "#{ Time.new } a new source #{ src_id } #{ domain_port } #{ src_info[ :addrinfo ].ip_address }"
+      # puts "debug a new source #{ src_id } #{ domain_port } #{ src_info[ :addrinfo ].ip_address }"
       data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
       add_tcp_wbuff( encode_a_msg( data ) )
     end

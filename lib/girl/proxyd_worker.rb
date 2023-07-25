@@ -102,7 +102,7 @@ module Girl
     private
 
     def add_dst_rbuff( dst, data )
-      return if dst.nil? || dst.closed?
+      return if dst.nil? || dst.closed? || data.empty?
       dst_info = @dst_infos[ dst ]
       dst_info[ :rbuffs ] << data
 
@@ -113,7 +113,7 @@ module Girl
     end
 
     def add_dst_wbuff( dst, data )
-      return if dst.nil? || dst.closed?
+      return if dst.nil? || dst.closed? || data.empty?
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       add_write( dst )
@@ -135,7 +135,7 @@ module Girl
     end
 
     def add_mem_wbuff( mem, data )
-      return if mem.nil? || mem.closed?
+      return if mem.nil? || mem.closed? || data.empty?
       mem_info = @mem_infos[ mem ]
       mem_info[ :wbuff ] << data
       add_write( mem )
@@ -157,14 +157,14 @@ module Girl
     end
 
     def add_tcp_wbuff( tcp, data )
-      return if tcp.nil? || tcp.closed?
+      return if tcp.nil? || tcp.closed? || data.empty?
       tcp_info = @tcp_infos[ tcp ]
       tcp_info[ :wbuff ] << data
       add_write( tcp )
     end
 
     def add_tun_wbuff( tun, data )
-      return if tun.nil? || tun.closed?
+      return if tun.nil? || tun.closed? || data.empty?
       tun_info = @tun_infos[ tun ]
       tun_info[ :wbuff ] << data
       add_write( tun )
@@ -434,7 +434,7 @@ module Girl
       begin
         data = pack_a_query( domain )
       rescue Exception => e
-        puts "#{ Time.new } pack a query #{ e.class } #{ e.message } #{ domain }"
+        puts "#{ Time.new } rsv pack a query #{ e.class } #{ e.message } #{ domain }"
         return
       end
       
@@ -693,6 +693,7 @@ module Girl
           im_infos: @im_infos.size,
           updates: @updates.size,
           tcp_infos: @tcp_infos.size,
+          mem_infos: @mem_infos.size,
           dst_infos: @dst_infos.size,
           tun_infos: @tun_infos.size,
           dns_infos: @dns_infos.size,
@@ -951,7 +952,7 @@ module Girl
       begin
         data = pack_a_query( domain )
       rescue Exception => e
-        puts "#{ Time.new } pack a query #{ e.class } #{ e.message } #{ domain }"
+        puts "#{ Time.new } dns pack a query #{ e.class } #{ e.message } #{ domain }"
         return
       end
 

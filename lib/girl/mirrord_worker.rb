@@ -77,7 +77,7 @@ module Girl
     private
 
     def add_p1_wbuff( p1, data )
-      return if p1.nil? || p1.closed?
+      return if p1.nil? || p1.closed? || data.empty?
       p1_info = @p1_infos[ p1 ]
       p1_info[ :wbuff ] << data
       add_write( p1 )
@@ -99,7 +99,7 @@ module Girl
     end
 
     def add_p2_rbuff( p2, data )
-      return if p2.nil? || p2.closed?
+      return if p2.nil? || p2.closed? || data.empty?
       p2_info = @p2_infos[ p2 ]
       p2_info[ :rbuff ] << data
 
@@ -110,7 +110,7 @@ module Girl
     end
 
     def add_p2_wbuff( p2, data )
-      return if p2.nil? || p2.closed?
+      return if p2.nil? || p2.closed? || data.empty?
       p2_info = @p2_infos[ p2 ]
       p2_info[ :wbuff ] << data
       add_write( p2 )
@@ -372,12 +372,8 @@ module Girl
 
         puts "#{ Time.new } paired #{ p1_info[ :im ].inspect } #{ p1_info[ :addrinfo ].inspect } #{ p2_info[ :addrinfo ].inspect } #{ p2_id }"
         p1_info[ :p2 ] = p2
-        p1_info[ :wbuff ] << p2_info[ :rbuff ]
-
-        unless p1_info[ :wbuff ].empty? then
-          add_write( p1 )
-          return if p1.closed?
-        end
+        add_p1_wbuff( p1, p2_info[ :rbuff ] )
+        return if p1.closed?
 
         p2_info[ :p1 ] = p1
         data = data[ 8..-1 ]
@@ -451,14 +447,14 @@ module Girl
       p2_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
       @p2_infos[ p2 ] = {
-        p2_id: p2_id,         # p2 id
-        addrinfo: addrinfo,   # 地址
-        im: im,               # 标识
-        p1: nil,              # 对应p1
-        rbuff: '',            # 匹配到p1之前，暂存流量
-        wbuff: '',            # 写前
-        closing: false,       # 是否准备关闭
-        paused: false         # 是否已暂停
+        p2_id: p2_id,       # p2 id
+        addrinfo: addrinfo, # 地址
+        im: im,             # 标识
+        p1: nil,            # 对应p1
+        rbuff: '',          # 匹配到p1之前，暂存流量
+        wbuff: '',          # 写前
+        closing: false,     # 是否准备关闭
+        paused: false       # 是否已暂停
       }
 
       add_read( p2, :p2 )
