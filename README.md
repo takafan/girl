@@ -260,7 +260,7 @@ table ip nat {
 }
 ```
 
-注意：设备端避免解析到假ip需关闭ipv6，且ipv4的dns只设妹子一个。
+设备端避免解析到假ip需关闭ipv6，且ipv4的dns只设妹子一个。
 
 ## 去除特征
 
@@ -340,3 +340,24 @@ ruby p1.run.rb
 ```bash
 ssh -p2222 localhost
 ```
+
+6. /etc/init.d/p1
+
+```bash
+#!/bin/sh /etc/rc.common
+
+NAME=p1
+START=90
+USE_PROCD=1                
+
+start_service() {
+        procd_open_instance
+        procd_set_param command /usr/bin/ruby /boot/${NAME}.run.rb
+        procd_set_param stdout 1
+        procd_set_param stderr 1
+        procd_set_param pidfile /var/run/${NAME}.pid
+        procd_close_instance
+} 
+```
+
+openwrt下重启p1需用screen: `screen -dm service p1 restart`
