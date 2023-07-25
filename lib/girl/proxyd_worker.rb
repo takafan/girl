@@ -3,18 +3,19 @@ module Girl
     include Custom
     include Dns
 
-    def initialize( proxyd_port, girl_port, nameservers, reset_traff_day, ims )
+    def initialize( proxyd_port, memd_port, girl_port, nameservers, reset_traff_day, ims )
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @reset_traff_day = reset_traff_day
       @ims = ims
-      @update_roles = [ :dns, :dst, :tcp, :tun ] # 参与淘汰的角色
-      @updates_limit = 1010 # 淘汰池上限，1015(mac) - [ girl, info, infod, tcpd, tund ]
+      @update_roles = [ :dns, :dst, :mem, :tcp, :tun ] # 参与淘汰的角色
+      @updates_limit = 1009 # 淘汰池上限，1015(mac) - [ girl, info, infod, memd, tcpd, tund ]
       @reads = []           # 读池
       @writes = []          # 写池
       @updates = {}         # sock => updated_at
       @eliminate_count = 0  # 淘汰次数
-      @roles = {}           # sock => :dns / :dst / :girl / :infod / :tcpd / :tcp / :tund / :tun
+      @roles = {}           # sock => :dns / :dst / :girl / :infod / :mem / :memd / :tcp / :tcpd / :tun / :tund
       @tcp_infos = {}       # tcp => { :part :wbuff :im }
+      @mem_infos = {}       # mem => { :wbuff }
       @resolv_caches = {}   # domain => [ ip, created_at, im ]
       @dst_infos = {}       # dst => { :dst_id :im :domain :ip :rbuffs :tun :src_id :connected :wbuff :closing :paused :left }
       @tun_infos = {}       # tun => { :im :dst :domain :part :wbuff :closing :paused }
@@ -25,6 +26,7 @@ module Girl
       
       new_a_tcpd( proxyd_port )
       new_a_infod( proxyd_port )
+      new_a_memd( memd_port )
       new_a_tund( girl_port )
       new_a_girl( girl_port )
     end
@@ -49,18 +51,22 @@ module Girl
             read_girl( sock )
           when :infod then
             read_infod( sock )
+          when :mem then
+            read_mem( sock )
+          when :memd then
+            read_memd( sock )
           when :rsv then
             read_rsv( sock )
-          when :tcpd then
-            read_tcpd( sock )
           when :tcp then
             read_tcp( sock )
-          when :tund then
-            read_tund( sock )
+          when :tcpd then
+            read_tcpd( sock )
           when :tun then
             read_tun( sock )
+          when :tund then
+            read_tund( sock )
           else
-            # puts "#{ Time.new } read unknown role #{ role }"
+            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -71,6 +77,8 @@ module Girl
           case role
           when :dst then
             write_dst( sock )
+          when :mem then
+            write_mem( sock )
           when :tcp then
             write_tcp( sock )
           when :tun then
@@ -124,6 +132,13 @@ module Girl
           end
         end
       end
+    end
+
+    def add_mem_wbuff( mem, data )
+      return if mem.nil? || mem.closed?
+      mem_info = @mem_infos[ mem ]
+      mem_info[ :wbuff ] << data
+      add_write( mem )
     end
 
     def add_read( sock, role = nil )
@@ -194,6 +209,13 @@ module Girl
       dst_info = @dst_infos.delete( dst )
       set_tun_closing( dst_info[ :tun ] ) if dst_info
       dst_info
+    end
+
+    def close_mem( mem )
+      return nil if mem.nil? || mem.closed?
+      # puts "debug close mem"
+      close_sock( mem )
+      @mem_infos.delete( mem )
     end
 
     def close_rsv( rsv )
@@ -396,6 +418,16 @@ module Girl
       @info = info
     end
 
+    def new_a_memd( memd_port )
+      memd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+      memd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      memd.bind( Socket.sockaddr_in( memd_port, '127.0.0.1' ) )
+      memd.listen( 5 )
+      puts "#{ Time.new } memd listen on #{ memd_port }"
+      add_read( memd, :memd )
+    end
+
     def new_a_rsv( domain, near_id, tcp, im )
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
@@ -498,11 +530,6 @@ module Girl
     end
 
     def read_dst( dst )
-      if dst.closed? then
-        puts "#{ Time.new } read closed dst?"
-        return
-      end
-
       begin
         data = dst.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -588,31 +615,26 @@ module Girl
         socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_AFTER }.keys
 
         if socks.any? then
-          dns_count = dst_count = rsv_count = tcp_count = tun_count = 0
-
           socks.each do | sock |
             case @roles[ sock ]
             when :dns
               close_dns( sock )
-              dns_count += 1
             when :dst
               close_dst( sock )
-              dst_count += 1
+            when :mem
+              close_mem( sock )
             when :rsv
               close_rsv( sock )
-              rsv_count += 1
             when :tcp
               close_tcp( sock )
-              tcp_count += 1
             when :tun
               close_tun( sock )
-              tun_count += 1
             else
               close_sock( sock )
             end
           end
 
-          # puts "debug expire dns #{ dns_count } dst #{ dst_count } tcp #{ tcp_count } tun #{ tun_count }"
+          # puts "debug expire #{ socks.size }"
         end
       when 'check-rsv-closed' then
         rsv_id = msg[ :rsv_id ]
@@ -641,37 +663,63 @@ module Girl
       when 'reset-traffic' then
         puts "#{ Time.new } reset traffic"
         @im_infos.each{ | _, _info | _info[ :in ] = _info[ :out ] = 0 }
-      when 'memory-info' then
-        arr = []
-
-        @im_infos.sort.map do | im, _info |
-          arr << {
-            im: im,
-            in: _info[ :in ],
-            out: _info[ :out ]
-          }
-        end
-
-        msg2 = {
-          resolv_caches: @resolv_caches.sort,
-          sizes: {
-            ips: @ips.size,
-            im_infos: @im_infos.size,
-            updates: @updates.size,
-            tcp_infos: @tcp_infos.size,
-            dst_infos: @dst_infos.size,
-            tun_infos: @tun_infos.size,
-            dns_infos: @dns_infos.size,
-            rsv_infos: @rsv_infos.size,
-            resolv_caches: @resolv_caches.size
-          },
-          updates_limit: @updates_limit,
-          eliminate_count: @eliminate_count,
-          im_infos: arr
-        }
-
-        send_data( @infod, JSON.generate( msg2 ), addrinfo )
       end
+    end
+
+    def read_mem( mem )
+      begin
+        mem.read_nonblock( READ_SIZE )
+      rescue Exception => e
+        # puts "debug read mem #{ e.class }"
+        close_mem( mem )
+        return
+      end
+
+      set_update( mem )
+      arr = []
+
+      @im_infos.sort.map do | im, _info |
+        arr << {
+          im: im,
+          in: _info[ :in ],
+          out: _info[ :out ]
+        }
+      end
+      
+      msg = {
+        resolv_caches: @resolv_caches.sort,
+        sizes: {
+          ips: @ips.size,
+          im_infos: @im_infos.size,
+          updates: @updates.size,
+          tcp_infos: @tcp_infos.size,
+          dst_infos: @dst_infos.size,
+          tun_infos: @tun_infos.size,
+          dns_infos: @dns_infos.size,
+          rsv_infos: @rsv_infos.size,
+          resolv_caches: @resolv_caches.size
+        },
+        updates_limit: @updates_limit,
+        eliminate_count: @eliminate_count,
+        im_infos: arr
+      }
+
+      add_mem_wbuff( mem, JSON.generate( msg ) )
+    end
+
+    def read_memd( memd )
+      begin
+        mem, addrinfo = memd.accept_nonblock
+      rescue Exception => e
+        puts "#{ Time.new } memd accept #{ e.class }"
+        return
+      end
+
+      @mem_infos[ mem ] = {
+        wbuff: ''
+      }
+      
+      add_read( mem, :mem )
     end
 
     def read_rsv( rsv )
@@ -715,11 +763,6 @@ module Girl
     end
 
     def read_tcp( tcp )
-      if tcp.closed? then
-        puts "#{ Time.new } read closed tcp?"
-        return
-      end
-
       begin
         data = tcp.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -739,11 +782,6 @@ module Girl
     end
 
     def read_tcpd( tcpd )
-      if tcpd.closed? then
-        puts "#{ Time.new } read closed tcpd?"
-        return
-      end
-
       begin
         tcp, addrinfo = tcpd.accept_nonblock
       rescue Exception => e
@@ -783,11 +821,6 @@ module Girl
     end
 
     def read_tun( tun )
-      if tun.closed? then
-        puts "#{ Time.new } read closed tun?"
-        return
-      end
-
       begin
         data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -839,11 +872,6 @@ module Girl
     end
 
     def read_tund( tund )
-      if tund.closed? then
-        puts "#{ Time.new } read closed tund?"
-        return
-      end
-
       begin
         tun, addrinfo = tund.accept_nonblock
       rescue Exception => e
@@ -1025,6 +1053,8 @@ module Girl
             close_dns( _sock )
           when :dst
             close_dst( _sock )
+          when :mem
+            close_mem( _sock )
           when :tcp
             close_tcp( _sock )
           when :tun
@@ -1081,6 +1111,34 @@ module Girl
           tun_info[ :paused ] = false unless tun.closed?
         end
       end
+    end
+
+    def write_mem( mem )
+      if mem.closed? then
+        puts "#{ Time.new } write closed mem?"
+        return
+      end
+
+      mem_info = @mem_infos[ mem ]
+      data = mem_info[ :wbuff ]
+
+      if data.empty? then
+        @writes.delete( mem )
+        close_mem( mem )
+        return
+      end
+
+      begin
+        written = mem.write_nonblock( data )
+      rescue Exception => e
+        # puts "debug write mem #{ e.class }"
+        close_mem( mem )
+        return
+      end
+
+      set_update( mem )
+      data = data[ written..-1 ]
+      mem_info[ :wbuff ] = data
     end
 
     def write_tcp( tcp )

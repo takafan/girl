@@ -41,7 +41,7 @@ module Girl
           when :p1 then
             read_p1( sock )
           else
-            # puts "#{ Time.new } read unknown role #{ role }"
+            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -55,7 +55,7 @@ module Girl
           when :p1 then
             write_p1( sock )
           else
-            # puts "#{ Time.new } write unknown role #{ role }"
+            # puts "debug write unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -278,11 +278,6 @@ module Girl
     end
 
     def read_app( app )
-      if app.closed? then
-        puts "#{ Time.new } read closed app?"
-        return
-      end
-
       begin
         data = app.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -373,11 +368,6 @@ module Girl
     end
 
     def read_p1( p1 )
-      if p1.closed? then
-        puts "#{ Time.new } read closed p1?"
-        return
-      end
-
       begin
         data = p1.read_nonblock( READ_SIZE )
       rescue Exception => e

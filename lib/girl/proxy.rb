@@ -23,6 +23,7 @@ module Girl
 
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
       redir_port = conf[ :redir_port ]
+      memd_port = conf[ :memd_port ]
       tspd_port = conf[ :tspd_port ]
       proxyd_host = conf[ :proxyd_host ]
       proxyd_port = conf[ :proxyd_port ]
@@ -35,6 +36,10 @@ module Girl
 
       unless redir_port then
         redir_port = 6666
+      end
+
+      unless memd_port then
+        memd_port = redir_port + 1
       end
 
       unless tspd_port then
@@ -76,7 +81,7 @@ module Girl
       end
 
       puts "girl proxy #{ Girl::VERSION }"
-      puts "redir #{ redir_port } proxyd #{ proxyd_host } #{ proxyd_port } #{ girl_port } #{ tspd_port } nameservers #{ nameservers.inspect } im #{ im }"
+      puts "redir #{ redir_port } #{ memd_port } #{ proxyd_host } #{ proxyd_port } #{ girl_port } #{ tspd_port } nameservers #{ nameservers.inspect } im #{ im }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
@@ -85,7 +90,7 @@ module Girl
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
       
-      worker = Girl::ProxyWorker.new( redir_port, proxyd_host, proxyd_port, girl_port, tspd_port, nameservers, im, directs, remotes )
+      worker = Girl::ProxyWorker.new( redir_port, memd_port, proxyd_host, proxyd_port, girl_port, tspd_port, nameservers, im, directs, remotes )
 
       Signal.trap( :TERM ) do
         puts 'exit'

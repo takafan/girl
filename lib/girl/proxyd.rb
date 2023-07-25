@@ -17,6 +17,7 @@ module Girl
         raise "not found config file #{ config_path }" unless File.exist?( config_path )
         conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
         proxyd_port = conf[ :proxyd_port ]
+        memd_port = conf[ :memd_port ]
         girl_port = conf[ :girl_port ]
         nameserver = conf[ :nameserver ]
         reset_traff_day = conf[ :reset_traff_day ]
@@ -25,6 +26,10 @@ module Girl
 
       unless proxyd_port then
         proxyd_port = 6060
+      end
+
+      unless memd_port then
+        memd_port = proxyd_port + 1
       end
 
       unless girl_port then
@@ -66,7 +71,7 @@ module Girl
       end
 
       puts "girl proxyd #{ Girl::VERSION }"
-      puts "proxyd #{ proxyd_port } #{ girl_port } nameservers #{ nameservers.inspect } reset traff day #{ reset_traff_day }"
+      puts "proxyd #{ proxyd_port } #{ memd_port } #{ girl_port } nameservers #{ nameservers.inspect } reset traff day #{ reset_traff_day }"
       puts "ims #{ ims.inspect }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
@@ -74,7 +79,7 @@ module Girl
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
 
-      worker = Girl::ProxydWorker.new( proxyd_port, girl_port, nameservers, reset_traff_day, ims )
+      worker = Girl::ProxydWorker.new( proxyd_port, memd_port, girl_port, nameservers, reset_traff_day, ims )
 
       Signal.trap( :TERM ) do
         puts 'exit'

@@ -52,7 +52,7 @@ module Girl
           when :tun then
             read_tun( sock )
           else
-            # puts "#{ Time.new } read unknown role #{ role }"
+            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -70,7 +70,7 @@ module Girl
           when :tun then
             write_tun( sock )
           else
-            # puts "#{ Time.new } write unknown role #{ role }"
+            # puts "debug write unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -354,11 +354,6 @@ module Girl
     end
 
     def read_relay_tcp( relay_tcp )
-      if relay_tcp.closed? then
-        puts "#{ Time.new } read closed relay tcp?"
-        return
-      end
-
       begin
         data = relay_tcp.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -374,11 +369,6 @@ module Girl
     end
 
     def read_relay_tcpd( relay_tcpd )
-      if relay_tcpd.closed? then
-        puts "#{ Time.new } read closed relay tcpd?"
-        return
-      end
-
       begin
         relay_tcp, addrinfo = relay_tcpd.accept_nonblock
       rescue Exception => e
@@ -416,11 +406,6 @@ module Girl
     end
 
     def read_relay_tun( relay_tun )
-      if relay_tun.closed? then
-        puts "#{ Time.new } read closed relay tun?"
-        return
-      end
-
       begin
         data = relay_tun.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -436,11 +421,6 @@ module Girl
     end
 
     def read_relay_tund( relay_tund )
-      if relay_tund.closed? then
-        puts "#{ Time.new } read closed relay tund?"
-        return
-      end
-
       begin
         relay_tun, addrinfo = relay_tund.accept_nonblock
       rescue Exception => e
@@ -480,11 +460,6 @@ module Girl
     end
 
     def read_tcp( tcp )
-      if tcp.closed? then
-        puts "#{ Time.new } read closed tcp?"
-        return
-      end
-
       begin
         data = tcp.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -500,11 +475,6 @@ module Girl
     end
 
     def read_tun( tun )
-      if tun.closed? then
-        puts "#{ Time.new } read closed tun?"
-        return
-      end
-
       begin
         data = tun.read_nonblock( READ_SIZE )
       rescue Exception => e

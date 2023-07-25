@@ -45,7 +45,8 @@ module Girl
           when :p2d
             read_p2d( sock )
           else
-            puts "#{ Time.new } read unknown role #{ role }"
+            # puts "debug read unknown role #{ role }"
+            close_sock( sock )
           end
         end
 
@@ -58,7 +59,7 @@ module Girl
           when :p2 then
             write_p2( sock )
           else
-            puts "#{ Time.new } write unknown role #{ role }"
+            # puts "debug write unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -341,11 +342,6 @@ module Girl
     end
 
     def read_p1( p1 )
-      if p1.closed? then
-        puts "#{ Time.new } read closed p1?"
-        return
-      end
-
       begin
         data = p1.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -395,20 +391,15 @@ module Girl
     end
 
     def read_p1d( p1d )
-      if p1d.closed? then
-        puts "#{ Time.new } read closed p1d?"
+      begin
+        p1, addrinfo = p1d.accept_nonblock
+      rescue Exception => e
+        puts "#{ Time.new } p1d accept #{ e.class }"
         return
       end
 
       p1d_info = @p1d_infos[ p1d ]
       im = p1d_info[ :im ]
-
-      begin
-        p1, addrinfo = p1d.accept_nonblock
-      rescue Exception => e
-        puts "#{ Time.new } p1d accept #{ e.class } #{ im.inspect }"
-        return
-      end
 
       @p1_infos[ p1 ] = {
         addrinfo: addrinfo, # 地址
@@ -426,11 +417,6 @@ module Girl
     end
 
     def read_p2( p2 )
-      if p2.closed? then
-        puts "#{ Time.new } read closed p2?"
-        return
-      end
-
       begin
         data = p2.read_nonblock( READ_SIZE )
       rescue Exception => e
@@ -451,21 +437,15 @@ module Girl
     end
 
     def read_p2d( p2d )
-      if p2d.closed? then
-        puts "#{ Time.new } read closed p2d?"
+      begin
+        p2, addrinfo = p2d.accept_nonblock
+      rescue Exception => e
+        puts "#{ Time.new } p2d accept #{ e.class }"
         return
       end
 
       p2d_info = @p2d_infos[ p2d ]
       im = p2d_info[ :im ]
-
-      begin
-        p2, addrinfo = p2d.accept_nonblock
-      rescue Exception => e
-        puts "#{ Time.new } p2d accept #{ e.class } #{ im.inspect }"
-        return
-      end
-
       room_info = @room_infos[ im ]
       p1d_port = room_info[ :p1d ].local_address.ip_port
       p2_id = rand( ( 2 ** 64 ) - 2 ) + 1
