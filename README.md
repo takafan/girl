@@ -360,4 +360,4 @@ start_service() {
 ssh -p2222 localhost
 ```
 
-连进去后（openwrt），重启p1需用screen: `screen -dm service p1 restart`
+openwrt系统连进去后重启p1需用screen: `screen -dm service p1 restart`
