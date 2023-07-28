@@ -68,8 +68,6 @@ gem install girl
 ```ruby
 require 'girl/proxyd'
 
-system 'sysctl -w net.ipv4.tcp_fastopen=0' if RUBY_PLATFORM.include?( 'linux' )
-
 Girl::Proxyd.new '/etc/proxyd.conf.json'
 ```
 
@@ -114,8 +112,6 @@ gem fetch girl && gem install girl --local
 
 ```ruby
 require 'girl/proxy'
-
-system 'sysctl -w net.ipv4.tcp_fastopen=0' if RUBY_PLATFORM.include?( 'linux' )
 
 Girl::Proxy.new '/etc/proxy.conf.json'
 ```
