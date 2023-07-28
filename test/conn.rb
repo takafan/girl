@@ -3,7 +3,7 @@ require 'socket'
 
 =begin
 
-pc - 树莓派，看掉包
+pc - pi，看掉包
 
 netstat -s | grep "SYNs to LISTEN"
 
@@ -26,7 +26,6 @@ end
 config_path = File.expand_path( '../test.conf.json', __FILE__ )
 config = JSON.parse( IO.binread( config_path ), symbolize_names: true )
 puts config.inspect
-
 server_host = config[ :server_host ]
 server_port = config[ :server_port ]
 server_addr = Socket.sockaddr_in( server_port, server_host )
