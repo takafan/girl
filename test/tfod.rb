@@ -16,7 +16,8 @@ tfod.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
 if is_fastopen then
   tfod.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 512 )
-  puts tfod.getsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN ).inspect
+  # centos7下getsockopt会报错：Protocol not available - getsockopt(2) (Errno::ENOPROTOOPT)，但实际有效
+  # puts tfod.getsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN ).inspect
 end
 
 tfod.bind( Socket.sockaddr_in( server_port, '0.0.0.0' ) )
