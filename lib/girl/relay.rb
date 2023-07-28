@@ -40,15 +40,32 @@ module Girl
         girl_port = 8080
       end
 
+      is_client_fastopen = is_server_fastopen = false
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        IO.popen( 'sysctl -n net.ipv4.tcp_fastopen' ) do | io |
+          output = io.read
+          val = output.to_i % 4
+
+          if [ 1, 3 ].include?( val ) then
+            is_client_fastopen = true
+          end
+
+          if [ 2, 3 ].include?( val ) then
+            is_server_fastopen = true
+          end
+        end
+      end
+
       # puts "girl relay #{ Girl::VERSION }"
-      # puts "relay #{ relay_proxyd_port } #{ relay_girl_port } to #{ proxyd_host } #{ proxyd_port } #{ girl_port }"
+      # puts "relay #{ relay_proxyd_port } #{ relay_girl_port } to #{ proxyd_host } #{ proxyd_port } #{ girl_port } #{ is_client_fastopen } #{ is_server_fastopen }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
         Process.setrlimit( :NOFILE, RLIMIT )
         # puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
 
-      worker = Girl::RelayWorker.new( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
+      worker = Girl::RelayWorker.new( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port, is_client_fastopen, is_server_fastopen )
 
       Signal.trap( :TERM ) do
         # puts 'exit'

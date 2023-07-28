@@ -34,6 +34,7 @@ writes = []
 tfo = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
 tfo.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 is_fastopen = ARGV[ 0 ] == '0' ? false : true
+is_syn = is_fastopen
 
 if RUBY_PLATFORM.include?( 'linux' ) then
   tfo.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
@@ -76,7 +77,15 @@ loop do
     data = 'hello!'
     
     begin
-      written = sock.sendmsg_nonblock( data, 536870912, tfod_addr )
+      if is_syn then
+        written = sock.sendmsg_nonblock( data, 536870912, tfod_addr )
+        is_syn = false
+      else
+        written = sock.write_nonblock( data )
+      end
+    rescue Errno::EINPROGRESS => e
+      puts "sendmsg_nonblock #{ e.class }"
+      next
     rescue Exception => e
       puts "sendmsg_nonblock #{ e.class }"
       sock.close

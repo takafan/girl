@@ -70,8 +70,21 @@ module Girl
         ims = []
       end
 
+      is_server_fastopen = false
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        IO.popen( 'sysctl -n net.ipv4.tcp_fastopen' ) do | io |
+          output = io.read
+          val = output.to_i % 4
+
+          if [ 2, 3 ].include?( val ) then
+            is_server_fastopen = true
+          end
+        end
+      end
+
       puts "girl proxyd #{ Girl::VERSION }"
-      puts "proxyd #{ proxyd_port } #{ memd_port } #{ girl_port } nameservers #{ nameservers.inspect } reset traff day #{ reset_traff_day }"
+      puts "proxyd #{ proxyd_port } #{ memd_port } #{ girl_port } #{ nameservers.inspect } #{ reset_traff_day } #{ is_server_fastopen }"
       puts "ims #{ ims.inspect }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
@@ -79,7 +92,7 @@ module Girl
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
 
-      worker = Girl::ProxydWorker.new( proxyd_port, memd_port, girl_port, nameservers, reset_traff_day, ims )
+      worker = Girl::ProxydWorker.new( proxyd_port, memd_port, girl_port, nameservers, reset_traff_day, ims, is_server_fastopen )
 
       Signal.trap( :TERM ) do
         puts 'exit'

@@ -41,7 +41,6 @@ module Girl
           when :p1 then
             read_p1( sock )
           else
-            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -55,18 +54,16 @@ module Girl
           when :p1 then
             write_p1( sock )
           else
-            # puts "debug write unknown role #{ role }"
             close_sock( sock )
           end
         end
       end
     rescue Interrupt => e
-      # puts e.class
+      puts e.class
       quit!
     end
 
     def quit!
-      # puts "debug exit"
       exit
     end
 
@@ -143,7 +140,6 @@ module Girl
 
     def close_app( app )
       return if app.nil? || app.closed?
-      # puts "#{ Time.new } close app"
       close_sock( app )
       app_info = @app_infos.delete( app )
       set_p1_closing( app_info[ :p1 ] ) if app_info
@@ -152,7 +148,6 @@ module Girl
 
     def close_p1( p1 )
       return if p1.nil? || p1.closed?
-      # puts "#{ Time.new } close p1"
       close_sock( p1 )
       p1_info = @p1_infos.delete( p1 )
       set_app_closing( p1_info[ :app ] ) if p1_info
@@ -261,14 +256,12 @@ module Girl
       add_read( app, :app )
       add_read( p1, :p1 )
       add_write( p1 )
-      # puts "#{ Time.new } new app and p1 #{ p1d_port } #{ p2_id } app infos #{ @app_infos.size } p1 infos #{ @p1_infos.size }"
     end
 
     def read_app( app )
       begin
         data = app.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "#{ Time.new } read app #{ e.class }"
         close_app( app )
         return
       end
@@ -325,11 +318,9 @@ module Girl
         socks.each do | sock |
           case @roles[ sock ]
           when :app
-            app_info = close_app( sock )
-            # puts "#{ Time.new } expire app" if app_info
+            close_app( sock )
           when :p1
-            p1_info = close_p1( sock )
-            # puts "#{ Time.new } expire p1" if p1_info
+            close_p1( sock )
           else
             close_sock( sock )
           end
@@ -355,7 +346,6 @@ module Girl
       begin
         data = p1.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "#{ Time.new } read p1 #{ e.class }"
         close_p1( p1 )
         return
       end
@@ -446,7 +436,6 @@ module Girl
       begin
         written = app.write_nonblock( data )
       rescue Exception => e
-        # puts "#{ Time.new } write app #{ e.class }"
         close_app( app )
         return
       end
@@ -491,7 +480,6 @@ module Girl
       begin
         written = p1.write_nonblock( data )
       rescue Exception => e
-        # puts "#{ Time.new } write p1 #{ e.class }"
         close_p1( p1 )
         return
       end

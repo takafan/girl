@@ -45,7 +45,6 @@ module Girl
           when :p2d
             read_p2d( sock )
           else
-            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -59,7 +58,6 @@ module Girl
           when :p2 then
             write_p2( sock )
           else
-            # puts "debug write unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -70,7 +68,6 @@ module Girl
     end
 
     def quit!
-      # puts "debug exit"
       exit
     end
 
@@ -104,7 +101,6 @@ module Girl
       p2_info[ :rbuff ] << data
 
       if p2_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
-        # puts "debug p2.rbuff full"
         close_p2( p2 )
       end
     end
@@ -158,7 +154,6 @@ module Girl
 
     def close_p1( p1 )
       return if p1.nil? || p1.closed?
-      # puts "debug close p1"
       close_sock( p1 )
       p1_info = @p1_infos.delete( p1 )
       set_p2_closing( p1_info[ :p2 ] ) if p1_info
@@ -167,7 +162,6 @@ module Girl
 
     def close_p2( p2 )
       return if p2.nil? || p2.closed?
-      # puts "debug close p2"
       close_sock( p2 )
       p2_info = @p2_infos.delete( p2 )
       set_p1_closing( p2_info[ :p1 ] ) if p2_info
@@ -259,11 +253,9 @@ module Girl
         socks.each do | sock |
           case @roles[ sock ]
           when :p1
-            p1_info = close_p1( sock )
-            puts "#{ Time.new } expire p1 #{ p1_info[ :im ] } #{ p1_info[ :addrinfo ].inspect }" if p1_info
+            close_p1( sock )
           when :p2
-            p2_info = close_p2( sock )
-            puts "#{ Time.new } expire p2 #{ p2_info[ :im ] } #{ p2_info[ :addrinfo ].inspect }" if p2_info
+            close_p2( sock )
           else
             close_sock( sock )
           end
@@ -345,7 +337,6 @@ module Girl
       begin
         data = p1.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "debug read p1 #{ e.class }"
         close_p1( p1 )
         return
       end
@@ -365,7 +356,6 @@ module Girl
         p2, p2_info = @p2_infos.find{ | _, info | ( info[ :p2_id ] == p2_id ) && info[ :p1 ].nil? }
 
         unless p2 then
-          # puts "debug p2 not found #{ p2_id }"
           close_p1( p1 )
           return
         end
@@ -398,12 +388,12 @@ module Girl
       im = p1d_info[ :im ]
 
       @p1_infos[ p1 ] = {
-        addrinfo: addrinfo, # 地址
-        im: im,             # 标识
-        p2: nil,            # 对应p2
-        wbuff: '',          # 写前
-        closing: false,     # 是否准备关闭
-        paused: false       # 是否已暂停
+        addrinfo: addrinfo,
+        im: im,
+        p2: nil,
+        wbuff: '',
+        closing: false,
+        paused: false
       }
 
       add_read( p1, :p1 )
@@ -416,7 +406,6 @@ module Girl
       begin
         data = p2.read_nonblock( READ_SIZE )
       rescue Exception => e
-        # puts "debug read p2 #{ e.class }"
         close_p2( p2 )
         return
       end
@@ -447,14 +436,14 @@ module Girl
       p2_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
       @p2_infos[ p2 ] = {
-        p2_id: p2_id,       # p2 id
-        addrinfo: addrinfo, # 地址
-        im: im,             # 标识
-        p1: nil,            # 对应p1
-        rbuff: '',          # 匹配到p1之前，暂存流量
-        wbuff: '',          # 写前
-        closing: false,     # 是否准备关闭
-        paused: false       # 是否已暂停
+        p2_id: p2_id,
+        addrinfo: addrinfo,
+        im: im,
+        p1: nil,
+        rbuff: '',
+        wbuff: '',
+        closing: false,
+        paused: false
       }
 
       add_read( p2, :p2 )
@@ -552,7 +541,6 @@ module Girl
       begin
         written = p1.write_nonblock( data )
       rescue Exception => e
-        # puts "debug write p1 #{ e.class }"
         close_p1( p1 )
         return
       end
@@ -597,7 +585,6 @@ module Girl
       begin
         written = p2.write_nonblock( data )
       rescue Exception => e
-        # puts "debug write p2 #{ e.class }"
         close_p2( p2 )
         return
       end

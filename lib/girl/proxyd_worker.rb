@@ -3,10 +3,11 @@ module Girl
     include Custom
     include Dns
 
-    def initialize( proxyd_port, memd_port, girl_port, nameservers, reset_traff_day, ims )
+    def initialize( proxyd_port, memd_port, girl_port, nameservers, reset_traff_day, ims, is_server_fastopen )
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @reset_traff_day = reset_traff_day
       @ims = ims
+      @is_server_fastopen = is_server_fastopen
       @update_roles = [ :dns, :dst, :mem, :tcp, :tun ] # 参与淘汰的角色
       @updates_limit = 1009 # 淘汰池上限，1015(mac) - [ girl, info, infod, memd, tcpd, tund ]
       @reads = []           # 读池
@@ -66,7 +67,6 @@ module Girl
           when :tund then
             read_tund( sock )
           else
-            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -84,7 +84,6 @@ module Girl
           when :tun then
             write_tun( sock )
           else
-            # puts "#{ Time.new } write unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -95,7 +94,6 @@ module Girl
     end
 
     def quit!
-      # puts "debug exit"
       exit
     end
 
@@ -204,7 +202,6 @@ module Girl
 
     def close_dst( dst )
       return nil if dst.nil? || dst.closed?
-      # puts "debug close dst"
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
       set_tun_closing( dst_info[ :tun ] ) if dst_info
@@ -213,14 +210,12 @@ module Girl
 
     def close_mem( mem )
       return nil if mem.nil? || mem.closed?
-      # puts "debug close mem"
       close_sock( mem )
       @mem_infos.delete( mem )
     end
 
     def close_rsv( rsv )
       return nil if rsv.nil? || rsv.closed?
-      # puts "debug close rsv"
       close_sock( rsv )
       rsv_info = @rsv_infos.delete( rsv )
       rsv_info
@@ -237,7 +232,6 @@ module Girl
 
     def close_tcp( tcp )
       return nil if tcp.nil? || tcp.closed?
-      # puts "debug close tcp"
       close_sock( tcp )
       tcp_info = @tcp_infos.delete( tcp )
       tcp_info
@@ -245,7 +239,6 @@ module Girl
 
     def close_tun( tun )
       return nil if tun.nil? || tun.closed?
-      # puts "debug close tun"
       close_sock( tun )
       tun_info = @tun_infos.delete( tun )
       set_dst_closing( tun_info[ :dst ] ) if tun_info
@@ -289,7 +282,6 @@ module Girl
           return
         end
 
-        # puts "debug got a new source #{ tcp_info[ :im ] } #{ src_id } #{ domain_port.inspect }"
         resolve_domain_port( domain_port, src_id, tcp, tcp_info[ :im ] )
       when Girl::Custom::QUERY then
         return unless tcp_info[ :im ]
@@ -360,18 +352,18 @@ module Girl
       dst_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
       dst_info = {
-        dst_id: dst_id,   # dst_id
-        im: im,           # 标识
-        domain: domain,   # 目的地域名
-        ip: ip,           # 目的地ip
-        rbuffs: [],       # 对应的tun没准备好，暂存读到的流量
-        tun: nil,         # 对应的tun
-        src_id: src_id,   # 近端src id
-        connected: false, # 是否已连接
-        wbuff: '',        # 写前
-        closing: false,   # 是否准备关闭
-        paused: false,    # 是否已暂停
-        left: 0           # 剩余加密波数
+        dst_id: dst_id,
+        im: im,
+        domain: domain,
+        ip: ip,
+        rbuffs: [],
+        tun: nil,
+        src_id: src_id,
+        connected: false,
+        wbuff: '',
+        closing: false,
+        paused: false,
+        left: 0
       }
 
       @dst_infos[ dst ] = dst_info
@@ -380,7 +372,6 @@ module Girl
       return if dst.closed?
 
       data = [ Girl::Custom::PAIRED, src_id, dst_id ].join( Girl::Custom::SEP )
-      # puts "debug add paired #{ im.inspect } #{ src_id } #{ dst_id } #{ ip }:#{ port }"
       add_tcp_wbuff( tcp, encode_a_msg( data ) )
       return if tcp.closed?
 
@@ -422,6 +413,7 @@ module Girl
       memd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       memd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 ) if @is_server_fastopen
       memd.bind( Socket.sockaddr_in( memd_port, '127.0.0.1' ) )
       memd.listen( 5 )
       puts "#{ Time.new } memd listen on #{ memd_port }"
@@ -439,7 +431,6 @@ module Girl
       end
       
       begin
-        # puts "debug rsv query #{ domain }"
         @nameserver_addrs.each{ | addr | rsv.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } rsv send data #{ e.class }"
@@ -476,6 +467,7 @@ module Girl
       tcpd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
       tcpd.bind( Socket.sockaddr_in( tcpd_port, '0.0.0.0' ) )
       tcpd.listen( BACKLOG )
       puts "#{ Time.new } tcpd listen on #{ tcpd_port }"
@@ -486,6 +478,7 @@ module Girl
       tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
       tund.bind( Socket.sockaddr_in( girl_port, '0.0.0.0' ) )
       tund.listen( BACKLOG )
       add_read( tund, :tund )
@@ -501,8 +494,6 @@ module Girl
       end
 
       return if data.empty?
-
-      # puts "debug recv dns #{ data.inspect }"
       
       begin
         ip = seek_ip( data )
@@ -532,8 +523,9 @@ module Girl
     def read_dst( dst )
       begin
         data = dst.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read dst #{ e.class }"
         close_dst( dst )
         return
       end
@@ -552,7 +544,6 @@ module Girl
 
         add_tun_wbuff( tun, data )
       else
-        # puts "debug add dst rbuff #{ data.bytesize }"
         add_dst_rbuff( dst, data )
       end
     end
@@ -571,7 +562,6 @@ module Girl
       return if @ims.any? && !@ims.include?( im )
       
       @ips[ im ] = addrinfo.ip_address
-      # puts "debug set ip #{ im.inspect } #{ addrinfo.ip_address } ips #{ @ips.size }"
     end
 
     def read_infod( infod )
@@ -614,27 +604,23 @@ module Girl
         now = Time.new
         socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_AFTER }.keys
 
-        if socks.any? then
-          socks.each do | sock |
-            case @roles[ sock ]
-            when :dns
-              close_dns( sock )
-            when :dst
-              close_dst( sock )
-            when :mem
-              close_mem( sock )
-            when :rsv
-              close_rsv( sock )
-            when :tcp
-              close_tcp( sock )
-            when :tun
-              close_tun( sock )
-            else
-              close_sock( sock )
-            end
+        socks.each do | sock |
+          case @roles[ sock ]
+          when :dns
+            close_dns( sock )
+          when :dst
+            close_dst( sock )
+          when :mem
+            close_mem( sock )
+          when :rsv
+            close_rsv( sock )
+          when :tcp
+            close_tcp( sock )
+          when :tun
+            close_tun( sock )
+          else
+            close_sock( sock )
           end
-
-          # puts "debug expire #{ socks.size }"
         end
       when 'check-rsv-closed' then
         rsv_id = msg[ :rsv_id ]
@@ -669,8 +655,9 @@ module Girl
     def read_mem( mem )
       begin
         mem.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read mem #{ e.class }"
         close_mem( mem )
         return
       end
@@ -749,10 +736,8 @@ module Girl
 
         if is_last then
           prefix = Girl::Custom::RESPONSE
-          # puts "#{ prefix } #{ part.bytesize } #{ near_id } #{ im.inspect } #{ domain }"
         else
           prefix = Girl::Custom::INCOMPLETE
-          # print "#{ prefix } #{ part.bytesize } "
         end
         
         data2 = [ prefix, near_id, part ].join( Girl::Custom::SEP )
@@ -766,8 +751,9 @@ module Girl
     def read_tcp( tcp )
       begin
         data = tcp.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read tcp #{ e.class }"
         close_tcp( tcp )
         return
       end
@@ -796,14 +782,13 @@ module Girl
         return
       end
 
-      # puts "debug accept a tcp"
       tcp_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
       @tcp_infos[ tcp ] = {
-        tcp_id: tcp_id, # tcp id
-        part: '',       # 包长+没收全的缓存
-        wbuff: '',      # 写前
-        im: nil         # 标识
+        tcp_id: tcp_id,
+        part: '',
+        wbuff: '',
+        im: nil
       }
       
       add_read( tcp, :tcp )
@@ -824,8 +809,9 @@ module Girl
     def read_tun( tun )
       begin
         data = tun.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read tun #{ e.class }"
         close_tun( tun )
         return
       end
@@ -847,7 +833,6 @@ module Girl
         dst, dst_info = @dst_infos.find{ | _, info | info[ :dst_id ] == dst_id }
 
         unless dst then
-          # puts "debug dst not found #{ dst_id }"
           close_tun( tun )
           return
         end
@@ -886,18 +871,17 @@ module Girl
         return
       end
 
-      # puts "debug accept a tun"
       tun_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
       @tun_infos[ tun ] = {
-        tun_id: tun_id, # tun id
-        im: nil,        # 标识
-        dst: nil,       # 对应dst
-        domain: nil,    # 目的地
-        part: '',       # 包长+没收全的缓存
-        wbuff: '',      # 写前
-        closing: false, # 是否准备关闭
-        paused: false   # 是否已暂停
+        tun_id: tun_id,
+        im: nil,
+        dst: nil,
+        domain: nil,
+        part: '',
+        wbuff: '',
+        closing: false,
+        paused: false
       }
 
       add_read( tun, :tun )
@@ -940,12 +924,10 @@ module Girl
         ip, created_at, im = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug #{ domain } hit resolv cache #{ ip }"
           new_a_dst( domain, ip, port, src_id, tcp )
           return
         end
 
-        # puts "debug expire #{ domain } resolv cache"
         @resolv_caches.delete( domain )
       end
 
@@ -959,7 +941,6 @@ module Girl
       dns = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       begin
-        # puts "debug dns query #{ domain }"
         @nameserver_addrs.each{ | addr | dns.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } dns send data #{ e.class } #{ domain }"
@@ -1006,7 +987,6 @@ module Girl
       dst_info[ :tun ] = tun
       dst_info[ :left ] = Girl::Custom::WAVE
       src_id = dst_info[ :src_id ]
-      # puts "debug add pong #{ src_id }"
       data = "#{ src_id }#{ Girl::Custom::SEP }"
 
       dst_info[ :rbuffs ].each do | data2 |
@@ -1091,8 +1071,9 @@ module Girl
 
       begin
         written = dst.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write dst #{ e.class }"
         close_dst( dst )
         return
       end
@@ -1131,8 +1112,9 @@ module Girl
 
       begin
         written = mem.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write mem #{ e.class }"
         close_mem( mem )
         return
       end
@@ -1158,8 +1140,9 @@ module Girl
 
       begin
         written = tcp.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write tcp #{ e.class }"
         close_tcp( tcp )
         return
       end
@@ -1191,8 +1174,9 @@ module Girl
 
       begin
         written = tun.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write tun #{ e.class }"
         close_tun( tun )
         return
       end

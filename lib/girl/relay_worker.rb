@@ -2,9 +2,11 @@ module Girl
   class RelayWorker
     include Custom
 
-    def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port )
+    def initialize( relay_proxyd_port, relay_girl_port, proxyd_host, proxyd_port, girl_port, is_client_fastopen, is_server_fastopen )
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
+      @is_client_fastopen = is_client_fastopen
+      @is_server_fastopen = is_server_fastopen
       @update_roles = [ :relay_tcp, :relay_tun, :tcp, :tun ] # 参与淘汰的角色
       @updates_limit = 1008 # 淘汰池上限，1015(mac) - 1 (pair) - [ girlc, info, infod, relay_girl, relay_tcpd, relay_tund ]
       @reads = []           # 读池
@@ -14,8 +16,8 @@ module Girl
       @roles = {}           # sock => :infod / :relay_girl / :relay_tcp / :relay_tcpd / :relay_tun / :relay_tund / :tcp / :tun
       @relay_tcp_infos = {} # relay_tcp => { :wbuff :closing }
       @relay_tun_infos = {} # relay_tun => { :wbuff :closing :paused }
-      @tcp_infos = {}       # tcp => { :wbuff :closing }
-      @tun_infos = {}       # tun => { :wbuff :closing :paused }
+      @tcp_infos = {}       # tcp => { :wbuff :closing :is_syn }
+      @tun_infos = {}       # tun => { :wbuff :closing :paused :is_syn }
 
       new_a_relay_tcpd( relay_proxyd_port )
       new_a_infod( relay_proxyd_port )
@@ -52,7 +54,6 @@ module Girl
           when :tun then
             read_tun( sock )
           else
-            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -70,18 +71,16 @@ module Girl
           when :tun then
             write_tun( sock )
           else
-            # puts "debug write unknown role #{ role }"
             close_sock( sock )
           end
         end
       end
     rescue Interrupt => e
-      # puts e.class
+      puts e.class
       quit!
     end
 
     def quit!
-      # puts "debug exit"
       exit
     end
 
@@ -172,7 +171,6 @@ module Girl
 
     def close_relay_tcp( relay_tcp )
       return nil if relay_tcp.nil? || relay_tcp.closed?
-      # puts "debug close relay tcp"
       close_sock( relay_tcp )
       relay_tcp_info = @relay_tcp_infos.delete( relay_tcp )
       set_tcp_closing( relay_tcp_info[ :tcp ] ) if relay_tcp_info
@@ -181,7 +179,6 @@ module Girl
 
     def close_relay_tun( relay_tun )
       return nil if relay_tun.nil? || relay_tun.closed?
-      # puts "debug close relay tun"
       close_sock( relay_tun )
       relay_tun_info = @relay_tun_infos.delete( relay_tun )
       set_tun_closing( relay_tun_info[ :tun ] ) if relay_tun_info
@@ -199,7 +196,6 @@ module Girl
 
     def close_tcp( tcp )
       return nil if tcp.nil? || tcp.closed?
-      # puts "debug close tcp"
       close_sock( tcp )
       tcp_info = @tcp_infos.delete( tcp )
       set_relay_tcp_closing( tcp_info[ :relay_tcp ] ) if tcp_info
@@ -208,7 +204,6 @@ module Girl
 
     def close_tun( tun )
       return nil if tun.nil? || tun.closed?
-      # puts "debug close tun"
       close_sock( tun )
       tun_info = @tun_infos.delete( tun )
       set_relay_tun_closing( tun_info[ :relay_tun ] ) if tun_info
@@ -260,6 +255,7 @@ module Girl
       relay_tcpd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relay_tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       relay_tcpd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      relay_tcpd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
       relay_tcpd.bind( Socket.sockaddr_in( relay_tcpd_port, '0.0.0.0' ) )
       relay_tcpd.listen( BACKLOG )
       # puts "#{ Time.new } relay tcpd listen on #{ relay_tcpd_port }"
@@ -270,6 +266,7 @@ module Girl
       relay_tund = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relay_tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       relay_tund.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      relay_tund.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
       relay_tund.bind( Socket.sockaddr_in( relay_girl_port, '0.0.0.0' ) )
       relay_tund.listen( BACKLOG )
       # puts "#{ Time.new } relay tund listen on #{ relay_girl_port }"
@@ -300,29 +297,19 @@ module Girl
         now = Time.new
         socks = @updates.select{ | _, updated_at | now - updated_at >= EXPIRE_AFTER }.keys
 
-        if socks.any? then
-          relay_tcp_count = relay_tun_count = tcp_count = tun_count = 0
-
-          socks.each do | sock |
-            case @roles[ sock ]
-            when :relay_tcp
-              close_relay_tcp( sock )
-              relay_tcp_count += 1
-            when :relay_tun
-              close_relay_tun( sock )
-              relay_tun_count += 1
-            when :tcp
-              close_tcp( sock )
-              tcp_count += 1
-            when :tun
-              close_tun( sock )
-              tun_count += 1
-            else
-              close_sock( sock )
-            end
+        socks.each do | sock |
+          case @roles[ sock ]
+          when :relay_tcp
+            close_relay_tcp( sock )
+          when :relay_tun
+            close_relay_tun( sock )
+          when :tcp
+            close_tcp( sock )
+          when :tun
+            close_tun( sock )
+          else
+            close_sock( sock )
           end
-
-          # puts "#{ now } expire relay tcp #{ relay_tcp_count } relay tun #{ relay_tun_count } tcp #{ tcp_count } tun #{ tun_count }"
         end
       when 'memory-info' then
         msg2 = {
@@ -356,8 +343,9 @@ module Girl
     def read_relay_tcp( relay_tcp )
       begin
         data = relay_tcp.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read relay tcp #{ e.class }"
         close_relay_tcp( relay_tcp )
         return
       end
@@ -379,14 +367,18 @@ module Girl
       tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
-      begin
-        tcp.connect_nonblock( @proxyd_addr )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "#{ Time.new } connect tcpd #{ e.class }"
-        tcp.close
-        relay_tcp.close
-        return
+      if @is_client_fastopen then
+        tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 )
+      else
+        begin
+          tcp.connect_nonblock( @proxyd_addr )
+        rescue IO::WaitWritable
+        rescue Exception => e
+          puts "#{ Time.new } connect tcpd #{ e.class }"
+          tcp.close
+          relay_tcp.close
+          return
+        end
       end
 
       @relay_tcp_infos[ relay_tcp ] = {
@@ -398,7 +390,8 @@ module Girl
       @tcp_infos[ tcp ] = {
         wbuff: '',
         closing: false,
-        relay_tcp: relay_tcp
+        relay_tcp: relay_tcp,
+        is_syn: @is_client_fastopen
       }
 
       add_read( relay_tcp, :relay_tcp )
@@ -408,8 +401,9 @@ module Girl
     def read_relay_tun( relay_tun )
       begin
         data = relay_tun.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read relay tun #{ e.class }"
         close_relay_tun( relay_tun )
         return
       end
@@ -431,14 +425,18 @@ module Girl
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
-      begin
-        tun.connect_nonblock( @girl_addr )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "#{ Time.new } connect tund #{ e.class }"
-        tun.close
-        relay_tun.close
-        return
+      if @is_client_fastopen then
+        tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 )
+      else
+        begin
+          tun.connect_nonblock( @girl_addr )
+        rescue IO::WaitWritable
+        rescue Exception => e
+          puts "#{ Time.new } connect tund #{ e.class }"
+          tun.close
+          relay_tun.close
+          return
+        end
       end
 
       @relay_tun_infos[ relay_tun ] = {
@@ -452,7 +450,8 @@ module Girl
         wbuff: '',
         closing: false,
         paused: false,
-        relay_tun: relay_tun
+        relay_tun: relay_tun,
+        is_syn: @is_client_fastopen
       }
 
       add_read( relay_tun, :relay_tun )
@@ -462,8 +461,9 @@ module Girl
     def read_tcp( tcp )
       begin
         data = tcp.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read tcp #{ e.class }"
         close_tcp( tcp )
         return
       end
@@ -477,8 +477,9 @@ module Girl
     def read_tun( tun )
       begin
         data = tun.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read tun #{ e.class }"
         close_tun( tun )
         return
       end
@@ -579,8 +580,9 @@ module Girl
 
       begin
         written = relay_tcp.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write relay tcp #{ e.class }"
         close_relay_tcp( relay_tcp )
         return
       end
@@ -611,8 +613,9 @@ module Girl
 
       begin
         written = relay_tun.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write relay tun #{ e.class }"
         close_relay_tun( relay_tun )
         return
       end
@@ -653,9 +656,15 @@ module Girl
       end
 
       begin
-        written = tcp.write_nonblock( data )
+        if tcp_info[ :is_syn ] then
+          written = tcp.sendmsg_nonblock( data, 536870912, @proxyd_addr )
+          tcp_info[ :is_syn ] = false
+        else
+          written = tcp.write_nonblock( data )
+        end
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write tcp #{ e.class }"
         close_tcp( tcp )
         return
       end
@@ -685,9 +694,15 @@ module Girl
       end
 
       begin
-        written = tun.write_nonblock( data )
+        if tun_info[ :is_syn ] then
+          written = tun.sendmsg_nonblock( data, 536870912, @girl_addr )
+          tun_info[ :is_syn ] = false
+        else
+          written = tun.write_nonblock( data )
+        end
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write tun #{ e.class }"
         close_tun( tun )
         return
       end

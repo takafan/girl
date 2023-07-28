@@ -3,7 +3,7 @@ module Girl
     include Custom
     include Dns
 
-    def initialize( redir_port, memd_port, proxyd_host, proxyd_port, girl_port, tspd_port, nameservers, im, directs, remotes )
+    def initialize( redir_port, memd_port, proxyd_host, proxyd_port, girl_port, tspd_port, nameservers, im, directs, remotes, is_client_fastopen, is_server_fastopen )
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
@@ -11,7 +11,10 @@ module Girl
       @im = im
       @directs = directs
       @remotes = remotes
+      @is_client_fastopen = is_client_fastopen
+      @is_server_fastopen = is_server_fastopen
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
+      
       @update_roles = [ :dns, :dst, :mem, :src, :tun, :rsv, :tsp ] # 参与淘汰的角色
       @updates_limit = 1007  # 淘汰池上限，1015(mac) - [ girlc, info, infod, memd, redir, rsvd, tcp, tspd ]
       @reads = []            # 读池
@@ -21,11 +24,11 @@ module Girl
       @roles = {}            # sock =>  :dns / :dst / :infod / :mem / :memd / :redir / :rsv / :rsvd / :src / :tcp / :tspd /:tun
       @resolv_caches = {}    # domain => [ ip, created_at ]
       @is_direct_caches = {} # ip => true / false
-      @tcp_infos = {}        # tcp => { :part :wbuff :created_at :last_recv_at }
+      @tcp_infos = {}        # tcp => { :part :wbuff :created_at :last_recv_at :is_syn }
       @mem_infos = {}        # mem => { :wbuff }
       @src_infos = {}        # src => { :src_id :addrinfo :proxy_proto :proxy_type :destination_domain :destination_port :is_connect :rbuffs :dst :dst_id :tcp :tun :wbuff :closing :paused :left }
       @dst_infos = {}        # dst => { :dst_id :src :domain :connected :wbuff :closing :paused }
-      @tun_infos = {}        # tun => { :tun_id :src :domain :pong :part :wbuff :closing :paused }
+      @tun_infos = {}        # tun => { :tun_id :src :domain :pong :part :wbuff :closing :paused :is_syn }
       @dns_infos = {}        # dns => { :dns_id :domain :src }
       @rsv_infos = {}        # rsv => { :rsv_id :addrinfo :domain }
       @near_infos = {}       # near_id => { :addrinfo :id :domain :part }
@@ -75,7 +78,6 @@ module Girl
           when :tun then
             read_tun( sock )
           else
-            # puts "debug read unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -95,7 +97,6 @@ module Girl
           when :tun then
             write_tun( sock )
           else
-            # puts "debug write unknown role #{ role }"
             close_sock( sock )
           end
         end
@@ -106,7 +107,6 @@ module Girl
     end
 
     def quit!
-      # puts "debug exit"
       exit
     end
 
@@ -161,7 +161,6 @@ module Girl
       # +----+-----+-------+------+----------+----------+
       redir_ip, redir_port = @redir_local_address.ip_unpack
       data = [ [ 5, 0, 0, 1 ].pack( 'C4' ), IPAddr.new( redir_ip ).hton, [ redir_port ].pack( 'n' ) ].join
-      # puts "debug add src.wbuff socks5 conn reply #{ data.inspect }"
       add_src_wbuff( src, data )
     end
 
@@ -257,7 +256,6 @@ module Girl
 
     def close_dns( dns )
       return nil if dns.nil? || dns.closed?
-      # puts "debug close dns"
       close_sock( dns )
       dns_info = @dns_infos.delete( dns )
       dns_info
@@ -265,7 +263,6 @@ module Girl
 
     def close_dst( dst )
       return nil if dst.nil? || dst.closed?
-      # puts "debug close dst"
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
       set_src_closing( dst_info[ :src ] ) if dst_info
@@ -274,14 +271,12 @@ module Girl
 
     def close_mem( mem )
       return nil if mem.nil? || mem.closed?
-      # puts "debug close mem"
       close_sock( mem )
       @mem_infos.delete( mem )
     end
 
     def close_rsv( rsv )
       return nil if rsv.nil? || rsv.closed?
-      # puts "debug close rsv"
       close_sock( rsv )
       rsv_info = @rsv_infos.delete( rsv )
       rsv_info
@@ -298,7 +293,6 @@ module Girl
 
     def close_src( src )
       return nil if src.nil? || src.closed?
-      # puts "debug close src"
       close_sock( src )
       src_info = @src_infos.delete( src )
 
@@ -315,14 +309,12 @@ module Girl
 
     def close_tcp( tcp )
       return if tcp.nil? || tcp.closed?
-      # puts "debug close tcp"
       close_sock( tcp )
       @tcp_infos.delete( tcp )
     end
 
     def close_tun( tun )
       return nil if tun.nil? || tun.closed?
-      # puts "debug close tun"
       close_sock( tun )
       tun_info = @tun_infos.delete( tun )
       set_src_closing( tun_info[ :src ] ) if tun_info
@@ -340,14 +332,12 @@ module Girl
         src_id = src_id.to_i
         dst_id = dst_id.to_i
         return if src_id <= 0 || dst_id <= 0
-        # puts "debug got paired #{ src_id } #{ dst_id }"
         new_a_tun( src_id, dst_id )
       when Girl::Custom::INCOMPLETE then
         _, near_id, data2 = data.split( Girl::Custom::SEP, 3 )
         return if near_id.nil? || data2.nil?
         near_id = near_id.to_i
         return if near_id <= 0
-        # puts "debug got incomplete #{ near_id } #{ data2.bytesize }"
         near_info = @near_infos[ near_id ]
         near_info[ :part ] << data2 if near_info
       when Girl::Custom::RESPONSE then
@@ -355,7 +345,6 @@ module Girl
         return if near_id.nil? || data2.nil?
         near_id = near_id.to_i
         return if near_id <= 0
-        # puts "debug got response #{ near_id } #{ data2.bytesize }"
         near_info = @near_infos.delete( near_id )
 
         if near_info then
@@ -413,15 +402,12 @@ module Girl
         is_direct = @is_direct_caches[ ip ]
       else
         is_direct = @directs.any?{ | direct | direct.include?( ip ) }
-        # puts "debug cache is direct #{ domain } #{ ip } #{ is_direct }"
         @is_direct_caches[ ip ] = is_direct
       end
 
       if is_direct then
-        # puts "debug hit directs #{ ip }"
         new_a_dst( ip, src )
       else
-        # puts "debug go remote #{ ip }"
         set_remote( src )
       end
     end
@@ -454,17 +440,16 @@ module Girl
       end
 
       dst_id = rand( ( 2 ** 64 ) - 2 ) + 1
-      # puts "debug a new dst #{ dst.local_address.inspect } #{ dst_id }"
 
       dst_info = {
-        dst_id: dst_id,   # dst id
-        src: src,         # 对应src
-        domain: domain,   # 目的地域名
-        ip: ip,           # 目的地ip
-        connected: false, # 是否已连接
-        wbuff: '',        # 写前
-        closing: false,   # 是否准备关闭
-        paused: false     # 是否已暂停
+        dst_id: dst_id,
+        src: src,
+        domain: domain,
+        ip: ip,
+        connected: false,
+        wbuff: '',
+        closing: false,
+        paused: false
       }
 
       @dst_infos[ dst ] = dst_info
@@ -473,10 +458,8 @@ module Girl
 
       if src_info[ :proxy_proto ] == :http then
         if src_info[ :is_connect ] then
-          # puts "debug add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
         elsif src_info[ :rbuffs ].any? then
-          # puts "debug move src rbuff to dst wbuff"
           dst_info[ :wbuff ] << src_info[ :rbuffs ].join
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
@@ -521,6 +504,7 @@ module Girl
       memd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       memd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 ) if @is_server_fastopen
       memd.bind( Socket.sockaddr_in( memd_port, '127.0.0.1' ) )
       memd.listen( 5 )
       puts "#{ Time.new } memd listen on #{ memd_port }"
@@ -532,6 +516,7 @@ module Girl
       redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
       redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
       redir.listen( BACKLOG )
       puts "#{ Time.new } redir listen on #{ redir_port }"
@@ -545,6 +530,7 @@ module Girl
       tspd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      tspd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
       tspd.bind( Socket.sockaddr_in( tspd_port, '0.0.0.0' ) )
       tspd.listen( BACKLOG )
       puts "#{ Time.new } tspd listen on #{ tspd_port }"
@@ -556,7 +542,6 @@ module Girl
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       
       begin
-        # puts "debug rsv query #{ domain }"
         @nameserver_addrs.each{ | addr | rsv.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } rsv send data #{ e.class }"
@@ -602,20 +587,25 @@ module Girl
       tcp = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
-      begin
-        tcp.connect_nonblock( @proxyd_addr )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "#{ Time.new } connect tcpd #{ e.class }"
-        tcp.close
-        return
+      if @is_client_fastopen then
+        tcp.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 )
+      else
+        begin
+          tcp.connect_nonblock( @proxyd_addr )
+        rescue IO::WaitWritable
+        rescue Exception => e
+          puts "#{ Time.new } connect tcpd #{ e.class }"
+          tcp.close
+          return
+        end
       end
 
       tcp_info = {
-        part: '',             # 包长+没收全的缓存
-        wbuff: '',            # 写前
-        created_at: Time.new, # 创建时间
-        last_recv_at: nil     # 上一次收到控制流量时间
+        part: '',
+        wbuff: '',
+        created_at: Time.new,
+        last_recv_at: nil,
+        is_syn: @is_client_fastopen
       }
 
       add_read( tcp, :tcp )
@@ -631,29 +621,33 @@ module Girl
       tun = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
-      begin
-        tun.connect_nonblock( @girl_addr )
-      rescue IO::WaitWritable
-      rescue Exception => e
-        puts "#{ Time.new } connect tund #{ e.class }"
-        tun.close
-        close_src( src )
-        return
+      if @is_client_fastopen then
+        tun.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 )
+      else
+        begin
+          tun.connect_nonblock( @girl_addr )
+        rescue IO::WaitWritable
+        rescue Exception => e
+          puts "#{ Time.new } connect tund #{ e.class }"
+          tun.close
+          close_src( src )
+          return
+        end
       end
 
       domain = src_info[ :destination_domain ]
       tun_id = rand( ( 2 ** 64 ) - 2 ) + 1
-      # puts "debug new a tun #{ tun_id } #{ Addrinfo.new( tund_addr ).inspect } #{ domain }"
 
       tun_info = {
-        tun_id: tun_id,                             # tun id
-        src: src,                                   # 对应src
-        domain: domain,                             # 目的地
-        pong: false,                                # 是否有回应
-        part: '',                                   # 包长+没收全的缓存，或者解密完成符
-        wbuff: "#{ dst_id }#{ Girl::Custom::SEP }", # 写前
-        closing: false,                             # 是否准备关闭
-        paused: false                               # 是否已暂停
+        tun_id: tun_id,
+        src: src,
+        domain: domain,
+        pong: false,
+        part: '',
+        wbuff: "#{ dst_id }#{ Girl::Custom::SEP }",
+        closing: false,
+        paused: false,
+        is_syn: @is_client_fastopen
       }
 
       @tun_infos[ tun ] = tun_info
@@ -697,8 +691,6 @@ module Girl
 
       return if data.empty?
 
-      # puts "debug recv dns #{ data.inspect }"
-
       begin
         ip = seek_ip( data )
       rescue Exception => e
@@ -725,8 +717,9 @@ module Girl
     def read_dst( dst )
       begin
         data = dst.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read dst #{ e.class }"
         close_dst( dst )
         return
       end
@@ -844,8 +837,9 @@ module Girl
     def read_mem( mem )
       begin
         mem.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read mem #{ e.class }"
         close_mem( mem )
         return
       end
@@ -856,6 +850,8 @@ module Girl
         resolv_caches: @resolv_caches.sort,
         response_caches: @response_caches.sort.map{ | a | [ a[ 0 ], a[ 1 ][ 2 ], a[ 1 ][ 3 ] ] },
         sizes: {
+          directs: @directs.size,
+          remotes: @remotes.size,
           updates: @updates.size,
           mem_infos: @mem_infos.size,
           src_infos: @src_infos.size,
@@ -898,24 +894,23 @@ module Girl
       end
 
       src_id = rand( ( 2 ** 64 ) - 2 ) + 1
-      # puts "debug redir accept a src #{ src_id } #{ addrinfo.ip_unpack.inspect }"
 
       @src_infos[ src ] = {
-        src_id: src_id,          # src id
-        addrinfo: addrinfo,      # addrinfo
-        proxy_proto: :uncheck,   # :uncheck / :http / :socks5
-        proxy_type: :uncheck,    # :uncheck / :checking / :negotiation / :remote / :direct
-        destination_domain: nil, # 目的地域名
-        destination_port: nil,   # 目的地端口
-        is_connect: true,        # 代理协议是http的场合，是否是CONNECT
-        rbuffs: [],              # 读到的流量
-        dst: nil,                # :direct的场合，对应的dst
-        dst_id: nil,             # :remote的场合，远端dst id
-        tun: nil,                # :remote的场合，对应的tun
-        wbuff: '',               # 从dst/tun读到的流量
-        closing: false,          # 是否准备关闭
-        paused: false,           # 是否已暂停
-        left: 0                  # 剩余加密波数
+        src_id: src_id,
+        addrinfo: addrinfo,
+        proxy_proto: :uncheck, # :uncheck / :http / :socks5
+        proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
+        destination_domain: nil,
+        destination_port: nil,
+        is_connect: true,
+        rbuffs: [],
+        dst: nil,
+        dst_id: nil,
+        tun: nil,
+        wbuff: '',
+        closing: false,
+        paused: false,
+        left: 0
       }
 
       add_read( src, :src )
@@ -943,12 +938,10 @@ module Girl
       end
 
       return if data.empty?
-      # puts "debug recv rsv #{ data.inspect } #{ data.bytesize }"
 
       rsv_info = @rsv_infos[ rsv ]
       addrinfo = rsv_info[ :addrinfo ]
       domain = rsv_info[ :domain ]
-      # puts "debug send to #{ addrinfo.inspect }"
       send_data( @rsvd, data, addrinfo )
 
       begin
@@ -976,7 +969,6 @@ module Girl
       end
 
       return if data.empty?
-      # puts "debug recv rsvd #{ data.inspect } #{ data.bytesize }"
 
       begin
         id, domain = seek_question_dn( data )
@@ -991,7 +983,6 @@ module Girl
         response, created_at = response_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug hit response cache #{ domain }"
           response[ 0, 2 ] = id
           send_data( @rsvd, response, addrinfo )
           return
@@ -1011,7 +1002,6 @@ module Girl
         }
 
         data2 = [ Girl::Custom::QUERY, near_id, domain ].join( Girl::Custom::SEP )
-        # puts "debug query #{ near_id } #{ domain } #{ addrinfo.ip_address }"
         add_tcp_wbuff( encode_a_msg( data2 ) )
       else
         new_a_rsv( data, addrinfo, domain )
@@ -1021,8 +1011,9 @@ module Girl
     def read_src( src )
       begin
         data = src.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read src #{ e.class }"
         close_src( src )
         return
       end
@@ -1034,7 +1025,6 @@ module Girl
       case proxy_type
       when :uncheck then
         if data[ 0, 7 ] == 'CONNECT' then
-          # puts "debug http tunnel proxy"
           domain_port = data.split( "\r\n" )[ 0 ].split( ' ' )[ 1 ]
 
           unless domain_port then
@@ -1043,8 +1033,6 @@ module Girl
             return
           end
         elsif data[ 0 ].unpack( 'C' ).first == 5 then
-          # puts "debug socks5 proxy #{ data.inspect }"
-
           # https://tools.ietf.org/html/rfc1928
           #
           # +----+----------+----------+
@@ -1073,11 +1061,9 @@ module Girl
           src_info[ :proxy_type ] = :negotiation
           return
         else
-          # puts "debug http proxy #{ data.inspect }"
           host_line = data.split( "\r\n" ).find{ | _line | _line[ 0, 6 ] == 'Host: ' }
 
           unless host_line then
-            # puts "debug not found host line"
             close_src( src )
             return
           end
@@ -1089,12 +1075,10 @@ module Girl
 
             if proto && url && proto[ 0, 4 ] == 'HTTP' && url[ 0, 7 ] == 'http://' then
               domain_port = url.split( '/' )[ 2 ]
-              # puts "debug domain port #{ domain_port }"
             end
           end
 
           unless domain_port then
-            # puts "debug not HTTP"
             domain_port = host_line.split( ' ' )[ 1 ]
 
             unless domain_port then
@@ -1126,7 +1110,6 @@ module Girl
 
         resolve_domain( domain, src )
       when :checking then
-        # puts "debug add src rbuff before resolved #{ data.inspect }"
         src_info[ :rbuffs ] << data
       when :negotiation then
         # +----+-----+-------+------+----------+----------+
@@ -1134,12 +1117,9 @@ module Girl
         # +----+-----+-------+------+----------+----------+
         # | 1  |  1  | X'00' |  1   | Variable |    2     |
         # +----+-----+-------+------+----------+----------+
-        # puts "debug negotiation #{ data.inspect }"
         ver, cmd, rsv, atyp = data[ 0, 4 ].unpack( 'C4' )
 
         if cmd == 1 then
-          # puts "debug socks5 CONNECT"
-
           if atyp == 1 then
             destination_host, destination_port = data[ 4, 6 ].unpack( 'Nn' )
             
@@ -1155,7 +1135,6 @@ module Girl
             destination_ip = destination_addrinfo.ip_address
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
-            # puts "debug IP V4 address #{ destination_ip } #{ destination_port }"
             make_tunnel( destination_ip, src )
           elsif atyp == 3 then
             domain_len = data[ 4 ].unpack( 'C' ).first
@@ -1165,7 +1144,6 @@ module Girl
               port = data[ ( 5 + domain_len ), 2 ].unpack( 'n' ).first
               src_info[ :destination_domain ] = domain
               src_info[ :destination_port ] = port
-              # puts "debug DOMAINNAME #{ domain } #{ port }"
               resolve_domain( domain, src )
             end
           else
@@ -1188,7 +1166,6 @@ module Girl
 
           add_tun_wbuff( tun, data )
         else
-          # puts "debug add src rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
         end
       when :direct then
@@ -1197,7 +1174,6 @@ module Girl
         if dst then
           add_dst_wbuff( dst, data )
         else
-          # puts "debug add src.rbuff #{ data.bytesize }"
           add_src_rbuff( src, data )
         end
       end
@@ -1206,8 +1182,9 @@ module Girl
     def read_tcp( tcp )
       begin
         data = tcp.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read tcp #{ e.class }"
         close_tcp( tcp )
         return
       end
@@ -1243,24 +1220,23 @@ module Girl
       dest_addrinfo = Addrinfo.new( dest_addr )
       dest_ip = dest_addrinfo.ip_address
       src_id = rand( ( 2 ** 64 ) - 2 ) + 1
-      # puts "debug tspd accept a src #{ src_id } #{ addrinfo.ip_unpack.inspect } #{ dest_ip } #{ dest_port }"
       
       @src_infos[ src ] = {
-        src_id: src_id,              # src id
-        addrinfo: addrinfo,          # addrinfo
-        proxy_proto: :uncheck,       # :uncheck / :http / :socks5
-        proxy_type: :uncheck,        # :uncheck / :checking / :negotiation / :remote / :direct
-        destination_domain: dest_ip, # 目的地域名
-        destination_port: dest_port, # 目的地端口
-        is_connect: true,            # 代理协议是http的场合，是否是CONNECT
-        rbuffs: [],                  # 读到的流量
-        dst: nil,                    # :direct的场合，对应的dst
-        dst_id: nil,                 # :remote的场合，远端dst id
-        tun: nil,                    # :remote的场合，对应的tun
-        wbuff: '',                   # 从dst/tun读到的流量
-        closing: false,              # 是否准备关闭
-        paused: false,               # 是否已暂停
-        left: 0                      # 剩余加密波数
+        src_id: src_id,
+        addrinfo: addrinfo,
+        proxy_proto: :uncheck, # :uncheck / :http / :socks5
+        proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
+        destination_domain: dest_ip,
+        destination_port: dest_port,
+        is_connect: true,
+        rbuffs: [],
+        dst: nil,
+        dst_id: nil,
+        tun: nil,
+        wbuff: '',
+        closing: false,
+        paused: false,
+        left: 0
       }
 
       add_read( src, :src )
@@ -1282,8 +1258,9 @@ module Girl
     def read_tun( tun )
       begin
         data = tun.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
       rescue Exception => e
-        # puts "debug read tun #{ e.class }"
         close_tun( tun )
         return
       end
@@ -1312,7 +1289,6 @@ module Girl
           return
         end
 
-        # puts "debug got pong #{ data.bytesize }"
         set_pong( tun, src )
         data = data[ ( sep_idx + 1 )..-1 ]
 
@@ -1351,7 +1327,6 @@ module Girl
       end
 
       if @remotes.any?{ | remote | ( domain.size >= remote.size ) && ( domain[ ( remote.size * -1 )..-1 ] == remote ) } then
-        # puts "debug hit remotes #{ domain }"
         set_remote( src )
         return
       end
@@ -1362,12 +1337,10 @@ module Girl
         ip, created_at = resolv_cache
 
         if Time.new - created_at < RESOLV_CACHE_EXPIRE then
-          # puts "debug hit resolv cache #{ domain } #{ ip }"
           make_tunnel( ip, src )
           return
         end
 
-        # puts "debug expire resolv cache #{ domain }"
         @resolv_caches.delete( domain )
       end
 
@@ -1382,7 +1355,6 @@ module Girl
       dns = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       begin
-        # puts "debug dns query #{ domain }"
         @nameserver_addrs.each{ | addr | dns.sendmsg( data, 0, addr ) }
       rescue Exception => e
         puts "#{ Time.new } dns send data #{ e.class }"
@@ -1441,7 +1413,6 @@ module Girl
 
       if src_info[ :proxy_proto ] == :http then
         if src_info[ :is_connect ] then
-          # puts "debug add src wbuff http ok"
           add_src_wbuff( src, HTTP_OK )
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
@@ -1457,7 +1428,6 @@ module Girl
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
       domain_port = [ destination_domain, destination_port ].join( ':' )
-      # puts "debug a new source #{ src_id } #{ domain_port } #{ src_info[ :addrinfo ].ip_address }"
       data = [ Girl::Custom::A_NEW_SOURCE, src_id, domain_port ].join( Girl::Custom::SEP )
       add_tcp_wbuff( encode_a_msg( data ) )
     end
@@ -1533,8 +1503,9 @@ module Girl
 
       begin
         written = dst.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write dst #{ e.class }"
         close_dst( dst )
         return
       end
@@ -1572,8 +1543,9 @@ module Girl
 
       begin
         written = mem.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write mem #{ e.class }"
         close_mem( mem )
         return
       end
@@ -1604,8 +1576,9 @@ module Girl
 
       begin
         written = src.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write src #{ e.class }"
         close_src( src )
         return
       end
@@ -1650,9 +1623,15 @@ module Girl
       end
 
       begin
-        written = tcp.write_nonblock( data )
+        if tcp_info[ :is_syn ] then
+          written = tcp.sendmsg_nonblock( data, 536870912, @proxyd_addr )
+          tcp_info[ :is_syn ] = false
+        else
+          written = tcp.write_nonblock( data )
+        end
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write tcp #{ e.class }"
         close_tcp( tcp )
         return
       end
@@ -1681,9 +1660,15 @@ module Girl
       end
 
       begin
-        written = tun.write_nonblock( data )
+        if tun_info[ :is_syn ] then
+          written = tun.sendmsg_nonblock( data, 536870912, @girl_addr )
+          tun_info[ :is_syn ] = false
+        else
+          written = tun.write_nonblock( data )
+        end
+      rescue Errno::EINPROGRESS
+        return
       rescue Exception => e
-        # puts "debug write tun #{ e.class }"
         close_tun( tun )
         return
       end

@@ -11,14 +11,14 @@ roles = {}
 
 is_fastopen = ARGV[ 0 ] == '0' ? false : true
 tfod = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+tfod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
+tfod.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
 if is_fastopen then
   tfod.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 512 )
   puts tfod.getsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN ).inspect
 end
 
-tfod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 )
-tfod.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 tfod.bind( Socket.sockaddr_in( server_port, '0.0.0.0' ) )
 tfod.listen( 512 )
 
@@ -34,7 +34,7 @@ loop do
 
     case role
     when :server
-      client, addrinfo = sock.accept
+      client, addrinfo = sock.accept_nonblock
       puts "<<< #{ addrinfo.inspect }"
       reads << client
       roles[ client ] = :client

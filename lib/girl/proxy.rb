@@ -80,8 +80,25 @@ module Girl
         remotes = IO.binread( remote_path ).split( "\n" ).map{ | line | line.strip }
       end
 
+      is_client_fastopen = is_server_fastopen = false
+
+      if RUBY_PLATFORM.include?( 'linux' ) then
+        IO.popen( 'sysctl -n net.ipv4.tcp_fastopen' ) do | io |
+          output = io.read
+          val = output.to_i % 4
+
+          if [ 1, 3 ].include?( val ) then
+            is_client_fastopen = true
+          end
+
+          if [ 2, 3 ].include?( val ) then
+            is_server_fastopen = true
+          end
+        end
+      end
+
       puts "girl proxy #{ Girl::VERSION }"
-      puts "redir #{ redir_port } #{ memd_port } #{ proxyd_host } #{ proxyd_port } #{ girl_port } #{ tspd_port } nameservers #{ nameservers.inspect } im #{ im }"
+      puts "redir #{ redir_port } #{ memd_port } #{ proxyd_host } #{ proxyd_port } #{ girl_port } #{ tspd_port } #{ nameservers.inspect } #{ im } #{ is_client_fastopen } #{ is_server_fastopen }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
@@ -90,7 +107,7 @@ module Girl
         puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
       end
       
-      worker = Girl::ProxyWorker.new( redir_port, memd_port, proxyd_host, proxyd_port, girl_port, tspd_port, nameservers, im, directs, remotes )
+      worker = Girl::ProxyWorker.new( redir_port, memd_port, proxyd_host, proxyd_port, girl_port, tspd_port, nameservers, im, directs, remotes, is_client_fastopen, is_server_fastopen )
 
       Signal.trap( :TERM ) do
         puts 'exit'
