@@ -231,7 +231,7 @@ switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置
 
 近端用nft命令把dns查询和tcp流量指向妹子的透明代理端口，设备端把网关和dns设成近端ip即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
 
-一些无视系统代理的应用，例如switch上的youtube，经透明代理可以打开。
+一些无视系统代理的应用，例如microsoft store，switch上的youtube，经透明代理可以打开。
 
 ```bash
 nft -f transparent.conf
@@ -255,6 +255,22 @@ table ip nat {
     }
 }
 ```
+
+开机自动执行可以写rc.local：`echo -e 'nft -f /boot/transparent.conf\nexit 0' > /etc/rc.local`
+
+openwrt下53端口由dnsmasq监听，dnsmasq启动优先级高于rc.local，dnsmasq默认读取resolv.conf.auto，让dnsmasq忽略resolv.conf.auto，把查询转给妹子：
+
+`vi /etc/config/dhcp`
+
+```conf
+config dnsmasq
+        # ...
+        list server '127.0.0.1#7777'
+        option noresolv 1
+        option localuse 1
+```
+
+`service dnsmasq restart`
 
 设备端避免解析到假ip需关闭ipv6，且ipv4的dns只设妹子一个。
 
