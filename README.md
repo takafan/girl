@@ -235,6 +235,7 @@ switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置
 
 ```bash
 nft -f transparent.conf
+nft list ruleset ip
 ```
 
 transparent.conf 样例：
@@ -258,19 +259,15 @@ table ip nat {
 
 开机自动执行可以写rc.local：`echo -e 'nft -f /boot/transparent.conf\nexit 0' > /etc/rc.local`
 
-openwrt下53端口由dnsmasq监听，dnsmasq启动优先级高于rc.local，dnsmasq默认读取resolv.conf.auto，让dnsmasq忽略resolv.conf.auto，把查询转给妹子：
+openwrt重启后，transparent.conf加载前，dns查询有机会进到dnsmasq监听的53端口查到假ip并被设备端缓存，推荐关闭dnsmasq：
 
-`vi /etc/config/dhcp`
-
-```conf
-config dnsmasq
-        # ...
-        list server '127.0.0.1#7777'
-        option noresolv 1
-        option localuse 1
+```bash
+uci delete dhcp.@dnsmasq[0]
+uci changes
+uci commit
+service dnsmasq stop
+service dnsmasq disable
 ```
-
-`service dnsmasq restart`
 
 设备端避免解析到假ip需关闭ipv6，且ipv4的dns只设妹子一个。
 
