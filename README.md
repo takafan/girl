@@ -263,10 +263,18 @@ openwrt重启后，transparent.conf加载前，dns查询有机会进到dnsmasq�
 
 ```bash
 uci delete dhcp.@dnsmasq[0]
-uci changes
 uci commit
 service dnsmasq stop
 service dnsmasq disable
+```
+
+网关本地用dns可以配在network里：
+
+```bash
+# 无所谓污染
+uci set network.wan.dns="192.168.1.1 114.114.114.114"
+uci commit
+service network reload
 ```
 
 设备端避免解析到假ip需关闭ipv6，且ipv4的dns只设妹子一个。
