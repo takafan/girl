@@ -1,12 +1,13 @@
 module Girl
   module Dns
     
-    def pack_a_query( domain )
+    def pack_a_query( domain, type = 1 )
       # https://www.ietf.org/rfc/rfc1035.txt
+      # https://www.ietf.org/rfc/rfc3596.txt
       raise "domain may not exceed 255 chars" if domain.bytesize > 255
       raise "invalid domain" if domain =~ /[^\w\.\-]/
       data = [ rand( 65_535 ), 1, 0, 1, 0, 0, 0 ].pack( 'nCCnnnn' )
-      data << [ pack_domain( domain ), 1, 1 ].pack( 'a*nn' )
+      data << [ pack_domain( domain ), type, 1 ].pack( 'a*nn' )
       data
     end
   
@@ -102,8 +103,10 @@ module Girl
         parts << data[ offset + 1, len ]
         offset += ( 1 + len )
       end
-  
-      [ id, parts.join( '.' ) ]
+      
+      type = data.unpack( "@#{ offset + 1 } n" ).first
+      # puts "debug id #{ id.inspect } dn #{ parts.join( '.' ).inspect } type #{ type }"
+      [ id, parts.join( '.' ), type ]
     end
   
     def seek_rr_ip( data, offset )
