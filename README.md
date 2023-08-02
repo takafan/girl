@@ -81,8 +81,8 @@ ruby proxyd.run.rb
 
 ```javascript
 {
-  "proxyd_port": 6060, // 远端端口
-  "girl_port": 8080    // 妹子端口，防重放
+    "proxyd_port": 6060, // 远端端口
+    "girl_port": 8080    // 妹子端口，防重放
 }
 ```
 
@@ -126,15 +126,15 @@ ruby proxy.run.rb
 
 ```javascript
 {
-  "redir_port": 6666,                           // 代理端口
-  "tspd_port": 7777,                            // 透明代理端口
-  "proxyd_host": "1.2.3.4",                     // 远端服务器
-  "proxyd_port": 6060,                          // 远端端口
-  "girl_port": 8080,                            // 妹子端口，防重放
-  "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
-  "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
-  "nameserver": "192.168.1.1  114.114.114.114", // dns服务器，多个用空格分隔
-  "im": "taka-pc"                               // 设备标识
+    "redir_port": 6666,                           // 代理端口
+    "tspd_port": 7777,                            // 透明代理端口
+    "proxyd_host": "1.2.3.4",                     // 远端服务器
+    "proxyd_port": 6060,                          // 远端端口
+    "girl_port": 8080,                            // 妹子端口，防重放
+    "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
+    "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
+    "nameserver": "192.168.1.1  114.114.114.114", // dns服务器，多个用空格分隔
+    "im": "taka-pc"                               // 设备标识
 }
 ```
 
@@ -203,11 +203,11 @@ ruby relay.run.rb
 
 ```javascript
 {
-  "relay_proxyd_port": 5060, // 中继远端端口
-  "relay_girl_port": 5080,   // 中继妹子端口
-  "proxyd_host": "1.2.3.4",  // 远端服务器
-  "proxyd_port": 6060,       // 远端端口
-  "girl_port": 8080          // 妹子端口
+    "relay_proxyd_port": 5060, // 中继远端端口
+    "relay_girl_port": 5080,   // 中继妹子端口
+    "proxyd_host": "1.2.3.4",  // 远端服务器
+    "proxyd_port": 6060,       // 远端端口
+    "girl_port": 8080          // 妹子端口
 }
 ```
 
@@ -263,6 +263,7 @@ openwrt默认由dnsmasq监听53端口，转给妹子：`vi /etc/config/dhcp`
 ```bash
 config dnsmasq
         # ...
+        option localuse 1
         option noresolv 1
         list server '127.0.0.1#7777'
 ```
@@ -313,14 +314,14 @@ ruby mirrord.run.rb
 
 ```javascript
 {
-  "mirrord_port": 7070,       // 镜子服务端口
-  "im_infos": [               // 映射列表
-    { 
-      "im": "taka-pi",        // 标识
-      "p2d_port": 2222,       // p2影子端口
-      "p1d_port": 0           // p1影子端口，0为随机
-    }
-  ]
+    "mirrord_port": 7070,           // 镜子服务端口
+    "im_infos": [                   // 映射列表
+        { 
+            "im": "taka-pi",        // 标识
+            "p2d_port": 2222,       // p2影子端口
+            "p1d_port": 0           // p1影子端口，0为随机
+        }
+    ]
 }
 ```
 
