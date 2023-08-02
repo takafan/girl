@@ -33,7 +33,7 @@ module Girl
       @rsv_infos = {}        # rsv => { :rsv_id :addrinfo :domain }
       @near_infos = {}       # near_id => { :addrinfo :id :domain :part }
       @response_caches = {}  # domain => [ response, created_at, ip, is_remote ]
-      @response6_caches = {} # domain => [ response, created_at ]
+      @response6_caches = {} # domain => [ response, created_at, ip, is_remote ]
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
@@ -356,16 +356,18 @@ module Girl
           data2[ 0, 2 ] = near_info[ :id ]
           send_data( @rsvd, data2, addrinfo )
 
-          if type == 1 then
-            begin
-              ip = seek_ip( data2 )
-            rescue Exception => e
-              puts "#{ Time.new } response seek ip  #{ e.class } #{ e.message }"
-            end
+          begin
+            ip = seek_ip( data2 )
+          rescue Exception => e
+            puts "#{ Time.new } response seek ip  #{ e.class } #{ e.message }"
+          end
 
-            @response_caches[ domain ] = [ data2, Time.new, ip, true ]
-          else
-            @response6_caches[ domain ] = [ data2, Time.new ]
+          if ip then
+            if type == 1 then
+              @response_caches[ domain ] = [ data2, Time.new, ip, true ]
+            else
+              @response6_caches[ domain ] = [ data2, Time.new, ip, true ]
+            end
           end
         end
       end
@@ -860,9 +862,12 @@ module Girl
       msg = {
         resolv_caches: @resolv_caches.sort,
         response_caches: @response_caches.sort.map{ | a | [ a[ 0 ], a[ 1 ][ 2 ], a[ 1 ][ 3 ] ] },
+        response6_caches: @response6_caches.sort.map{ | a | [ a[ 0 ], a[ 1 ][ 2 ], a[ 1 ][ 3 ] ] },
         sizes: {
           directs: @directs.size,
           remotes: @remotes.size,
+          reads: @reads.size,
+          writes: @writes.size,
           updates: @updates.size,
           mem_infos: @mem_infos.size,
           src_infos: @src_infos.size,
@@ -957,20 +962,20 @@ module Girl
       type = rsv_info[ :type ]
       send_data( @rsvd, data, addrinfo )
 
-      if type == 1 then
-        begin
-          ip = seek_ip( data )
-        rescue Exception => e
-          puts "#{ Time.new } rsv seek ip #{ e.class } #{ e.message }"
-          close_rsv( rsv )
-          return
-        end
+      begin
+        ip = seek_ip( data )
+      rescue Exception => e
+        puts "#{ Time.new } rsv seek ip #{ e.class } #{ e.message }"
+        close_rsv( rsv )
+        return
+      end
 
-        if ip then
+      if ip then
+        if type == 1 then
           @response_caches[ domain ] = [ data, Time.new, ip, false ]
+        else
+          @response6_caches[ domain ] = [ data, Time.new, ip, false ]
         end
-      elsif type == 28 then
-        @response6_caches[ domain ] = [ data, Time.new ]
       end
 
       close_rsv( rsv )
@@ -1046,9 +1051,11 @@ module Girl
   
           send_data( @info, JSON.generate( msg ), @infod_addr )
         end
-      else
-        new_a_rsv( data, addrinfo, domain, type )
+
+        return
       end
+      
+      new_a_rsv( data, addrinfo, domain, type )
     end
 
     def read_src( src )

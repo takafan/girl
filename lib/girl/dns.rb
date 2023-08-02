@@ -124,6 +124,9 @@ module Girl
         raise "rdlen not 4?" if rdlen != 4
         a, b, c, d = data.unpack( "@#{ offset } CCCC" )
         ip = "#{ a }.#{ b }.#{ c }.#{ d }"
+      elsif type == 28 then
+        tokens = data.unpack("@#{ offset } n8")
+        ip = format( "%x:%x:%x:%x:%x:%x:%x:%x", *tokens )
       end
   
       offset += rdlen

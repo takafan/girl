@@ -314,6 +314,8 @@ module Girl
       when 'memory-info' then
         msg2 = {
           sizes: {
+            reads: @reads.size,
+            writes: @writes.size,
             updates: @updates.size,
             relay_tcp_infos: @relay_tcp_infos.size,
             relay_tun_infos: @relay_tun_infos.size,

@@ -680,6 +680,8 @@ module Girl
         sizes: {
           ips: @ips.size,
           im_infos: @im_infos.size,
+          reads: @reads.size,
+          writes: @writes.size,
           updates: @updates.size,
           tcp_infos: @tcp_infos.size,
           mem_infos: @mem_infos.size,

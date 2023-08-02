@@ -274,6 +274,7 @@ module Girl
         end
 
         msg2 = {
+          updates: @updates.size,
           room_infos: arr,
           updates_limit: @updates_limit,
           eliminate_count: @eliminate_count
