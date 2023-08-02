@@ -256,7 +256,7 @@ table ip nat {
 }
 ```
 
-开机自动执行可以写rc.local：`echo -e 'nft -f /boot/transparent.conf\nexit 0' > /etc/rc.local`
+开机自动执行：`echo -e 'nft -f /boot/transparent.conf\nexit 0' > /etc/rc.local`
 
 openwrt默认由dnsmasq监听53端口，转给妹子：`vi /etc/config/dhcp`
 
