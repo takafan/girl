@@ -290,6 +290,8 @@ openwrt默认由dnsmasq监听53端口，转给妹子：`vi /etc/config/dhcp`
 ```bash
 config dnsmasq
         # ...
+        option rebind_protection '0'
+        option localservice '0'
         option localuse 1
         option noresolv 1
         list server '127.0.0.1#7777'
