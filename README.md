@@ -256,7 +256,7 @@ switch:
 
 ## 透明代理
 
-近端用nft把tcp流量指向妹子的透明代理端口，配置dnsmasq或者nft把dns查询转给妹子，设备端把网关和dns设成近端ip即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
+近端用nft把tcp流量指向妹子的透明代理端口，配置dnsmasq把dns查询转给妹子，设备端把网关和dns设成近端ip即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
 
 一些无视系统代理的应用，例如微软商店，switch上的youtube，经透明代理可以打开。
 
@@ -265,7 +265,7 @@ nft -f transparent.conf
 nft list ruleset ip
 ```
 
-transparent.conf 样例：
+transparent.conf 模板：
 
 ```bash
 flush ruleset ip
@@ -273,7 +273,9 @@ flush ruleset ip
 table ip nat {
     chain prerouting {
         type nat hook prerouting priority dstnat;
-        ip daddr != { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255/32 } tcp dport 1-65535 redirect to :7777
+        ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255 } return
+        ip daddr { {direct-ips} } return
+        tcp dport 1-65535 redirect to :7777
     }
 
     chain postrouting {
