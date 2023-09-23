@@ -127,7 +127,7 @@ ruby proxy.run.rb
 ```javascript
 {
   "redir_port": 6666,                           // 代理端口
-  "tspd_port": 7777,                            // 透明代理端口
+  "tspd_port": 7777,                            // 透明转发端口
   "proxyd_host": "1.2.3.4",                     // 远端服务器
   "proxyd_port": 6060,                          // 远端端口
   "girl_port": 8080,                            // 妹子端口，防重放
@@ -181,7 +181,7 @@ curl --verbose -x http://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.c
 curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
 ```
 
-妹子同时支持http, http tunnel, socks5, 以及透明代理。
+妹子同时支持http, http tunnel, socks5, 以及透明转发。
 
 ## 中继，通常是国内专线/vps：
 
@@ -227,7 +227,19 @@ ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线
 
 switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
 
-## 透明代理
+## 透明转发
+
+```
+dns查询 -> 近端53 -> 命中缓存？- hit ---> 返回ip
+                              \
+                               `- no -> 妹子透明转发端口 -> 域名命中remotes.txt？- hit -> 中继 -> 远端解析域名 -> 返回ip
+                                                                               \
+                                                                                `- no -> 就近解析域名 -> 返回ip
+
+流量 -> 近端prerouting -> ip命中directs.txt？-- hit -----> 目的地 
+                                            \
+                                             `- no -> 妹子透明转发端口 -> 中继 -> 远端 -> 目的地
+```
 
 近端用nft命令把dns查询和tcp流量指向妹子的透明代理端口，设备端把网关和dns设成近端ip即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
 
