@@ -285,11 +285,13 @@ module Girl
         resolve_domain_port( domain_port, src_id, tcp, tcp_info[ :im ] )
       when Girl::Custom::QUERY then
         return unless tcp_info[ :im ]
-        _, near_id, domain = data.split( Girl::Custom::SEP, 3 )
-        return if near_id.nil? || domain.nil?
+        _, near_id, type, domain = data.split( Girl::Custom::SEP, 4 )
+        return if near_id.nil? || domain.nil? || type.nil?
         near_id = near_id.to_i
         return if near_id <= 0
-        new_a_rsv( domain, near_id, tcp, tcp_info[ :im ] )
+        type = type.to_i
+        return unless [ 1, 28 ].include?( type )
+        new_a_rsv( domain, near_id, type, tcp, tcp_info[ :im ] )
       end
     end
 
@@ -420,11 +422,11 @@ module Girl
       add_read( memd, :memd )
     end
 
-    def new_a_rsv( domain, near_id, tcp, im )
+    def new_a_rsv( domain, near_id, type, tcp, im )
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       begin
-        data = pack_a_query( domain )
+        data = pack_a_query( domain, type )
       rescue Exception => e
         puts "#{ Time.new } rsv pack a query #{ e.class } #{ e.message } #{ domain }"
         return
@@ -678,6 +680,8 @@ module Girl
         sizes: {
           ips: @ips.size,
           im_infos: @im_infos.size,
+          reads: @reads.size,
+          writes: @writes.size,
           updates: @updates.size,
           tcp_infos: @tcp_infos.size,
           mem_infos: @mem_infos.size,

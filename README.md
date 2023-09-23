@@ -17,26 +17,29 @@
 5. 限流，触发后，来源ip每和vps建立tcp连接，不论端口，来回两次流量即被封来源端口，后续流量无法到达，但ping的通，udp可达，企业宽带极易触发。
 6. 封ip，用shadowsocks稍微频繁一点，国内任何来源的tcp及icmp均无法到达vps，但udp可达，持续几天至几个月不等。
 
-* 应对1和2，靠中转：
+应对1和2，靠中转：
 
-```
+```txt
 流量 -> 代理 -> 本机/路由器 ------> vps -> 目的地
 ```
 
-* 中转会遇到3-6。
-* 应对3：几乎不能走udp。
-* 应对4：自定义协议。
-* 应对5：三种方案：
+中转会遇到3-6。
 
-```
+应对3：几乎不能走udp。
+
+应对4：自定义协议。
+
+应对5：三种方案：
+
+```txt
 流量 ------> vps（非知名供应商ip段） -> 目的地
 ```
 
-```
+```txt
 流量 ------> 海外cdn中转 ------> vps -> 目的地
 ```
 
-```
+```txt
 流量 ------> 国内专线/vps ------> 海外vps -> 目的地
 ```
 
@@ -44,7 +47,7 @@
 
 完整的路线图：
 
-```
+```txt
 流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit -----> 中继 -----> 远端 -> 解析域名 -> 目的地
                                               \
                                                `- no -> 解析域名 -> ip命中directs.txt？-- hit -----> 目的地
@@ -81,8 +84,8 @@ ruby proxyd.run.rb
 
 ```javascript
 {
-  "proxyd_port": 6060, // 远端端口
-  "girl_port": 8080    // 妹子端口，防重放
+    "proxyd_port": 6060, // 远端端口
+    "girl_port": 8080    // 妹子端口，防重放
 }
 ```
 
@@ -124,17 +127,17 @@ ruby proxy.run.rb
 
 5. proxy.conf.json 样例：
 
-```javascript
+```js
 {
-  "redir_port": 6666,                           // 代理端口
-  "tspd_port": 7777,                            // 透明转发端口
-  "proxyd_host": "1.2.3.4",                     // 远端服务器
-  "proxyd_port": 6060,                          // 远端端口
-  "girl_port": 8080,                            // 妹子端口，防重放
-  "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
-  "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
-  "nameserver": "192.168.1.1  114.114.114.114", // dns服务器，多个用空格分隔
-  "im": "taka-pc"                               // 设备标识
+    "redir_port": 6666,                           // 代理端口
+    "tspd_port": 7777,                            // 透明转发端口
+    "proxyd_host": "1.2.3.4",                     // 远端服务器
+    "proxyd_port": 6060,                          // 远端端口
+    "girl_port": 8080,                            // 妹子端口，防重放
+    "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
+    "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
+    "nameserver": "192.168.1.1  114.114.114.114", // dns服务器，多个用空格分隔
+    "im": "taka-pc"                               // 设备标识
 }
 ```
 
@@ -203,11 +206,11 @@ ruby relay.run.rb
 
 ```javascript
 {
-  "relay_proxyd_port": 5060, // 中继远端端口
-  "relay_girl_port": 5080,   // 中继妹子端口
-  "proxyd_host": "1.2.3.4",  // 远端服务器
-  "proxyd_port": 6060,       // 远端端口
-  "girl_port": 8080          // 妹子端口
+    "relay_proxyd_port": 5060, // 中继远端端口
+    "relay_girl_port": 5080,   // 中继妹子端口
+    "proxyd_host": "1.2.3.4",  // 远端服务器
+    "proxyd_port": 6060,       // 远端端口
+    "girl_port": 8080          // 妹子端口
 }
 ```
 
@@ -215,41 +218,66 @@ ruby relay.run.rb
 
 不用装任何东西，直接填代理，系统自带的代理。
 
-windows: 开始 > 设置 > 网络和Internet > 代理 > 手动设置代理 > 使用代理服务器 > 开 > 填近端的地址和端口 > 保存
+windows: 
 
-macos: 系统偏好设置 > 网络 > 选中一个连接 > 高级 > 代理 > 打勾SOCKS代理 > 填近端的地址和端口 > 好 > 应用
+```txt
+开始 > 设置 > 网络和Internet > 代理 > 手动设置代理 > 使用代理服务器 > 开 > 填近端的地址和端口 > 保存
+```
 
-ios: 设置 > 无线局域网 > wifi详情 > 配置代理 > 手动 > 填近端的地址和端口 > 存储
+macos: 
 
-android: 设置 > WLAN > 长按一个连接 > 修改网络 > 显示高级选项 > 代理 > 手动 > 填近端的地址和端口 > 保存
+```txt
+系统偏好设置 > 网络 > 选中一个连接 > 高级 > 代理 > 打勾SOCKS代理 > 填近端的地址和端口 > 好 > 应用
+```
 
-ps4: 设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线 > 自订 > 选择一个连接 > 一路默认到Proxy伺服器 > 使用 > 填近端的地址和端口 > 继续
+ios: 
 
-switch: 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
+```txt
+设置 > 无线局域网 > wifi详情 > 配置代理 > 手动 > 填近端的地址和端口 > 存储
+```
+
+android: 
+
+```txt
+设置 > WLAN > 长按一个连接 > 修改网络 > 显示高级选项 > 代理 > 手动 > 填近端的地址和端口 > 保存
+```
+
+ps4: 
+
+```txt
+设定 > 网路 > 设定网际网路连线 > 使用Wi-Fi/使用LAN连接线 > 自订 > 选择一个连接 > 一路默认到Proxy伺服器 > 使用 > 填近端的地址和端口 > 继续
+```
+
+switch: 
+
+```txt
+设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
+```
 
 ## 透明转发
 
-```
-dns查询 -> 近端53 -> 命中缓存？- hit ---> 返回ip
+```txt
+dns查询 -> 近端dnsmasq -> 命中缓存？- hit -> 返回ip
                               \
                                `- no -> 妹子透明转发端口 -> 域名命中remotes.txt？- hit -> 中继 -> 远端解析域名 -> 返回ip
                                                                                \
                                                                                 `- no -> 就近解析域名 -> 返回ip
 
 流量 -> 近端prerouting -> ip命中directs.txt？-- hit -----> 目的地 
-                                            \
-                                             `- no -> 妹子透明转发端口 -> 中继 -> 远端 -> 目的地
+                                \
+                                 `- no -> 妹子透明转发端口 -> 中继 -> 远端 -> 目的地
 ```
 
-近端用nft命令把dns查询和tcp流量指向妹子的透明代理端口，设备端把网关和dns设成近端ip即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
+近端用nft把tcp流量指向妹子的透明转发端口，配置dnsmasq把dns查询转给妹子，设备端把网关和dns设成近端ip即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
 
-一些无视系统代理的应用，例如switch上的youtube，经透明代理可以打开。
+一些无视系统代理的应用，例如微软商店，switch上的youtube，经透明转发可以打开。
 
 ```bash
 nft -f transparent.conf
+nft list ruleset ip
 ```
 
-transparent.conf 样例：
+transparent.conf 模板：
 
 ```bash
 flush ruleset ip
@@ -257,8 +285,9 @@ flush ruleset ip
 table ip nat {
     chain prerouting {
         type nat hook prerouting priority dstnat;
-        ip daddr 192.168.1.59 udp dport 53 redirect to :7777
-        ip daddr != { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255/32 } tcp dport 1-65535 redirect to :7777
+        ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255 } return
+        ip daddr { {direct.txt} } return
+        tcp dport 1-65535 redirect to :7777
     }
 
     chain postrouting {
@@ -268,15 +297,32 @@ table ip nat {
 }
 ```
 
-设备端避免解析到假ip需关闭ipv6，且ipv4的dns只设妹子一个。
+开机自动执行：`echo -e 'nft -f /boot/transparent.conf\nexit 0' > /etc/rc.local`
+
+openwrt默认由dnsmasq监听53端口，转给妹子：`vi /etc/config/dhcp`
+
+```bash
+config dnsmasq
+        # ...
+        option rebind_protection '0'
+        option localservice '0'
+        option localuse 1
+        option noresolv 1
+        list server '127.0.0.1#7777'
+```
+
+其它linux：`vi /etc/dnsmasq.d/girl.conf`
+
+```conf
+no-resolv
+server=127.0.0.1#7777
+```
+
+设备端dns只设妹子一个，避免解析到假ip。
 
 ## 去除特征
 
 协议本身即是特征。但人人发明自己的协议，也就没有了特征。覆盖Girl::Custom，更换协议带头字符，更换加解密方法，创造一个自己的协议。
-
-## 对比其它翻墙软件
-
-妹子只加密前两段流量，反正后面的墙也不看。
 
 ## 连回家
 
@@ -311,14 +357,14 @@ ruby mirrord.run.rb
 
 ```javascript
 {
-  "mirrord_port": 7070,       // 镜子服务端口
-  "im_infos": [               // 映射列表
-    { 
-      "im": "taka-pi",        // 标识
-      "p2d_port": 2222,       // p2影子端口
-      "p1d_port": 0           // p1影子端口，0为随机
-    }
-  ]
+    "mirrord_port": 7070,     // 镜子服务端口
+    "im_infos": [             // 映射列表
+        { 
+            "im": "taka-pi",  // 标识
+            "p2d_port": 2222, // p2影子端口
+            "p1d_port": 0     // p1影子端口，0为随机
+        }
+    ]
 }
 ```
 

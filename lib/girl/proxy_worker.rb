@@ -33,6 +33,7 @@ module Girl
       @rsv_infos = {}        # rsv => { :rsv_id :addrinfo :domain }
       @near_infos = {}       # near_id => { :addrinfo :id :domain :part }
       @response_caches = {}  # domain => [ response, created_at, ip, is_remote ]
+      @response6_caches = {} # domain => [ response, created_at, ip, is_remote ]
       
       new_a_redir( redir_port )
       new_a_infod( redir_port )
@@ -350,6 +351,7 @@ module Girl
         if near_info then
           addrinfo = near_info[ :addrinfo ]
           domain = near_info[ :domain ]
+          type = near_info[ :type ]
           data2 = near_info[ :part ] + data2
           data2[ 0, 2 ] = near_info[ :id ]
           send_data( @rsvd, data2, addrinfo )
@@ -360,7 +362,13 @@ module Girl
             puts "#{ Time.new } response seek ip  #{ e.class } #{ e.message }"
           end
 
-          @response_caches[ domain ] = [ data2, Time.new, ip, true ]
+          if ip then
+            if type == 1 then
+              @response_caches[ domain ] = [ data2, Time.new, ip, true ]
+            else
+              @response6_caches[ domain ] = [ data2, Time.new, ip, true ]
+            end
+          end
         end
       end
     end
@@ -538,7 +546,7 @@ module Girl
       @tspd_port = tspd_port
     end
 
-    def new_a_rsv( data, addrinfo, domain )
+    def new_a_rsv( data, addrinfo, domain, type )
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       
       begin
@@ -553,7 +561,8 @@ module Girl
       rsv_info = {
         rsv_id: rsv_id,
         addrinfo: addrinfo,
-        domain: domain
+        domain: domain,
+        type: type
       }
 
       @rsv_infos[ rsv ] = rsv_info
@@ -831,6 +840,10 @@ module Girl
           puts "#{ Time.new } rsv expired #{ rsv_info[ :rsv_id ] } #{ rsv_info[ :domain ] }"
           close_rsv( rsv )
         end
+      when 'expire-near' then
+        near_id = msg[ :near_id ]
+        near_info = @near_infos.delete( near_id )
+        puts "#{ Time.new } expire near #{ near_info[ :addrinfo ].ip_unpack.inspect } #{ near_info[ :domain ] }" if near_info
       end
     end
 
@@ -849,9 +862,12 @@ module Girl
       msg = {
         resolv_caches: @resolv_caches.sort,
         response_caches: @response_caches.sort.map{ | a | [ a[ 0 ], a[ 1 ][ 2 ], a[ 1 ][ 3 ] ] },
+        response6_caches: @response6_caches.sort.map{ | a | [ a[ 0 ], a[ 1 ][ 2 ], a[ 1 ][ 3 ] ] },
         sizes: {
           directs: @directs.size,
           remotes: @remotes.size,
+          reads: @reads.size,
+          writes: @writes.size,
           updates: @updates.size,
           mem_infos: @mem_infos.size,
           src_infos: @src_infos.size,
@@ -861,7 +877,8 @@ module Girl
           resolv_caches: @resolv_caches.size,
           rsv_infos: @rsv_infos.size,
           near_infos: @near_infos.size,
-          response_caches: @response_caches.size
+          response_caches: @response_caches.size,
+          response6_caches: @response6_caches.size
         },
         updates_limit: @updates_limit,
         eliminate_count: @eliminate_count
@@ -942,6 +959,7 @@ module Girl
       rsv_info = @rsv_infos[ rsv ]
       addrinfo = rsv_info[ :addrinfo ]
       domain = rsv_info[ :domain ]
+      type = rsv_info[ :type ]
       send_data( @rsvd, data, addrinfo )
 
       begin
@@ -952,9 +970,12 @@ module Girl
         return
       end
 
-      # 不缓存反向DNS
       if ip then
-        @response_caches[ domain ] = [ data, Time.new, ip, false ]
+        if type == 1 then
+          @response_caches[ domain ] = [ data, Time.new, ip, false ]
+        else
+          @response6_caches[ domain ] = [ data, Time.new, ip, false ]
+        end
       end
 
       close_rsv( rsv )
@@ -971,13 +992,24 @@ module Girl
       return if data.empty?
 
       begin
-        id, domain = seek_question_dn( data )
+        id, domain, type = seek_question_dn( data )
       rescue Exception => e
         puts "#{ Time.new } seek question dn #{ e.class } #{ e.message }"
         return
       end
 
-      response_cache = @response_caches[ domain ]
+      return unless [ 1, 12, 28 ].include?( type )
+
+      if type == 12 then
+        new_a_rsv( data, addrinfo, domain, type )
+        return
+      end
+
+      if type == 1 then
+        response_cache = @response_caches[ domain ]
+      else
+        response_cache = @response6_caches[ domain ]
+      end
 
       if response_cache then
         response, created_at = response_cache
@@ -988,7 +1020,11 @@ module Girl
           return
         end
 
-        @response_caches.delete( domain )
+        if type == 1 then
+          @response_caches.delete( domain )
+        else
+          @response6_caches.delete( domain )
+        end
       end
 
       if @remotes.any?{ | r | domain.include?( r ) } then
@@ -998,14 +1034,28 @@ module Girl
           addrinfo: addrinfo,
           id: id,
           domain: domain,
+          type: type,
           part: ''
         }
 
-        data2 = [ Girl::Custom::QUERY, near_id, domain ].join( Girl::Custom::SEP )
+        data2 = [ Girl::Custom::QUERY, near_id, type, domain ].join( Girl::Custom::SEP )
         add_tcp_wbuff( encode_a_msg( data2 ) )
-      else
-        new_a_rsv( data, addrinfo, domain )
+
+        Thread.new do
+          sleep EXPIRE_NEW
+  
+          msg = {
+            message_type: 'expire-near',
+            near_id: near_id
+          }
+  
+          send_data( @info, JSON.generate( msg ), @infod_addr )
+        end
+
+        return
       end
+      
+      new_a_rsv( data, addrinfo, domain, type )
     end
 
     def read_src( src )
