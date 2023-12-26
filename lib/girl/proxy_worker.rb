@@ -14,7 +14,7 @@ module Girl
       @is_client_fastopen = is_client_fastopen
       @is_server_fastopen = is_server_fastopen
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
-      
+
       @update_roles = [ :dns, :dst, :mem, :src, :tun, :rsv, :tsp ] # 参与淘汰的角色
       @updates_limit = 1007  # 淘汰池上限，1015(mac) - [ girlc, info, infod, memd, redir, rsvd, tcp, tspd ]
       @reads = []            # 读池
@@ -34,7 +34,7 @@ module Girl
       @near_infos = {}       # near_id => { :addrinfo :id :domain :part }
       @response_caches = {}  # domain => [ response, created_at, ip, is_remote ]
       @response6_caches = {} # domain => [ response, created_at, ip, is_remote ]
-      
+
       new_a_redir( redir_port )
       new_a_infod( redir_port )
       new_a_memd( memd_port )
@@ -409,7 +409,14 @@ module Girl
       if @is_direct_caches.include?( ip ) then
         is_direct = @is_direct_caches[ ip ]
       else
-        is_direct = @directs.any?{ | direct | direct.include?( ip ) }
+        begin
+          is_direct = @directs.any?{ | direct | direct.include?( ip ) }
+        rescue IPAddr::InvalidAddressError => e
+          puts "#{ Time.new } make tunnel #{ e.class }"
+          close_src( src )
+          return
+        end
+
         @is_direct_caches[ ip ] = is_direct
       end
 
@@ -425,7 +432,7 @@ module Girl
       src_info = @src_infos[ src ]
       domain = src_info[ :destination_domain ]
       port = src_info[ :destination_port ]
-      
+
       begin
         destination_addr = Socket.sockaddr_in( port, ip )
         dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
@@ -548,7 +555,7 @@ module Girl
 
     def new_a_rsv( data, addrinfo, domain, type )
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-      
+
       begin
         @nameserver_addrs.each{ | addr | rsv.sendmsg( data, 0, addr ) }
       rescue Exception => e
@@ -676,7 +683,7 @@ module Girl
       add_read( tun, :tun )
       add_write( tun )
       return if tun.closed?
- 
+
       Thread.new do
         sleep PING_TIMEOUT
 
@@ -898,7 +905,7 @@ module Girl
       @mem_infos[ mem ] = {
         wbuff: ''
       }
-      
+
       add_read( mem, :mem )
     end
 
@@ -1029,7 +1036,7 @@ module Girl
 
       if @remotes.any?{ | r | domain.include?( r ) } then
         near_id = rand( ( 2 ** 64 ) - 2 ) + 1
-        
+
         @near_infos[ near_id ] = {
           addrinfo: addrinfo,
           id: id,
@@ -1043,18 +1050,18 @@ module Girl
 
         Thread.new do
           sleep EXPIRE_NEW
-  
+
           msg = {
             message_type: 'expire-near',
             near_id: near_id
           }
-  
+
           send_data( @info, JSON.generate( msg ), @infod_addr )
         end
 
         return
       end
-      
+
       new_a_rsv( data, addrinfo, domain, type )
     end
 
@@ -1172,7 +1179,7 @@ module Girl
         if cmd == 1 then
           if atyp == 1 then
             destination_host, destination_port = data[ 4, 6 ].unpack( 'Nn' )
-            
+
             begin
               destination_addr = Socket.sockaddr_in( destination_port, destination_host )
               destination_addrinfo = Addrinfo.new( destination_addr )
@@ -1228,7 +1235,7 @@ module Girl
         end
       end
     end
-    
+
     def read_tcp( tcp )
       begin
         data = tcp.read_nonblock( READ_SIZE )
@@ -1238,7 +1245,7 @@ module Girl
         close_tcp( tcp )
         return
       end
-      
+
       tcp_info = @tcp_infos[ tcp ]
       tcp_info[ :last_recv_at ] = Time.new
       data = "#{ tcp_info[ :part ] }#{ data }"
@@ -1270,7 +1277,7 @@ module Girl
       dest_addrinfo = Addrinfo.new( dest_addr )
       dest_ip = dest_addrinfo.ip_address
       src_id = rand( ( 2 ** 64 ) - 2 ) + 1
-      
+
       @src_infos[ src ] = {
         src_id: src_id,
         addrinfo: addrinfo,
@@ -1352,7 +1359,7 @@ module Girl
         data, part = decode( data )
         tun_info[ :part ] = part
       end
-      
+
       add_src_wbuff( src, data )
     end
 
@@ -1369,7 +1376,7 @@ module Girl
       if domain == 'localhost' then
         domain = "127.0.0.1"
       end
-      
+
       if domain =~ /^\d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}$/ then
         # ipv4
         make_tunnel( domain, src )
@@ -1427,7 +1434,7 @@ module Girl
 
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :checking
-    
+
       Thread.new do
         sleep EXPIRE_NEW
 
