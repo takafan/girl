@@ -312,10 +312,11 @@ module Girl
       if dst then
         set_dst_closing( dst )
       elsif !@proxy.closed? then
-        proxy_info = @proxy_infos[ proxy ]
+        proxy_info = @proxy_infos[ @proxy ]
         src_id = src_info[ :src_id ]
 
         if proxy_info[ :srcs ].delete( src_id ) then
+          puts "add h_src_close #{ src_id }" if @is_debug
           msg = "#{ @h_src_close }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( pack_a_chunk( msg ) )
         end
@@ -333,20 +334,20 @@ module Girl
       when @h_traffic then
         return if data.bytesize < 3
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        puts "got traffic #{ src_id } #{ data[ 9..-1 ].bytesize }" if @is_debug
+        puts "got h_traffic #{ src_id } #{ data[ 9..-1 ].bytesize }" if @is_debug
         src = proxy_info[ :srcs ][ src_id ]
         add_src_wbuff( src, data[ 9..-1 ] )
       when @h_dst_close then
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        puts "got dst close #{ src_id }" if @is_debug
-        src = proxy_info[ :srcs ][ src_id ]
+        puts "got h_dst_close #{ src_id }" if @is_debug
+        src = proxy_info[ :srcs ].delete( src_id )
         set_src_closing( src )
       when @h_response then
         return if data.bytesize < 3
         near_id = data[ 1, 8 ].unpack( 'Q>' ).first
         data = data[ 9..-1 ]
-        puts "got response #{ near_id } #{ data.bytesize }" if @is_debug
+        puts "got h_response #{ near_id } #{ data.bytesize }" if @is_debug
         near_info = @near_infos.delete( near_id )
 
         if near_info then
@@ -493,11 +494,15 @@ module Girl
 
       if src_info[ :proxy_proto ] == :http then
         if src_info[ :is_connect ] then
+          puts "add HTTP_OK to src #{ domain }" if @is_debug
           add_src_wbuff( src, HTTP_OK )
         elsif src_info[ :rbuffs ].any? then
-          dst_info[ :wbuff ] << src_info[ :rbuffs ].join
+          data = src_info[ :rbuffs ].join
+          puts "add rbuffs to dst #{ domain } #{ data.bytesize }" if @is_debug
+          dst_info[ :wbuff ] << data
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
+        puts "add add_socks5_conn_reply to src #{ domain }" if @is_debug
         add_socks5_conn_reply( src )
       end
 
@@ -617,7 +622,7 @@ module Girl
     end
 
     def pack_a_chunk( msg )
-      "#{ [ data.bytesize ].pack( 'n' ) }#{ msg }"
+      "#{ [ msg.bytesize ].pack( 'n' ) }#{ msg }"
     end
 
     def pack_traffic( src_id, data )
@@ -625,6 +630,7 @@ module Girl
 
       loop do
         part = data[ 0, 65526 ]
+        puts "add h_traffic #{ src_id } #{ part.bytesize }" if @is_debug
         msg = "#{ @h_traffic }#{ [ src_id ].pack( 'Q>' ) }#{ part }"
         chunks << pack_a_chunk( msg )
         data = data[ part.bytesize..-1 ]
@@ -914,6 +920,7 @@ module Girl
         }
 
         @near_infos[ near_id ] = near_info
+        puts "add h_query #{ near_id } #{ type } #{ domain }" if @is_debug
         msg = "#{ @h_query }#{ [ near_id, type ].pack( 'Q>C' ) }#{ domain }"
         add_proxy_wbuff( pack_a_chunk( msg ) )
         return
@@ -1070,6 +1077,7 @@ module Girl
         end
       when :remote then
         src_id = src_info[ :src_id ]
+        puts "add traffic #{ src_id } #{ data.bytesize }" if @is_debug
         add_proxy_wbuff( pack_traffic( src_id, data ) )
         proxy_info = @proxy_infos[ @proxy ]
 
@@ -1237,8 +1245,17 @@ module Girl
       src_id = src_info[ :src_id ]
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
-      msg = "#{ @h_a_new_source }#{ [ src_id ].pack( 'Q>' ) }#{ [ destination_domain, destination_port ].join( ':' ) }"
+      domain_port = [ destination_domain, destination_port ].join( ':' )
+      puts "add h_a_new_source #{ src_id } #{ domain_port }" if @is_debug
+      msg = "#{ @h_a_new_source }#{ [ src_id ].pack( 'Q>' ) }#{ domain_port }"
       add_proxy_wbuff( pack_a_chunk( msg ) )
+
+      if src_info[ :rbuffs ].any? then
+        data = src_info[ :rbuffs ].join
+        puts "add rbuffs to proxy #{ src_id } #{ destination_domain } #{ data.bytesize }" if @is_debug
+        add_proxy_wbuff( pack_traffic( src_id, data ) )
+      end
+
       proxy_info = @proxy_infos[ @proxy ]
       proxy_info[ :srcs ][ src_id ] = src
     end

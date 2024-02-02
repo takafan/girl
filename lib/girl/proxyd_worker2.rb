@@ -191,6 +191,7 @@ module Girl
         src_id = dst_info[ :src_id ]
 
         if proxy_info[ :dsts ].delete( src_id ) then
+          puts "add h_dst_close #{ src_id }" if @is_debug
           msg = "#{ @h_dst_close }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
         end
@@ -240,7 +241,7 @@ module Girl
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         domain_port = data[ 9..-1 ]
-        puts "got a new source #{ src_id } #{ domain_port.inspect }" if @is_debug
+        puts "got h_a_new_source #{ src_id } #{ domain_port.inspect }" if @is_debug
         resolve_domain_port( domain_port, src_id, proxy, proxy_info[ :im ] )
       when @h_query then
         return if data.bytesize < 10
@@ -248,20 +249,20 @@ module Girl
         return unless [ 1, 28 ].include?( type )
         domain = data[ 10..-1 ]
         return if domain.nil? || domain.empty?
-        puts "got query #{ near_id } #{ type } #{ domain.inspect }" if @is_debug
+        puts "got h_query #{ near_id } #{ type } #{ domain.inspect }" if @is_debug
         new_a_rsv( domain, near_id, type, proxy, proxy_info[ :im ] )
       when @h_traffic then
         return if data.bytesize < 3
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         data = data[ 9..-1 ]
-        puts "got traffic #{ src_id } #{ data.bytesize }" if @is_debug
+        puts "got h_traffic #{ src_id } #{ data.bytesize }" if @is_debug
         dst = proxy_info[ :dsts ][ src_id ]
         add_dst_wbuff( dst, data )
       when @h_src_close then
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        puts "got src close #{ src_id }" if @is_debug
-        dst = proxy_info[ :dsts ][ src_id ]
+        puts "got h_src_close #{ src_id }" if @is_debug
+        dst = proxy_info[ :dsts ].delete( src_id )
         set_dst_closing( dst )
       end
     end
@@ -431,7 +432,7 @@ module Girl
     end
 
     def pack_a_chunk( msg )
-      "#{ [ data.bytesize ].pack( 'n' ) }#{ msg }"
+      "#{ [ msg.bytesize ].pack( 'n' ) }#{ msg }"
     end
 
     def pack_traffic( src_id, data )
@@ -439,6 +440,7 @@ module Girl
 
       loop do
         part = data[ 0, 65526 ]
+        puts "add h_traffic #{ src_id } #{ part.bytesize }" if @is_debug
         msg = "#{ @h_traffic }#{ [ src_id ].pack( 'Q>' ) }#{ part }"
         chunks << pack_a_chunk( msg )
         data = data[ part.bytesize..-1 ]
@@ -507,6 +509,7 @@ module Girl
       proxy_info = @proxy_infos[ proxy ]
       proxy_info[ :in ] += data.bytesize
       src_id = dst_info[ :src_id ]
+      puts "add pack_traffic #{ src_id } #{ data.bytesize }" if @is_debug
       add_proxy_wbuff( proxy, pack_traffic( src_id, data ) )
 
       if proxy_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
@@ -623,7 +626,7 @@ module Girl
         rsv_info = @rsv_infos[ rsv ]
         proxy = rsv_info[ :proxy ]
         near_id = rsv_info[ :near_id ]
-        puts "got response #{ near_id } #{ rsv_info[ :domain ] } #{ data.bytesize }" if @is_debug
+        puts "add h_response #{ near_id } #{ rsv_info[ :domain ] } #{ data.bytesize }" if @is_debug
         msg = "#{ @h_response }#{ [ near_id ].pack( 'Q>' ) }#{ data }"
         add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
       else
