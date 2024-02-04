@@ -14,7 +14,7 @@
 2. tcp流量无法到达特定ip。
 3. 出国udp，流量稍微多一点，来源ip被封，ping不通vps，3分钟后恢复。
 4. 出国tcp，若为代理协议，且含有特定域名，会吃到一个reset。例如：`CONNECT google.com HTTP/1.1\r\n\r\n`
-5. 限流，触发后，来源ip每和vps建立tcp连接，不论端口，来回两次流量即被封来源端口，后续流量无法到达，但ping的通，udp可达，企业宽带极易触发。
+5. 出国tcp，连接稍微多一点，触发限流，之后来源ip每和vps建立tcp连接，不论端口，来回两次流量即被封来源端口，后续流量无法到达，但ping的通，udp可达，企业宽带极易触发。
 6. 封ip，用shadowsocks稍微频繁一点，国内任何来源的tcp及icmp均无法到达vps，但udp可达，持续几天至几个月不等。
 
 应对1和2，靠中转：
@@ -29,30 +29,16 @@
 
 应对4：自定义协议。
 
-应对5：三种方案：
-
-```txt
-流量 ------> vps（非知名供应商ip段） -> 目的地
-```
-
-```txt
-流量 ------> 海外cdn中转 ------> vps -> 目的地
-```
-
-```txt
-流量 ------> 国内专线/vps ------> 海外vps -> 目的地
-```
-
-妹子支持第三种。
+应对5：尽量少的tcp连接，或者阿里云中转，阿里云不会触发限流，但阿里云的代理商会（新ip段不在白名单里）。
 
 完整的路线图：
 
 ```txt
-流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit --> 中继 --> 远端 -> 解析域名 -> 目的地
-                                  \
-                                    `- no -> 解析域名 -> ip命中directs.txt？-- hit --> 目的地
-                                                              \
-                                                               `- no -> 中继 -> 远端 -> 目的地
+流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit --> 远端 -> 解析域名 -> 目的地
+                            \
+                             `- no -> 解析域名 -> ip命中directs.txt？-- hit --> 目的地
+                                                            \
+                                                             `- no -> 远端 -> 目的地
 ```
 
 ## 使用
@@ -84,8 +70,7 @@ ruby proxyd.run.rb
 
 ```javascript
 {
-    "proxyd_port": 6060, // 远端端口
-    "girl_port": 8080    // 妹子端口，防重放
+    "proxyd_port": 6060 // 远端端口
 }
 ```
 
@@ -133,7 +118,6 @@ ruby proxy.run.rb
     "tspd_port": 7777,                            // 透明转发端口
     "proxyd_host": "1.2.3.4",                     // 远端服务器
     "proxyd_port": 6060,                          // 远端端口
-    "girl_port": 8080,                            // 妹子端口，防重放
     "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
     "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
     "nameserver": "192.168.1.1  114.114.114.114", // dns服务器，多个用空格分隔
@@ -186,34 +170,6 @@ curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vult
 
 妹子同时支持http, http tunnel, socks5, 以及透明转发。
 
-## 中继，通常是国内专线/vps：
-
-1. 创建 relay.run.rb：
-
-```ruby
-require 'girl/relay'
-
-Girl::Relay.new '/etc/relay.conf.json'
-```
-
-2. 启动中继：
-
-```bash
-ruby relay.run.rb
-```
-
-3. relay.conf.json 样例：
-
-```javascript
-{
-    "relay_proxyd_port": 5060, // 中继远端端口
-    "relay_girl_port": 5080,   // 中继妹子端口
-    "proxyd_host": "1.2.3.4",  // 远端服务器
-    "proxyd_port": 6060,       // 远端端口
-    "girl_port": 8080          // 妹子端口
-}
-```
-
 ## 设备端
 
 不用装任何东西，直接填代理，系统自带的代理。
@@ -259,13 +215,13 @@ switch:
 ```txt
 dns查询 -> 近端dnsmasq -> 命中缓存？- hit -> 返回ip
                               \
-                               `- no -> 妹子透明转发端口 -> 域名命中remotes.txt？- hit -> 中继 -> 远端解析域名 -> 返回ip
-                                                                               \
-                                                                                `- no -> 就近解析域名 -> 返回ip
+                               `- no -> 妹子透明转发端口 -> 域名命中remotes.txt？- hit -> 远端解析域名 -> 返回ip
+                                                                             \
+                                                                              `- no -> 就近解析域名 -> 返回ip
 
 流量 -> 近端prerouting -> ip命中directs.txt？-- hit -----> 目的地 
                                 \
-                                 `- no -> 妹子透明转发端口 -> 中继 -> 远端 -> 目的地
+                                 `- no -> 妹子透明转发端口 -> 远端 -> 目的地
 ```
 
 近端用nft把tcp流量指向妹子的透明转发端口，配置dnsmasq把dns查询转给妹子，设备端把网关和dns设成近端ip即可，设备端可以是提供wifi的路由器，所有连该wifi的设备即可直接上外网。
@@ -319,7 +275,3 @@ server=127.0.0.1#7777
 ```
 
 设备端dns只设妹子一个，避免解析到假ip。
-
-## 去除特征
-
-协议本身即是特征。但人人发明自己的协议，也就没有了特征。覆盖Girl::Custom，更换协议带头字符，更换加解密方法，创造一个自己的协议。

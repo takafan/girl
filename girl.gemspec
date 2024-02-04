@@ -17,23 +17,18 @@ Gem::Specification.new do |spec|
   spec.files         = %w[
 girl.gemspec
 lib/girl.rb
-lib/girl/custom.rb
 lib/girl/dns.rb
 lib/girl/head.rb
 lib/girl/mirrord_worker.rb
 lib/girl/mirrord.rb
 lib/girl/p1_worker.rb
 lib/girl/p1.rb
-lib/girl/proxy_worker.rb
 lib/girl/proxy_worker2.rb
 lib/girl/proxy.rb
 lib/girl/proxy2.rb
-lib/girl/proxyd_worker.rb
 lib/girl/proxyd_worker2.rb
 lib/girl/proxyd.rb
 lib/girl/proxyd2.rb
-lib/girl/relay_worker.rb
-lib/girl/relay.rb
 lib/girl/version.rb
   ]
 

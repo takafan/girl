@@ -179,7 +179,7 @@ module Girl
       return nil if dns.nil? || dns.closed?
       close_sock( dns )
       dns_info = @dns_infos.delete( dns )
-      puts "close dns #{ dns_info[ :domain ] }" if @is_debug
+      puts "close dns #{ dns_info[ :im ] } #{ dns_info[ :domain ] }" if @is_debug
       dns_info
     end
 
@@ -187,7 +187,7 @@ module Girl
       return nil if dst.nil? || dst.closed?
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
-      puts "close dst #{ dst_info[ :domain ] } #{ dst_info[ :port ] }" if @is_debug
+      puts "close dst #{ dst_info[ :im ] } #{ dst_info[ :domain ] } #{ dst_info[ :port ] }" if @is_debug
       proxy = dst_info[ :proxy ]
 
       unless proxy.closed? then
@@ -195,7 +195,7 @@ module Girl
         src_id = dst_info[ :src_id ]
 
         if proxy_info[ :src_infos ].delete( src_id ) then
-          puts "add h_dst_close #{ src_id }" if @is_debug
+          puts "add h_dst_close #{ dst_info[ :im ] } #{ src_id }" if @is_debug
           msg = "#{ @h_dst_close }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
         end
@@ -223,7 +223,7 @@ module Girl
       return nil if rsv.nil? || rsv.closed?
       close_sock( rsv )
       rsv_info = @rsv_infos.delete( rsv )
-      puts "close rsv #{ rsv_info[ :domain ] }" if @is_debug
+      puts "close rsv #{ rsv_info[ :im ] } #{ rsv_info[ :domain ] }" if @is_debug
       rsv_info
     end
 
@@ -239,7 +239,8 @@ module Girl
     def deal_msg( data, proxy )
       return if data.nil? || data.empty? || proxy.nil? || proxy.closed?
       proxy_info = @proxy_infos[ proxy ]
-      return unless proxy_info[ :im ]
+      im = proxy_info[ :im ]
+      return unless im
       h = data[ 0 ]
 
       case h
@@ -247,14 +248,14 @@ module Girl
         return if data.bytesize < 9
         now = Time.new
 
-        proxy_info[ :src_infos ].select{ | _, info | info[ :dst ].nil? && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }.each do | src_id, info |
-          puts "expire src info #{ src_id }" if @is_debug
+        proxy_info[ :src_infos ].select{ | _, info | info[ :dst ].nil? && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }.each do | src_id, _ |
+          puts "expire src info #{ im } #{ src_id }" if @is_debug
           proxy_info[ :src_infos ].delete( src_id )
         end
 
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         domain_port = data[ 9..-1 ]
-        puts "got h_a_new_source #{ src_id } #{ domain_port.inspect }" if @is_debug
+        puts "got h_a_new_source #{ im } #{ src_id } #{ domain_port.inspect }" if @is_debug
 
         src_info = {
           created_at: now,
@@ -263,20 +264,20 @@ module Girl
         }
 
         proxy_info[ :src_infos ][ src_id ] = src_info
-        resolve_domain_port( domain_port, src_id, proxy, proxy_info[ :im ] )
+        resolve_domain_port( domain_port, src_id, proxy, im )
       when @h_query then
         return if data.bytesize < 10
         near_id, type = data[ 1, 9 ].unpack( 'Q>C' )
         return unless [ 1, 28 ].include?( type )
         domain = data[ 10..-1 ]
         return if domain.nil? || domain.empty?
-        puts "got h_query #{ near_id } #{ type } #{ domain.inspect }" if @is_debug
-        new_a_rsv( domain, near_id, type, proxy, proxy_info[ :im ] )
+        puts "got h_query #{ im } #{ near_id } #{ type } #{ domain.inspect }" if @is_debug
+        new_a_rsv( domain, near_id, type, proxy, im )
       when @h_traffic then
         return if data.bytesize < 3
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         data = data[ 9..-1 ]
-        # puts "got h_traffic #{ src_id } #{ data.bytesize }" if @is_debug
+        # puts "got h_traffic #{ im } #{ src_id } #{ data.bytesize }" if @is_debug
         src_info = proxy_info[ :src_infos ][ src_id ]
 
         if src_info then
@@ -285,7 +286,7 @@ module Girl
           if dst then
             add_dst_wbuff( dst, data )
           else
-            puts "add src info rbuff #{ data.bytesize }" if @is_debug
+            puts "add src info rbuff #{ im } #{ data.bytesize }" if @is_debug
             src_info[ :rbuff ] << data
 
             if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
@@ -297,7 +298,7 @@ module Girl
       when @h_src_close then
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        puts "got h_src_close #{ src_id }" if @is_debug
+        puts "got h_src_close #{ im } #{ src_id }" if @is_debug
         src_info = proxy_info[ :src_infos ].delete( src_id )
         set_dst_closing( src_info[ :dst ] ) if src_info
       end
@@ -340,7 +341,7 @@ module Girl
             sleep CHECK_TRAFF_INTERVAL
             now = Time.new
 
-            if now.day == @reset_traff_day && now.hour == 0 then
+            if ( now.day == @reset_traff_day ) && ( now.hour == 0 ) then
               msg = { message_type: 'reset-traffic' }
               send_data( @info, JSON.generate( msg ), @infod_addr )
             end
@@ -358,7 +359,7 @@ module Girl
       now = Time.new
 
       @dst_infos.select{ | dst, info | info[ :connected ] ? ( now.to_i - @updates[ dst ].to_i >= @expire_long_after ) : ( now.to_i - @updates[ dst ].to_i >= @expire_connecting ) }.each do | dst, info |
-        puts "expire dst #{ info[ :domain ] }" if @is_debug
+        puts "expire dst #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
         close_dst( dst )
       end
 
@@ -391,7 +392,7 @@ module Girl
         proxy: proxy,
         rbuffs: [],
         src_id: src_id,
-        wbuff: src_info[ :rbuff ]
+        wbuff: src_info[ :rbuff ].dup
       }
 
       @dst_infos[ dst ] = dst_info
@@ -430,7 +431,7 @@ module Girl
       now = Time.new
 
       @rsv_infos.select{ | rsv, _ | now.to_i - @updates[ rsv ].to_i >= @expire_short_after }.each do | rsv, info |
-        puts "expire rsv #{ info[ :domain ] }" if @is_debug
+        puts "expire rsv #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
         close_rsv( rsv )
       end
 
@@ -556,7 +557,7 @@ module Girl
       proxy_info = @proxy_infos[ proxy ]
 
       if proxy_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "pause dst #{ dst_info[ :im ] } #{ dst_info[ :domain ] }"
+        puts "pause dst #{ im } #{ dst_info[ :domain ] }"
         @reads.delete( dst )
         proxy_info[ :pause_domains ][ dst ] = dst_info[ :domain ]
       end
@@ -667,11 +668,11 @@ module Girl
 
       return if data.empty?
 
-      if data.bytesize <= 65532 then
+      if data.bytesize <= 65526 then
         rsv_info = @rsv_infos[ rsv ]
         proxy = rsv_info[ :proxy ]
         near_id = rsv_info[ :near_id ]
-        puts "add h_response #{ near_id } #{ rsv_info[ :domain ] } #{ data.bytesize }" if @is_debug
+        puts "add h_response #{ rsv_info[ :im ] } #{ near_id } #{ rsv_info[ :domain ] } #{ data.bytesize }" if @is_debug
         msg = "#{ @h_response }#{ [ near_id ].pack( 'Q>' ) }#{ data }"
         add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
       else
@@ -716,7 +717,7 @@ module Girl
 
         im = data[ @head_len + 1, len ]
 
-        unless @ims.include?( im ) then
+        if @ims.any? && !@ims.include?( im ) then
           puts "unknown im #{ im.inspect }"
           return
         end
@@ -821,7 +822,7 @@ module Girl
       now = Time.new
 
       @dns_infos.select{ | dns, _ | now.to_i - @updates[ dns ].to_i >= @expire_short_after }.each do | dns, info |
-        puts "expire dns #{ info[ :domain ] }" if @is_debug
+        puts "expire dns #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
         close_dns( dns )
       end
 
@@ -943,7 +944,7 @@ module Girl
         proxy_info[ :overflow_domains ].delete( dst )
 
         if proxy_info[ :overflow_domains ].empty? then
-          puts "resume proxy #{ proxy_info[ :im ] }"
+          puts "resume proxy #{ im }"
           add_read( proxy )
         end
       end
@@ -1009,7 +1010,7 @@ module Girl
 
       if proxy_info[ :pause_domains ].any? && ( proxy_info[ :wbuff ].bytesize < RESUME_BELOW ) then
         proxy_info[ :pause_domains ].each do | dst, domain |
-          puts "resume dst #{ proxy_info[ :im ] } #{ domain }"
+          puts "resume dst #{ im } #{ domain }"
           add_read( dst )
         end
 

@@ -512,7 +512,7 @@ module Girl
 
       add_read( dst, :dst )
       add_write( dst )
-      data = src_info[ :rbuff ]
+      data = src_info[ :rbuff ].dup
 
       unless data.empty? then
         puts "move src rbuff to dst #{ domain } #{ port } #{ data.bytesize }" if @is_debug
@@ -1285,7 +1285,7 @@ module Girl
       add_proxy_wbuff( pack_a_chunk( msg ) )
       proxy_info = @proxy_infos[ @proxy ]
       proxy_info[ :srcs ][ src_id ] = src
-      data = src_info[ :rbuff ]
+      data = src_info[ :rbuff ].dup
 
       unless data.empty? then
         puts "move src rbuff to proxy #{ destination_domain } #{ destination_port } #{ data.bytesize }" if @is_debug
