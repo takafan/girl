@@ -30,25 +30,25 @@ module Girl
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @im = im
-      @directs = directs
-      @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
       @update_roles = [ :dns, :dst, :mem, :src, :rsv ] # 参与淘汰的角色
       @updates_limit = 1010  # 淘汰池上限，1015(mac) - [ memd, proxy, redir, rsvd, tspd ]
+      @eliminate_count = 0   # 淘汰次数
+      @directs = directs
+      @remotes = remotes
       @reads = []            # 读池
       @writes = []           # 写池
-      @updates = {}          # sock => updated_at
-      @eliminate_count = 0   # 淘汰次数
       @roles = {}            # sock =>  :dns / :dst / :mem / :memd / :proxy / :redir / :rsv / :rsvd / :src / :tspd
-      @resolv_caches = {}    # domain => [ ip, created_at ]
-      @is_direct_caches = {} # ip => true / false
+      @updates = {}          # sock => updated_at
+      @proxy_infos = {}      # proxy => { :im :in :is_syn :out :overflow_domains :pause_domains :rbuff :srcs :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
-      @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :paused :proxy_proto :proxy_type :rbuffs :src_id :wbuff }
-      @dst_infos = {}        # dst => { :closing :connected :domain :ip :paused :src :wbuff }
+      @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :paused :proxy_proto :proxy_type :rbuff :src_id :wbuff }
+      @dst_infos = {}        # dst => { :closing :connected :domain :ip :paused :port :src :wbuff }
       @dns_infos = {}        # dns => { :domain :src }
       @rsv_infos = {}        # rsv => { :addrinfo :domain :type }
       @near_infos = {}       # near_id => { :addrinfo :created_at :domain :id :type }
-      @proxy_infos = {}      # proxy => { :im :in :is_syn :out :overflow_domains :pause_domains :rbuff :srcs :wbuff }
+      @resolv_caches = {}    # domain => [ ip, created_at ]
+      @is_direct_caches = {} # ip => true / false
       @response_caches = {}  # domain => [ response, created_at, ip, is_remote ]
       @response6_caches = {} # domain => [ response, created_at, ip, is_remote ]
       @head_len = head_len
@@ -189,9 +189,10 @@ module Girl
     def add_src_rbuff( src, data )
       return if src.nil? || src.closed? || data.empty?
       src_info = @src_infos[ src ]
-      src_info[ :rbuffs ] << data
+      puts "add src rbuff #{ data.bytesize }" if @is_debug
+      src_info[ :rbuff ] << data
 
-      if src_info[ :rbuffs ].join.bytesize >= WBUFF_LIMIT then
+      if src_info[ :rbuff ].bytesize >= WBUFF_LIMIT then
         puts "src rbuff full"
         close_src( src )
       end
@@ -214,7 +215,7 @@ module Girl
             @reads.delete( dst )
             dst_info[ :paused ] = true
           end
-        else
+        elsif @proxy then
           if @proxy.closed? then
             close_src( src )
             return
@@ -233,7 +234,7 @@ module Girl
 
       if @proxy.nil? || @proxy.closed? then
         proxy_info = new_a_proxy
-        puts @im
+        puts "im #{ @im }"
         head = ''
         chars = []
         @head_len.times{ chars << rand( 256 ) }
@@ -262,6 +263,7 @@ module Girl
       return nil if dns.nil? || dns.closed?
       close_sock( dns )
       dns_info = @dns_infos.delete( dns )
+      puts "close dns #{ dns_info[ :domain ] }" if @is_debug
       dns_info
     end
 
@@ -269,6 +271,7 @@ module Girl
       return nil if dst.nil? || dst.closed?
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
+      puts "close dst #{ dst_info[ :domain ] } #{ dst_info[ :port ] }" if @is_debug
       set_src_closing( dst_info[ :src ] ) if dst_info
       dst_info
     end
@@ -283,6 +286,7 @@ module Girl
       return if proxy.nil? || proxy.closed?
       close_sock( proxy )
       proxy_info = @proxy_infos.delete( proxy )
+      puts "close proxy" if @is_debug
       proxy_info[ :srcs ].values.each{ | src | set_src_closing( src ) }
       proxy_info
     end
@@ -291,6 +295,7 @@ module Girl
       return nil if rsv.nil? || rsv.closed?
       close_sock( rsv )
       rsv_info = @rsv_infos.delete( rsv )
+      puts "close rsv #{ rsv_info[ :domain ] }" if @is_debug
       rsv_info
     end
 
@@ -307,11 +312,12 @@ module Girl
       return nil if src.nil? || src.closed?
       close_sock( src )
       src_info = @src_infos.delete( src )
+      puts "close src #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }" if @is_debug
       dst = src_info[ :dst ]
 
       if dst then
         set_dst_closing( dst )
-      elsif !@proxy.closed? then
+      elsif @proxy && !@proxy.closed? then
         proxy_info = @proxy_infos[ @proxy ]
         src_id = src_info[ :src_id ]
 
@@ -334,9 +340,10 @@ module Girl
       when @h_traffic then
         return if data.bytesize < 3
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        puts "got h_traffic #{ src_id } #{ data[ 9..-1 ].bytesize }" if @is_debug
+        data = data[ 9..-1 ]
+        # puts "got h_traffic #{ src_id } #{ data.bytesize }" if @is_debug
         src = proxy_info[ :srcs ][ src_id ]
-        add_src_wbuff( src, data[ 9..-1 ] )
+        add_src_wbuff( src, data )
       when @h_dst_close then
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -484,6 +491,7 @@ module Girl
         domain: domain,
         ip: ip,
         paused: false,
+        port: port,
         src: src,
         wbuff: ''
       }
@@ -494,30 +502,33 @@ module Girl
 
       if src_info[ :proxy_proto ] == :http then
         if src_info[ :is_connect ] then
-          puts "add HTTP_OK to src #{ domain }" if @is_debug
+          puts "add HTTP_OK" if @is_debug
           add_src_wbuff( src, HTTP_OK )
-        elsif src_info[ :rbuffs ].any? then
-          data = src_info[ :rbuffs ].join
-          puts "add rbuffs to dst #{ domain } #{ data.bytesize }" if @is_debug
-          dst_info[ :wbuff ] << data
         end
       elsif src_info[ :proxy_proto ] == :socks5 then
-        puts "add add_socks5_conn_reply to src #{ domain }" if @is_debug
+        puts "add_socks5_conn_reply" if @is_debug
         add_socks5_conn_reply( src )
       end
 
       add_read( dst, :dst )
       add_write( dst )
+      data = src_info[ :rbuff ]
+
+      unless data.empty? then
+        puts "move src rbuff to dst #{ domain } #{ port } #{ data.bytesize }" if @is_debug
+        add_dst_wbuff( dst, data )
+      end
     end
 
     def new_a_memd( memd_port )
+      memd_ip = '127.0.0.1'
       memd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       memd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 ) if @is_server_fastopen
-      memd.bind( Socket.sockaddr_in( memd_port, '127.0.0.1' ) )
+      memd.bind( Socket.sockaddr_in( memd_port, memd_ip ) )
       memd.listen( 5 )
-      puts "memd listen on #{ memd_port }"
+      puts "memd listen on #{ memd_ip } #{ memd_port }"
       add_read( memd, :memd )
     end
 
@@ -557,14 +568,15 @@ module Girl
     end
 
     def new_a_redir( redir_port )
+      redir_ip = '0.0.0.0'
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
-      redir.bind( Socket.sockaddr_in( redir_port, '0.0.0.0' ) )
+      redir.bind( Socket.sockaddr_in( redir_port, redir_ip ) )
       redir.listen( BACKLOG )
-      puts "redir listen on #{ redir_port }"
+      puts "redir listen on #{ redir_ip } #{ redir_port }"
       add_read( redir, :redir )
       @redir_port = redir_port
       @redir_local_address = redir.local_address
@@ -599,24 +611,26 @@ module Girl
     end
 
     def new_a_rsvd( rsvd_port )
-      rsvd_addr = Socket.sockaddr_in( rsvd_port, '0.0.0.0' )
+      rsvd_ip = '0.0.0.0'
+      rsvd_addr = Socket.sockaddr_in( rsvd_port, rsvd_ip )
       rsvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       rsvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       rsvd.bind( rsvd_addr )
-      puts "rsvd bind on #{ rsvd_port }"
+      puts "rsvd bind on #{ rsvd_ip } #{ rsvd_port }"
       add_read( rsvd, :rsvd )
       @rsvd = rsvd
     end
 
     def new_a_tspd( tspd_port )
+      tspd_ip = '0.0.0.0'
       tspd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tspd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       tspd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
-      tspd.bind( Socket.sockaddr_in( tspd_port, '0.0.0.0' ) )
+      tspd.bind( Socket.sockaddr_in( tspd_port, tspd_ip ) )
       tspd.listen( BACKLOG )
-      puts "tspd listen on #{ tspd_port }"
+      puts "tspd listen on #{ tspd_ip } #{ tspd_port }"
       add_read( tspd, :tspd )
       @tspd_port = tspd_port
     end
@@ -630,7 +644,7 @@ module Girl
 
       loop do
         part = data[ 0, 65526 ]
-        puts "add h_traffic #{ src_id } #{ part.bytesize }" if @is_debug
+        # puts "add h_traffic #{ src_id } #{ part.bytesize }" if @is_debug
         msg = "#{ @h_traffic }#{ [ src_id ].pack( 'Q>' ) }#{ part }"
         chunks << pack_a_chunk( msg )
         data = data[ part.bytesize..-1 ]
@@ -665,6 +679,7 @@ module Girl
       if ip then
         src = dns_info[ :src ]
         make_tunnel( ip, src )
+        puts "set resolv cache #{ domain } #{ ip }" if @is_debug
         @resolv_caches[ domain ] = [ ip, Time.new ]
       else
         puts "no ip in answer #{ domain }"
@@ -686,6 +701,7 @@ module Girl
 
       set_update( dst )
       dst_info = @dst_infos[ dst ]
+      puts "read dst #{ dst_info[ :domain ] } #{ data.bytesize }" if @is_debug
       src = dst_info[ :src ]
       add_src_wbuff( src, data )
     end
@@ -720,6 +736,7 @@ module Girl
           remotes: @remotes.size,
           reads: @reads.size,
           writes: @writes.size,
+          roles: @roles.size,
           updates: @updates.size,
           proxy_infos: @proxy_infos.size,
           mem_infos: @mem_infos.size,
@@ -729,6 +746,7 @@ module Girl
           rsv_infos: @rsv_infos.size,
           near_infos: @near_infos.size,
           resolv_caches: @resolv_caches.size,
+          is_direct_caches: @is_direct_caches.size,
           response_caches: @response_caches.size,
           response6_caches: @response6_caches.size
         },
@@ -810,7 +828,7 @@ module Girl
         paused: false,
         proxy_proto: :uncheck, # :uncheck / :http / :socks5
         proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
-        rbuffs: [],
+        rbuff: '',
         src_id: src_id,
         wbuff: ''
       }
@@ -846,8 +864,10 @@ module Girl
 
       if ip then
         if type == 1 then
+          puts "set response cache #{ domain } #{ ip }" if @is_debug
           @response_caches[ domain ] = [ data, Time.new, ip, false ]
         else
+          puts "set response6 cache #{ domain } #{ ip }" if @is_debug
           @response6_caches[ domain ] = [ data, Time.new, ip, false ]
         end
       end
@@ -975,6 +995,7 @@ module Girl
           # +----+--------+
           # | 1  |   1    |
           # +----+--------+
+          puts "read src version 5 nmethods #{ nmethods } methods #{ methods.inspect }" if @is_debug
           data2 = [ 5, 0 ].pack( 'CC' )
           add_src_wbuff( src, data2 )
           return if src.closed?
@@ -1010,7 +1031,7 @@ module Girl
           end
 
           src_info[ :is_connect ] = false
-          src_info[ :rbuffs ] << data
+          add_src_rbuff( src, data )
         end
 
         colon_idx = domain_port.rindex( ':' )
@@ -1028,10 +1049,9 @@ module Girl
         src_info[ :proxy_proto ] = :http
         src_info[ :destination_domain ] = domain
         src_info[ :destination_port ] = port
-
         resolve_domain( domain, src )
       when :checking then
-        src_info[ :rbuffs ] << data
+        add_src_rbuff( src, data )
       when :negotiation then
         # +----+-----+-------+------+----------+----------+
         # |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -1054,6 +1074,7 @@ module Girl
             end
 
             destination_ip = destination_addrinfo.ip_address
+            puts "read src cmd #{ cmd } atyp #{ atyp } #{ destination_ip } #{ destination_port }" if @is_debug
             src_info[ :destination_domain ] = destination_ip
             src_info[ :destination_port ] = destination_port
             make_tunnel( destination_ip, src )
@@ -1063,6 +1084,7 @@ module Girl
             if ( domain_len + 7 ) == data.bytesize then
               domain = data[ 5, domain_len ]
               port = data[ ( 5 + domain_len ), 2 ].unpack( 'n' ).first
+              puts "read src cmd #{ cmd } atyp #{ atyp } #{ domain } #{ port }" if @is_debug
               src_info[ :destination_domain ] = domain
               src_info[ :destination_port ] = port
               resolve_domain( domain, src )
@@ -1077,7 +1099,6 @@ module Girl
         end
       when :remote then
         src_id = src_info[ :src_id ]
-        puts "add traffic #{ src_id } #{ data.bytesize }" if @is_debug
         add_proxy_wbuff( pack_traffic( src_id, data ) )
         proxy_info = @proxy_infos[ @proxy ]
 
@@ -1098,6 +1119,8 @@ module Girl
     end
 
     def read_tspd( tspd )
+      now = Time.new
+
       @src_infos.select{ | src, _ | now.to_i - @updates[ src ].to_i >= @expire_long_after }.each do | src, info |
         puts "expire src #{ info[ :destination_domain ] }" if @is_debug
         close_src( src )
@@ -1137,7 +1160,7 @@ module Girl
         paused: false,
         proxy_proto: :uncheck, # :uncheck / :http / :socks5
         proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
-        rbuffs: [],
+        rbuff: '',
         src_id: src_id,
         wbuff: ''
       }
@@ -1242,6 +1265,17 @@ module Girl
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :remote
+
+      if src_info[ :proxy_proto ] == :http then
+        if src_info[ :is_connect ] then
+          puts "add HTTP_OK #{ src_info[ :proxy_type ] }" if @is_debug
+          add_src_wbuff( src, HTTP_OK )
+        end
+      elsif src_info[ :proxy_proto ] == :socks5 then
+        puts "add_socks5_conn_reply #{ src_info[ :proxy_type ] }" if @is_debug
+        add_socks5_conn_reply( src )
+      end
+
       src_id = src_info[ :src_id ]
       destination_domain = src_info[ :destination_domain ]
       destination_port = src_info[ :destination_port ]
@@ -1249,15 +1283,14 @@ module Girl
       puts "add h_a_new_source #{ src_id } #{ domain_port }" if @is_debug
       msg = "#{ @h_a_new_source }#{ [ src_id ].pack( 'Q>' ) }#{ domain_port }"
       add_proxy_wbuff( pack_a_chunk( msg ) )
-
-      if src_info[ :rbuffs ].any? then
-        data = src_info[ :rbuffs ].join
-        puts "add rbuffs to proxy #{ src_id } #{ destination_domain } #{ data.bytesize }" if @is_debug
-        add_proxy_wbuff( pack_traffic( src_id, data ) )
-      end
-
       proxy_info = @proxy_infos[ @proxy ]
       proxy_info[ :srcs ][ src_id ] = src
+      data = src_info[ :rbuff ]
+
+      unless data.empty? then
+        puts "move src rbuff to proxy #{ destination_domain } #{ destination_port } #{ data.bytesize }" if @is_debug
+        add_proxy_wbuff( pack_traffic( src_id, data ) )
+      end
     end
 
     def set_src_closing( src )
@@ -1416,7 +1449,7 @@ module Girl
             dst_info[ :paused ] = false unless dst.closed?
           end
         end
-      elsif !@proxy.closed? then
+      elsif @proxy && !@proxy.closed? then
         proxy_info = @proxy_infos[ @proxy ]
         domain = proxy_info[ :overflow_domains ][ src ]
 

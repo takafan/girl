@@ -9,14 +9,14 @@ module Girl
   EXPIRE_APP_AFTER          = 86400            # app多久没有新流量，过期
   EXPIRE_TCP                = 60               # 多久没有收到控制流量，在A_NEW_SOURCE超时时过期tcp
   EXPIRE_AFTER              = 300              # 淘汰池中套接字，多久没有新流量，过期
-  CHECK_TRAFF_INTERVAL      = 86400            # 检查今天是否是流量计数重置日间隔
+  CHECK_TRAFF_INTERVAL      = 3600             # 检查今天是否是流量计数重置日间隔
   CHECK_APP_EXPIRE_INTERVAL = 3600             # 检查app过期间隔
   CHECK_EXPIRE_INTERVAL     = 60               # 检查淘汰池过期间隔
   RESOLV_CACHE_EXPIRE       = 600              # dns查询结果缓存多久过期
   PING_TIMEOUT              = 5                # tun建立连接后多久没有响应，超时
   RENEW_CTL_INTERVAL        = 10               # p1心跳间隔
   ROOM_TITLE_LIMIT          = 16               # 房间名称字数
-  
+
   HTTP_OK = "HTTP/1.1 200 OK\r\n\r\n"
   RESERVED_ROUTE = <<EOF
 0.0.0.0/8

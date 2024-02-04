@@ -24,7 +24,7 @@ module Girl
       @rsv_infos = {}       # rsv => { :rsv_id :im :near_id :domain :tcp  }
       @ips = {}             # im => ip
       @im_infos = {}        # im => { :in, :out }
-      
+
       new_a_tcpd( proxyd_port )
       new_a_infod( proxyd_port )
       new_a_memd( memd_port )
@@ -314,12 +314,10 @@ module Girl
         Thread.new do
           loop do
             sleep CHECK_TRAFF_INTERVAL
+            now = Time.new
 
-            if Time.new.day == @reset_traff_day then
-              msg = {
-                message_type: 'reset-traffic'
-              }
-
+            if now.day == @reset_traff_day && now.hour == 0 then
+              msg = { message_type: 'reset-traffic' }
               send_data( @info, JSON.generate( msg ), @infod_addr )
             end
           end
@@ -340,7 +338,7 @@ module Girl
       end
 
       dst.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
-      
+
       begin
         destination_addr = Socket.sockaddr_in( port, ip )
         dst.connect_nonblock( destination_addr )
@@ -431,7 +429,7 @@ module Girl
         puts "#{ Time.new } rsv pack a query #{ e.class } #{ e.message } #{ domain }"
         return
       end
-      
+
       begin
         @nameserver_addrs.each{ | addr | rsv.sendmsg( data, 0, addr ) }
       rescue Exception => e
@@ -496,7 +494,7 @@ module Girl
       end
 
       return if data.empty?
-      
+
       begin
         ip = seek_ip( data )
       rescue Exception => e
@@ -534,7 +532,8 @@ module Girl
 
       set_update( dst )
       dst_info = @dst_infos[ dst ]
-      @im_infos[ dst_info[ :im ] ][ :in ] += data.bytesize
+      im = dst_info[ :im ]
+      @im_infos[ im ][ :in ] += data.bytesize
       tun = dst_info[ :tun ]
 
       if tun then
@@ -562,7 +561,7 @@ module Girl
 
       im = decode_im( data )
       return if @ims.any? && !@ims.include?( im )
-      
+
       @ips[ im ] = addrinfo.ip_address
     end
 
@@ -665,16 +664,16 @@ module Girl
       end
 
       set_update( mem )
-      arr = []
+      im_arr = []
 
       @im_infos.sort.map do | im, _info |
-        arr << {
+        im_arr << {
           im: im,
           in: _info[ :in ],
           out: _info[ :out ]
         }
       end
-      
+
       msg = {
         resolv_caches: @resolv_caches.sort,
         sizes: {
@@ -693,7 +692,7 @@ module Girl
         },
         updates_limit: @updates_limit,
         eliminate_count: @eliminate_count,
-        im_infos: arr
+        im_arr: im_arr
       }
 
       add_mem_wbuff( mem, JSON.generate( msg ) )
@@ -710,7 +709,7 @@ module Girl
       @mem_infos[ mem ] = {
         wbuff: ''
       }
-      
+
       add_read( mem, :mem )
     end
 
@@ -743,7 +742,7 @@ module Girl
         else
           prefix = Girl::Custom::INCOMPLETE
         end
-        
+
         data2 = [ prefix, near_id, part ].join( Girl::Custom::SEP )
         add_tcp_wbuff( tcp, encode_a_msg( data2 ) )
         break if is_last
@@ -794,7 +793,7 @@ module Girl
         wbuff: '',
         im: nil
       }
-      
+
       add_read( tcp, :tcp )
       return if tcp.closed?
 
@@ -822,6 +821,8 @@ module Girl
 
       set_update( tun )
       tun_info = @tun_infos[ tun ]
+      im = tun_info[ :im ]
+      @im_infos[ im ][ :in ] += data.bytesize if im
       dst = tun_info[ :dst ]
 
       unless dst then
@@ -877,7 +878,7 @@ module Girl
 
       tun_id = rand( ( 2 ** 64 ) - 2 ) + 1
 
-      @tun_infos[ tun ] = {
+      tun_info = {
         tun_id: tun_id,
         im: nil,
         dst: nil,
@@ -888,6 +889,7 @@ module Girl
         paused: false
       }
 
+      @tun_infos[ tun ] = tun_info
       add_read( tun, :tun )
       return if tun.closed?
 
@@ -1083,9 +1085,10 @@ module Girl
       end
 
       set_update( dst )
+      im = dst_info[ :im ]
+      @im_infos[ im ][ :out ] += written
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
-      @im_infos[ dst_info[ :im ] ][ :out ] += written
       tun = dst_info[ :tun ]
 
       if tun && !tun.closed? then
@@ -1154,7 +1157,8 @@ module Girl
       set_update( tcp )
       data = data[ written..-1 ]
       tcp_info[ :wbuff ] = data
-      @im_infos[ tcp_info[ :im ] ][ :out ] += written
+      im = tcp_info[ :im ]
+      @im_infos[ im ][ :out ] += written
     end
 
     def write_tun( tun )
@@ -1186,13 +1190,10 @@ module Girl
       end
 
       set_update( tun )
+      im = tun_info[ :im ]
+      @im_infos[ im ][ :out ] += written if im
       data = data[ written..-1 ]
       tun_info[ :wbuff ] = data
-
-      if tun_info[ :im ] then
-        @im_infos[ tun_info[ :im ] ][ :out ] += written
-      end
-
       dst = tun_info[ :dst ]
 
       if dst && !dst.closed? then
