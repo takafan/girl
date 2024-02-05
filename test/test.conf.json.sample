@@ -5,8 +5,5 @@
     "redir_port": 6666,
     "proxyd_host": "127.0.0.1",
     "proxyd_port": 6060,
-    "girl_port": 8080,
-    "relay_proxyd_host": "127.0.0.1",
-    "relay_girl_port": 8080,
     "im": "whoami"
 }

@@ -199,6 +199,13 @@ module Girl
           msg = "#{ @h_dst_close }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
         end
+
+        domain = proxy_info[ :overflow_domains ].delete( dst )
+
+        if domain && proxy_info[ :overflow_domains ].empty? then
+          puts "resume proxy after close dst #{ im } #{ domain }"
+          add_read( proxy )
+        end
       end
 
       dst_info
@@ -722,7 +729,7 @@ module Girl
           return
         end
 
-        puts "got im #{ im }" if @is_debug
+        puts "got im #{ im }"
         proxy_info[ :im ] = im
         im_info = @im_infos[ im ]
 
@@ -752,7 +759,7 @@ module Girl
       now = Time.new
 
       @proxy_infos.select{ | proxy, _ | now.to_i - @updates[ proxy ].to_i >= @expire_long_after }.each do | proxy, info |
-        puts "expire proxy #{ info[ :im ] }" if @is_debug
+        puts "expire proxy #{ info[ :im ] }"
         close_proxy( proxy )
       end
 

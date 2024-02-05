@@ -286,7 +286,7 @@ module Girl
       return if proxy.nil? || proxy.closed?
       close_sock( proxy )
       proxy_info = @proxy_infos.delete( proxy )
-      puts "close proxy" if @is_debug
+      puts "close proxy"
       proxy_info[ :srcs ].values.each{ | src | set_src_closing( src ) }
       proxy_info
     end
@@ -325,6 +325,13 @@ module Girl
           puts "add h_src_close #{ src_id }" if @is_debug
           msg = "#{ @h_src_close }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( pack_a_chunk( msg ) )
+        end
+
+        domain = proxy_info[ :overflow_domains ].delete( src )
+
+        if domain && proxy_info[ :overflow_domains ].empty? then
+          puts "resume proxy after close src #{ domain }"
+          add_read( @proxy )
         end
       end
 
@@ -701,7 +708,7 @@ module Girl
 
       set_update( dst )
       dst_info = @dst_infos[ dst ]
-      puts "read dst #{ dst_info[ :domain ] } #{ data.bytesize }" if @is_debug
+      # puts "read dst #{ dst_info[ :domain ] } #{ data.bytesize }" if @is_debug
       src = dst_info[ :src ]
       add_src_wbuff( src, data )
     end

@@ -3,7 +3,7 @@ require 'socket'
 
 if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
   Process.setrlimit( :NOFILE, 2048 )
-  puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+  puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }"
 end
 
 config_path = File.expand_path( '../test.conf.json', __FILE__ )
@@ -11,14 +11,11 @@ config = JSON.parse( IO.binread( config_path ), symbolize_names: true )
 puts config.inspect
 
 proxyd_host = config[ :proxyd_host ]
-girl_port = config[ :girl_port ]
-im = config[ :im ] || 'whoami'
-girl_addr = Socket.sockaddr_in( girl_port, proxyd_host )
+proxyd_port = config[ :proxyd_port ]
+proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
 
 reads = []
 ecount = 0
-girlc = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
-girlc.sendmsg( im.reverse, 0, girl_addr )
 
 2000.times do | i |
   print " #{ i }"
@@ -26,7 +23,7 @@ girlc.sendmsg( im.reverse, 0, girl_addr )
   client.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
 
   begin
-    client.connect_nonblock( girl_addr )
+    client.connect_nonblock( proxyd_addr )
   rescue IO::WaitWritable
   end
 
