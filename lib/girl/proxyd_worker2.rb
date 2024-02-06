@@ -388,7 +388,7 @@ module Girl
       p2_info = @p2_infos.delete( p2 )
       im = p2_info[ :im ]
       p2_id = p2_info[ :p2_id ]
-      puts "close p2 #{ im } #{ p2_id }" if @is_debug
+      puts "close p2 #{ im } #{ p2_id }"
       im_info = @im_infos[ im ]
 
       if im_info then
@@ -923,6 +923,7 @@ module Girl
       set_update( p2 )
       p2_info = @p2_infos[ p2 ]
       im = p2_info[ :im ]
+      # puts "read p2 #{ im } #{ data.bytesize }" if @is_debug
       im_info = @im_infos[ im ]
 
       unless im_info then
@@ -975,7 +976,8 @@ module Girl
       return unless im_info
       proxy = im_info[ :proxy ]
       return if proxy.nil? || proxy.closed?
-
+      proxy_info = @proxy_infos[ proxy ]
+      proxy_info[ :p2s ][ p2_id ] = p2
       puts "add h_a_new_p2 #{ im } #{ p2_id }"
       msg = "#{ @h_a_new_p2 }#{ [ p2_id ].pack( 'Q>' ) }"
       add_proxy_wbuff( proxy, pack_a_chunk( msg ) )

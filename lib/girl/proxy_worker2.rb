@@ -435,7 +435,7 @@ module Girl
       close_sock( p1 )
       p1_info = @p1_infos.delete( p1 )
       p2_id = p1_info[ :p2_id ]
-      puts "close p1 #{ p2_id }" if @is_debug
+      puts "close p1 #{ p2_id }"
 
       unless p1_info[ :closing ] then
         puts "add h_p1_close #{ p2_id }"
@@ -1030,6 +1030,7 @@ module Girl
 
       p1_info = @p1_infos[ p1 ]
       p2_id = p1_info[ :p2_id ]
+      # puts "read p1 #{ p2_id } #{ data.bytesize }" if @is_debug
       add_proxy_wbuff( pack_p2_traffic( p2_id, data ) )
       proxy_info = @proxy_infos[ @proxy ]
 
