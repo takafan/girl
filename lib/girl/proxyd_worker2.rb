@@ -30,11 +30,11 @@ module Girl
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @reset_traff_day = reset_traff_day
       @update_roles = [ :dns, :dst, :mem, :p2, :proxy, :rsv ] # 参与淘汰的角色
-      @updates_limit = 1011 - ims.size # 淘汰池上限，1015(mac) - [ info, infod, memd, proxyd ] - ims.size
+      @updates_limit = 1011 - ims.size # 淘汰池上限，1015(mac) - info, infod, memd, proxyd, p2ds(=ims)
       @eliminate_count = 0 # 淘汰次数
       @reads = []          # 读池
       @writes = []         # 写池
-      @roles = {}          # sock => :dns / :dst / :info / :infod / :mem / :memd / :p2 / :p2d / :proxy / :proxyd / :rsv
+      @roles = {}          # sock => :dns / :dst / :infod / :mem / :memd / :p2 / :p2d / :proxy / :proxyd / :rsv
       @updates = {}        # sock => updated_at
       @proxy_infos = {}    # proxy => { :addrinfo :im :overflow_infos :p2s :pause_domains :pause_p2_ids :rbuff :src_infos :wbuff }
       @im_infos = {}       # im => { :addrinfo :in :out :p2d :p2d_host :p2d_port :proxy }
@@ -688,12 +688,9 @@ module Girl
         p2d.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 ) if @is_server_fastopen
         p2d.bind( Socket.sockaddr_in( p2d_port, p2d_host ) )
         p2d.listen( 5 )
-        puts "p2d listen on #{ p2d_host } #{ p2d_port }"
+        puts "p2d listen on #{ p2d_host } #{ p2d_port } #{ im }"
+        @p2d_infos[ p2d ] = { im: im }
         add_read( p2d, :p2d )
-
-        @p2d_infos[ p2d ] = {
-          im: im
-        }
       rescue Exception => e
         puts "new a p2d #{ e.class }"
       end

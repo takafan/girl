@@ -38,13 +38,13 @@ module Girl
       @im = im
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
       @update_roles = [ :dns, :dst, :mem, :p1, :src, :rsv ] # 参与淘汰的角色
-      @updates_limit = 1010  # 淘汰池上限，1015(mac) - [ memd, proxy, redir, rsvd, tspd ]
+      @updates_limit = 1008  # 淘汰池上限，1015(mac) - info, infod, memd, proxy, redir, rsvd, tspd
       @eliminate_count = 0   # 淘汰次数
       @directs = directs
       @remotes = remotes
       @reads = []            # 读池
       @writes = []           # 写池
-      @roles = {}            # sock =>  :dns / :dst / :mem / :memd / :p1 / :proxy / :redir / :rsv / :rsvd / :src / :tspd
+      @roles = {}            # sock =>  :dns / :dst / :infod / :mem / :memd / :p1 / :proxy / :redir / :rsv / :rsvd / :src / :tspd
       @updates = {}          # sock => updated_at
       @proxy_infos = {}      # proxy => { :connected :created_at :is_syn :overflow_infos :pause_domains :pause_p2_ids :rbuff :srcs :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
@@ -79,6 +79,7 @@ module Girl
       @is_server_fastopen = is_server_fastopen
 
       new_a_redir( redir_port )
+      new_a_infod( redir_port )
       new_a_memd( memd_port )
       new_a_rsvd( tspd_port )
       new_a_tspd( tspd_port )
@@ -87,6 +88,7 @@ module Girl
 
     def looping
       puts "looping"
+      loop_check_proxy
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -99,6 +101,8 @@ module Girl
             read_dns( sock )
           when :dst then
             read_dst( sock )
+          when :infod then
+            read_infod( sock )
           when :mem then
             read_mem( sock )
           when :memd then
@@ -205,15 +209,8 @@ module Girl
     end
 
     def add_proxy_wbuff( data )
-      return if data.empty?
-      
-      if @proxy.closed? then
-        proxy_info = new_a_proxy
-      else
-        proxy_info = @proxy_infos[ @proxy ]
-        proxy_info = new_a_proxy if !proxy_info[ :connected ] && ( Time.new - proxy_info[ :created_at ] >= @expire_connecting )
-      end
-
+      return if data.empty? || @proxy.closed?
+      proxy_info = @proxy_infos[ @proxy ]
       proxy_info[ :wbuff ] << data
       add_write( @proxy )
     end
@@ -606,6 +603,16 @@ module Girl
       [ msgs, part ]
     end
 
+    def loop_check_proxy
+      Thread.new do
+        loop do
+          sleep CHECK_PROXY_INTERVAL
+          msg = { message_type: 'check-proxy' }
+          send_data( @info, JSON.generate( msg ), @infod_addr )
+        end
+      end
+    end
+
     def make_tunnel( ip, src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
@@ -709,6 +716,20 @@ module Girl
       end
     end
 
+    def new_a_infod( infod_port )
+      infod_ip = '127.0.0.1'
+      infod_addr = Socket.sockaddr_in( infod_port, infod_ip )
+      infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      infod.bind( infod_addr )
+      puts "infod bind on #{ infod_ip } #{ infod_port }"
+      add_read( infod, :infod )
+      info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
+      @infod_addr = infod_addr
+      @infod = infod
+      @info = info
+    end
+
     def new_a_memd( memd_port )
       memd_ip = '127.0.0.1'
       memd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
@@ -788,9 +809,10 @@ module Girl
         wbuff: head
       }
 
-      add_read( proxy, :proxy )
       @proxy = proxy
       @proxy_infos[ proxy ] = proxy_info
+      add_read( proxy, :proxy )
+      add_write( proxy )
       proxy_info
     end
 
@@ -940,6 +962,36 @@ module Girl
       # puts "read dst #{ dst_info[ :domain ] } #{ data.bytesize }" if @is_debug
       src = dst_info[ :src ]
       add_src_wbuff( src, data )
+    end
+
+    def read_infod( infod )
+      begin
+        data, addrinfo, rflags, *controls = infod.recvmsg
+      rescue Exception => e
+        puts "infod recvmsg #{ e.class }"
+        return
+      end
+
+      return if data.empty?
+
+      begin
+        msg = JSON.parse( data, symbolize_names: true )
+      rescue JSON::ParserError, EncodingError => e
+        puts "read infod #{ e.class }"
+        return
+      end
+
+      message_type = msg[ :message_type ]
+
+      case message_type
+      when 'check-proxy' then
+        if @proxy.closed? then
+          new_a_proxy
+        else
+          proxy_info = @proxy_infos[ @proxy ]
+          new_a_proxy if !proxy_info[ :connected ] && ( Time.new - proxy_info[ :created_at ] >= @expire_connecting )
+        end
+      end
     end
 
     def read_mem( mem )
@@ -1511,6 +1563,12 @@ module Girl
 
     def set_remote( src )
       return if src.nil? || src.closed?
+
+      if @proxy.closed? then
+        close_src( src )
+        return
+      end
+      
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :remote
 

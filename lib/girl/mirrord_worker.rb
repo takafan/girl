@@ -4,7 +4,7 @@ module Girl
     def initialize( mirrord_port, p2d_host, im_infos )
       @p2d_host = p2d_host
       @update_roles = [ :p1, :p2 ]              # 参与淘汰的角色
-      @updates_limit = 1003 - im_infos.size * 2 # 淘汰池上限，1015(mac) - [ info, infod, mirrord * 10 ] - [ p1d * n, p2d * n ]
+      @updates_limit = 1003 - im_infos.size * 2 # 淘汰池上限，1015(mac) - info, infod, mirrords(10), p1ds(=im_infos), p2ds(=im_infos)
       @reads = []                               # 读池
       @writes = []                              # 写池
       @updates = {}                             # sock => updated_at

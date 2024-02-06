@@ -7,7 +7,7 @@ module Girl
       @appd_addr = Socket.sockaddr_in( appd_port, appd_host )
       @im = im
       @update_roles = [ :app, :p1 ] # 参与淘汰的角色
-      @updates_limit = 1011         # 淘汰池上限，1015(mac) - 1 (pair) - [ ctl, info, infod ]
+      @updates_limit = 1011         # 淘汰池上限，1015(mac) - peer, ctl, info, infod
       @reads = []                   # 读池
       @writes = []                  # 写池
       @updates = {}                 # sock => updated_at
