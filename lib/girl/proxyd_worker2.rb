@@ -31,7 +31,7 @@ module Girl
       @writes = []          # 写池
       @roles = {}           # sock => :dns / :dst / :info / :infod / :mem / :memd / :proxy / :proxyd / :rsv
       @updates = {}         # sock => updated_at
-      @proxy_infos = {}     # proxy => { :addrinfo :im :overflow_domains :pause_domains :rbuff :src_infos :wbuff }
+      @proxy_infos = {}     # proxy => { :addrinfo :im :overflow_infos :pause_domains :rbuff :src_infos :wbuff }
       @im_infos = {}        # im => { :addrinfo :in :out }
       @mem_infos = {}       # mem => { :wbuff }
       @dst_infos = {}       # dst => { :closing :connected :domain :im :ip :port :proxy :rbuffs :src_id :wbuff }
@@ -132,7 +132,11 @@ module Girl
         proxy_info = @proxy_infos[ proxy ]
         puts "overflow #{ proxy_info[ :im ] } #{ dst_info[ :domain ] }"
         @reads.delete( proxy )
-        proxy_info[ :overflow_domains ][ dst ] = dst_info[ :domain ]
+
+        proxy_info[ :overflow_infos ][ dst ] = {
+          created_at: Time.new,
+          domain: dst_info[ :domain ]
+        }
       end
     end
 
@@ -175,6 +179,80 @@ module Girl
       end
     end
 
+    def check_expire_dnses
+      now = Time.new
+
+      @dns_infos.select{ | dns, _ | now.to_i - @updates[ dns ].to_i >= @expire_short_after }.each do | dns, info |
+        puts "expire dns #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
+        close_dns( dns )
+      end
+    end
+
+    def check_expire_dsts( proxy )
+      now = Time.new
+
+      @dst_infos.select{ | dst, info | info[ :connected ] ? ( now.to_i - @updates[ dst ].to_i >= @expire_long_after ) : ( now.to_i - @updates[ dst ].to_i >= @expire_connecting ) }.each do | dst, info |
+        puts "expire dst #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
+        close_dst( dst )
+      end
+
+      if proxy && !proxy.closed? then
+        proxy_info = @proxy_infos[ proxy ]
+        overflow_infos = proxy_info[ :overflow_infos ].select{ | _, info | now.to_i - info[ :created_at ].to_i >= @expire_short_after }
+
+        if overflow_infos.any? then
+          overflow_infos.each do | dst, info |
+            puts "expire overflow dst #{ proxy_info[ :im ] } #{ info[ :domain ] }"
+            close_dst( dst )
+            proxy_info[ :overflow_infos ].delete( dst )
+          end
+
+          if proxy_info[ :overflow_infos ].empty? then
+            puts "resume proxy #{ proxy_info[ :im ] }"
+            add_read( proxy )
+          end
+        end
+      end
+    end
+
+    def check_expire_mems
+      now = Time.new
+
+      @mem_infos.select{ | mem, _ | now.to_i - @updates[ mem ].to_i >= @expire_short_after }.each do | mem, _ |
+        puts "expire mem" if @is_debug
+        close_mem( mem )
+      end
+    end
+
+    def check_expire_proxies
+      now = Time.new
+
+      @proxy_infos.select{ | proxy, _ | now.to_i - @updates[ proxy ].to_i >= @expire_long_after }.each do | proxy, info |
+        puts "expire proxy #{ info[ :im ] }"
+        close_proxy( proxy )
+      end
+    end
+
+    def check_expire_rsvs
+      now = Time.new
+
+      @rsv_infos.select{ | rsv, _ | now.to_i - @updates[ rsv ].to_i >= @expire_short_after }.each do | rsv, info |
+        puts "expire rsv #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
+        close_rsv( rsv )
+      end
+    end
+
+    def check_expire_srcs( proxy )
+      return if proxy.nil? || proxy.closed?
+      proxy_info = @proxy_infos[ proxy ]
+      now = Time.new
+
+      proxy_info[ :src_infos ].select{ | _, info | info[ :dst ].nil? && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }.each do | src_id, _ |
+        puts "expire src info #{ proxy_info[ :im ] } #{ src_id }" if @is_debug
+        proxy_info[ :src_infos ].delete( src_id )
+      end
+    end
+
     def close_dns( dns )
       return nil if dns.nil? || dns.closed?
       close_sock( dns )
@@ -200,10 +278,10 @@ module Girl
           add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
         end
 
-        domain = proxy_info[ :overflow_domains ].delete( dst )
+        overflow_info = proxy_info[ :overflow_infos ].delete( dst )
 
-        if domain && proxy_info[ :overflow_domains ].empty? then
-          puts "resume proxy after close dst #{ im } #{ domain }"
+        if overflow_info && proxy_info[ :overflow_infos ].empty? then
+          puts "resume proxy after close dst #{ proxy_info[ :im ] } #{ overflow_info[ :domain ] }"
           add_read( proxy )
         end
       end
@@ -253,19 +331,13 @@ module Girl
       case h
       when @h_a_new_source then
         return if data.bytesize < 9
-        now = Time.new
-
-        proxy_info[ :src_infos ].select{ | _, info | info[ :dst ].nil? && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }.each do | src_id, _ |
-          puts "expire src info #{ im } #{ src_id }" if @is_debug
-          proxy_info[ :src_infos ].delete( src_id )
-        end
-
+        check_expire_srcs( proxy )
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         domain_port = data[ 9..-1 ]
         puts "got h_a_new_source #{ im } #{ src_id } #{ domain_port.inspect }" if @is_debug
 
         src_info = {
-          created_at: now,
+          created_at: Time.new,
           dst: nil,
           rbuff: ''
         }
@@ -363,12 +435,8 @@ module Girl
       im = proxy_info[ :im ]
       src_info = proxy_info[ :src_infos ][ src_id ]
       return unless src_info
-      now = Time.new
 
-      @dst_infos.select{ | dst, info | info[ :connected ] ? ( now.to_i - @updates[ dst ].to_i >= @expire_long_after ) : ( now.to_i - @updates[ dst ].to_i >= @expire_connecting ) }.each do | dst, info |
-        puts "expire dst #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
-        close_dst( dst )
-      end
+      check_expire_dsts( proxy )
 
       begin
         dst = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
@@ -435,13 +503,7 @@ module Girl
     end
 
     def new_a_rsv( domain, near_id, type, proxy, im )
-      now = Time.new
-
-      @rsv_infos.select{ | rsv, _ | now.to_i - @updates[ rsv ].to_i >= @expire_short_after }.each do | rsv, info |
-        puts "expire rsv #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
-        close_rsv( rsv )
-      end
-
+      check_expire_rsvs
       rsv = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       begin
@@ -642,12 +704,7 @@ module Girl
     end
 
     def read_memd( memd )
-      now = Time.new
-
-      @mem_infos.select{ | mem, _ | now.to_i - @updates[ mem ].to_i >= @expire_short_after }.each do | mem, _ |
-        puts "expire mem" if @is_debug
-        close_mem( mem )
-      end
+      check_expire_mems
 
       begin
         mem, addrinfo = memd.accept_nonblock
@@ -756,12 +813,7 @@ module Girl
     end
 
     def read_proxyd( proxyd )
-      now = Time.new
-
-      @proxy_infos.select{ | proxy, _ | now.to_i - @updates[ proxy ].to_i >= @expire_long_after }.each do | proxy, info |
-        puts "expire proxy #{ info[ :im ] }"
-        close_proxy( proxy )
-      end
+      check_expire_proxies
 
       begin
         proxy, addrinfo = proxyd.accept_nonblock
@@ -775,7 +827,7 @@ module Girl
       proxy_info = {
         addrinfo: addrinfo,
         im: nil,
-        overflow_domains: {}, # dst => domain
+        overflow_infos: {}, # dst => { :created_at :domain }
         pause_domains: {}, # dst => domain
         rbuff: '',
         src_infos: {}, # src_id => { :created_at :dst :rbuff }
@@ -826,13 +878,7 @@ module Girl
         return
       end
 
-      now = Time.new
-
-      @dns_infos.select{ | dns, _ | now.to_i - @updates[ dns ].to_i >= @expire_short_after }.each do | dns, info |
-        puts "expire dns #{ info[ :im ] } #{ info[ :domain ] }" if @is_debug
-        close_dns( dns )
-      end
-
+      check_expire_dnses
       dns = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
 
       begin
@@ -944,13 +990,13 @@ module Girl
       end
 
       proxy_info = @proxy_infos[ proxy ]
-      domain = proxy_info[ :overflow_domains ][ dst ]
+      overflow_info = proxy_info[ :overflow_infos ][ dst ]
 
-      if domain && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-        puts "delete overflow #{ domain }"
-        proxy_info[ :overflow_domains ].delete( dst )
+      if overflow_info && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+        puts "delete overflow #{ im } #{ overflow_info[ :domain ] }"
+        proxy_info[ :overflow_infos ].delete( dst )
 
-        if proxy_info[ :overflow_domains ].empty? then
+        if proxy_info[ :overflow_infos ].empty? then
           puts "resume proxy #{ im }"
           add_read( proxy )
         end
