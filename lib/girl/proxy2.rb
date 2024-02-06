@@ -31,9 +31,15 @@ module Girl
       im = conf[ :im ]
       direct_path = conf[ :direct_path ]
       remote_path = conf[ :remote_path ]
+      appd_host = conf[ :appd_host ]
+      appd_port = conf[ :appd_port ]
       head_len = conf[ :head_len ]             # 头长度
       h_a_new_source = conf[ :h_a_new_source ] # A
+      h_a_new_p2 = conf[ :h_a_new_p2 ]         # B
       h_dst_close = conf[ :h_dst_close ]       # D
+      h_p1_close = conf[ :h_p1_close ]         # E
+      h_p2_close = conf[ :h_p2_close ]         # F
+      h_p2_traffic = conf[ :h_p2_traffic ]     # G
       h_query = conf[ :h_query ]               # Q
       h_response = conf[ :h_response ]         # R
       h_src_close = conf[ :h_src_close ]       # S
@@ -65,9 +71,15 @@ module Girl
         remotes = IO.binread( remote_path ).split( "\n" ).map{ | line | line.strip }
       end
 
+      appd_host = appd_host ? appd_host.to_s : '127.0.0.1'
+      appd_port = appd_port ? appd_port.to_i : 22
       head_len = head_len ? head_len.to_i : 59
       h_a_new_source = h_a_new_source ? h_a_new_source.to_s : 'A'
+      h_a_new_p2 = h_a_new_p2 ? h_a_new_p2.to_s : 'B'
       h_dst_close = h_dst_close ? h_dst_close.to_s : 'D'
+      h_p1_close = h_p1_close ? h_p1_close.to_s : 'E'
+      h_p2_close = h_p2_close ? h_p2_close.to_s : 'F'
+      h_p2_traffic = h_p2_traffic ? h_p2_traffic.to_s : 'G'
       h_query = h_query ? h_query.to_s : 'Q'
       h_response = h_response ? h_response.to_s : 'R'
       h_src_close = h_src_close ? h_src_close.to_s : 'S'
@@ -92,8 +104,8 @@ module Girl
         end
       end
 
-      puts "girl proxy #{ Girl::VERSION } #{ im }"
-      puts "redir #{ redir_port } #{ tspd_port } #{ proxyd_host } #{ proxyd_port } #{ nameservers.inspect } #{ is_client_fastopen } #{ is_server_fastopen }"
+      puts "girl proxy2 #{ Girl::VERSION } #{ im }"
+      puts "#{ redir_port } #{ tspd_port } #{ proxyd_host } #{ proxyd_port } #{ appd_host } #{ appd_port } #{ nameservers.inspect } #{ is_client_fastopen } #{ is_server_fastopen }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
@@ -112,9 +124,15 @@ module Girl
         im,
         directs,
         remotes,
+        appd_host,
+        appd_port,
         head_len,
         h_a_new_source,
+        h_a_new_p2,
         h_dst_close,
+        h_p1_close,
+        h_p2_close,
+        h_p2_traffic,
         h_query,
         h_response,
         h_src_close,

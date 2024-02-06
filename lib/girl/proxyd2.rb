@@ -21,9 +21,15 @@ module Girl
         nameserver = conf[ :nameserver ]
         reset_traff_day = conf[ :reset_traff_day ]
         ims = conf[ :ims ]
+        p2d_host = conf[ :p2d_host ]
+        p2d_port = conf[ :p2d_port ]
         head_len = conf[ :head_len ]             # 头长度
         h_a_new_source = conf[ :h_a_new_source ] # A
+        h_a_new_p2 = conf[ :h_a_new_p2 ]         # B
         h_dst_close = conf[ :h_dst_close ]       # D
+        h_p1_close = conf[ :h_p1_close ]         # E
+        h_p2_close = conf[ :h_p2_close ]         # F
+        h_p2_traffic = conf[ :h_p2_traffic ]     # G
         h_query = conf[ :h_query ]               # Q
         h_response = conf[ :h_response ]         # R
         h_src_close = conf[ :h_src_close ]       # S
@@ -60,9 +66,15 @@ module Girl
       nameservers << '8.8.8.8' if nameservers.empty?
       reset_traff_day = reset_traff_day ? reset_traff_day.to_i : 1
       ims = [] unless ims
+      p2d_host = p2d_host ? p2d_host.to_s : '127.0.0.1'
+      p2d_port = p2d_port ? p2d_port.to_i : proxyd_port + 2
       head_len = head_len ? head_len.to_i : 59
       h_a_new_source = h_a_new_source ? h_a_new_source.to_s : 'A'
+      h_a_new_p2 = h_a_new_p2 ? h_a_new_p2.to_s : 'B'
       h_dst_close = h_dst_close ? h_dst_close.to_s : 'D'
+      h_p1_close = h_p1_close ? h_p1_close.to_s : 'E'
+      h_p2_close = h_p2_close ? h_p2_close.to_s : 'F'
+      h_p2_traffic = h_p2_traffic ? h_p2_traffic.to_s : 'G'
       h_query = h_query ? h_query.to_s : 'Q'
       h_response = h_response ? h_response.to_s : 'R'
       h_src_close = h_src_close ? h_src_close.to_s : 'S'
@@ -84,7 +96,7 @@ module Girl
       end
 
       puts "girl proxyd2 #{ Girl::VERSION }"
-      puts "proxyd2 #{ proxyd_port } #{ nameservers.inspect } #{ reset_traff_day } #{ is_server_fastopen }"
+      puts "#{ proxyd_port } #{ memd_port } #{ p2d_host } #{ p2d_port } #{ nameservers.inspect } #{ reset_traff_day } #{ is_server_fastopen }"
 
       if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
         Process.setrlimit( :NOFILE, RLIMIT )
@@ -97,9 +109,15 @@ module Girl
         nameservers,
         reset_traff_day,
         ims,
+        p2d_host,
+        p2d_port,
         head_len,
         h_a_new_source,
+        h_a_new_p2,
         h_dst_close,
+        h_p1_close,
+        h_p2_close,
+        h_p2_traffic,
         h_query,
         h_response,
         h_src_close,

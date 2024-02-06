@@ -12,9 +12,15 @@ module Girl
       im,
       directs,
       remotes,
+      appd_host,
+      appd_port,
       head_len,
       h_a_new_source,
+      h_a_new_p2,
       h_dst_close,
+      h_p1_close,
+      h_p2_close,
+      h_p2_traffic,
       h_query,
       h_response,
       h_src_close,
@@ -31,16 +37,16 @@ module Girl
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @im = im
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
-      @update_roles = [ :dns, :dst, :mem, :src, :rsv ] # 参与淘汰的角色
+      @update_roles = [ :dns, :dst, :mem, :p1, :src, :rsv ] # 参与淘汰的角色
       @updates_limit = 1010  # 淘汰池上限，1015(mac) - [ memd, proxy, redir, rsvd, tspd ]
       @eliminate_count = 0   # 淘汰次数
       @directs = directs
       @remotes = remotes
       @reads = []            # 读池
       @writes = []           # 写池
-      @roles = {}            # sock =>  :dns / :dst / :mem / :memd / :proxy / :redir / :rsv / :rsvd / :src / :tspd
+      @roles = {}            # sock =>  :dns / :dst / :mem / :memd / :p1 / :proxy / :redir / :rsv / :rsvd / :src / :tspd
       @updates = {}          # sock => updated_at
-      @proxy_infos = {}      # proxy => { :im :in :is_syn :out :overflow_infos :pause_domains :rbuff :srcs :wbuff }
+      @proxy_infos = {}      # proxy => { :is_syn :overflow_infos :pause_domains :pause_p2_ids :rbuff :srcs :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
       @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :paused :proxy_proto :proxy_type :rbuff :src_id :wbuff }
       @dst_infos = {}        # dst => { :closing :connected :domain :ip :paused :port :src :wbuff }
@@ -51,9 +57,16 @@ module Girl
       @is_direct_caches = {} # ip => true / false
       @response_caches = {}  # domain => [ response, created_at, ip, is_remote ]
       @response6_caches = {} # domain => [ response, created_at, ip, is_remote ]
+      @p1_infos = {}         # p1 => { :closing :connected :p2_id :wbuff }
+      @appd_addr = Socket.sockaddr_in( appd_port, appd_host )
+
       @head_len = head_len
       @h_a_new_source = h_a_new_source
+      @h_a_new_p2 = h_a_new_p2
       @h_dst_close = h_dst_close
+      @h_p1_close = h_p1_close
+      @h_p2_close = h_p2_close
+      @h_p2_traffic = h_p2_traffic
       @h_query = h_query
       @h_response = h_response
       @h_src_close = h_src_close
@@ -89,6 +102,8 @@ module Girl
             read_mem( sock )
           when :memd then
             read_memd( sock )
+          when :p1 then
+            read_p1( sock )
           when :proxy then
             read_proxy( sock )
           when :redir then
@@ -114,6 +129,8 @@ module Girl
             write_dst( sock )
           when :mem then
             write_mem( sock )
+          when :p1 then
+            write_p1( sock )
           when :proxy then
             write_proxy( sock )
           when :src then
@@ -160,6 +177,52 @@ module Girl
       add_write( mem )
     end
 
+    def add_p1_wbuff( p1, data )
+      return if p1.nil? || p1.closed? || data.empty?
+      p1_info = @p1_infos[ p1 ]
+      p1_info[ :wbuff ] << data
+      add_write( p1 )
+
+      if !p1.closed? && ( p1_info[ :wbuff ].bytesize >= WBUFF_LIMIT ) then
+        if @proxy.nil? || @proxy.closed? then
+          close_p1( p1 )
+          return
+        end
+
+        p2_id = p1_info[ :p2_id ]
+        puts "overflow p1 #{ p2_id }"
+        @reads.delete( @proxy )
+        proxy_info = @proxy_infos[ @proxy ]
+
+        proxy_info[ :overflow_infos ][ p1 ] = {
+          created_at: Time.new,
+          domain: nil,
+          p2_id: p2_id,
+          role: :p1
+        }
+      end
+    end
+
+    def add_proxy_wbuff( data )
+      return if data.empty?
+
+      if @proxy.nil? || @proxy.closed? then
+        proxy_info = new_a_proxy
+        puts "im #{ @im }"
+        head = ''
+        chars = []
+        @head_len.times{ chars << rand( 256 ) }
+        head = chars.pack( 'C*' )
+        head << "#{ [ @im.bytesize ].pack( 'C' ) }#{ @im }"
+        proxy_info[ :wbuff ] << head
+      else
+        proxy_info = @proxy_infos[ @proxy ]
+      end
+
+      proxy_info[ :wbuff ] << data
+      add_write( @proxy )
+    end
+
     def add_read( sock, role = nil )
       return if sock.nil? || sock.closed? || @reads.include?( sock )
       @reads << sock
@@ -204,14 +267,14 @@ module Girl
       src_info[ :wbuff ] << data
       add_write( src )
 
-      if !src.closed? && src_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+      if !src.closed? && ( src_info[ :wbuff ].bytesize >= WBUFF_LIMIT ) then
         dst = src_info[ :dst ]
 
         if dst then
           dst_info = @dst_infos[ dst ]
 
           if dst_info then
-            puts "overflow #{ src_info[ :destination_domain ] }, pause dst"
+            puts "overflow src #{ src_info[ :destination_domain ] }, pause dst"
             @reads.delete( dst )
             dst_info[ :paused ] = true
           end
@@ -221,36 +284,18 @@ module Girl
             return
           end
 
-          proxy_info = @proxy_infos[ @proxy ]
-          puts "overflow #{ src_info[ :destination_domain ] }, pause proxy"
+          puts "overflow src #{ src_info[ :destination_domain ] }, pause proxy"
           @reads.delete( @proxy )
+          proxy_info = @proxy_infos[ @proxy ]
 
           proxy_info[ :overflow_infos ][ src ] = {
             created_at: Time.new,
-            domain: src_info[ :destination_domain ]
+            domain: src_info[ :destination_domain ],
+            p2_id: nil,
+            role: :src
           }
         end
       end
-    end
-
-    def add_proxy_wbuff( data )
-      return if data.empty?
-
-      if @proxy.nil? || @proxy.closed? then
-        proxy_info = new_a_proxy
-        puts "im #{ @im }"
-        head = ''
-        chars = []
-        @head_len.times{ chars << rand( 256 ) }
-        head = chars.pack( 'C*' )
-        head << "#{ [ @im.bytesize ].pack( 'C' ) }#{ @im }"
-        proxy_info[ :wbuff ] << head
-      else
-        proxy_info = @proxy_infos[ @proxy ]
-      end
-
-      proxy_info[ :wbuff ] << data
-      add_write( @proxy )
     end
 
     def add_write( sock )
@@ -299,6 +344,33 @@ module Girl
       end
     end
 
+    def check_expire_p1s
+      now = Time.new
+
+      @p1_infos.select{ | p1, info | info[ :connected ] ? ( now.to_i - @updates[ p1 ].to_i >= @expire_long_after ) : ( now.to_i - @updates[ p1 ].to_i >= @expire_connecting ) }.each do | p1, info |
+        puts "expire p1 #{ info[ :p2_id ] }" if @is_debug
+        close_p1( p1 )
+      end
+
+      if @proxy && !@proxy.closed? then
+        proxy_info = @proxy_infos[ @proxy ]
+        overflow_infos = proxy_info[ :overflow_infos ].select{ | _, info | ( info[ :role ] == :p1 ) && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }
+
+        if overflow_infos.any? then
+          overflow_infos.each do | p1, info |
+            puts "expire overflow p1 #{ info[ :p2_id ] }"
+            close_p1( p1 )
+            proxy_info[ :overflow_infos ].delete( p1 )
+          end
+
+          if proxy_info[ :overflow_infos ].empty? then
+            puts "resume proxy"
+            add_read( @proxy )
+          end
+        end
+      end
+    end
+
     def check_expire_rsvs
       now = Time.new
 
@@ -318,7 +390,7 @@ module Girl
 
       if @proxy && !@proxy.closed? then
         proxy_info = @proxy_infos[ @proxy ]
-        overflow_infos = proxy_info[ :overflow_infos ].select{ | _, info | now.to_i - info[ :created_at ].to_i >= @expire_short_after }
+        overflow_infos = proxy_info[ :overflow_infos ].select{ | _, info | ( info[ :role ] == :src ) && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }
 
         if overflow_infos.any? then
           overflow_infos.each do | src, info |
@@ -358,12 +430,38 @@ module Girl
       @mem_infos.delete( mem )
     end
 
+    def close_p1( p1 )
+      return nil if p1.nil? || p1.closed?
+      close_sock( p1 )
+      p1_info = @p1_infos.delete( p1 )
+      p2_id = p1_info[ :p2_id ]
+      puts "close p1 #{ p2_id }" if @is_debug
+
+      unless p1_info[ :closing ] then
+        puts "add h_p1_close #{ p2_id }"
+        msg = "#{ @h_p1_close }#{ [ p2_id ].pack( 'Q>' ) }"
+        add_proxy_wbuff( pack_a_chunk( msg ) )
+      end
+
+      if @proxy && !@proxy.closed? then
+        proxy_info = @proxy_infos[ @proxy ]
+        overflow_info = proxy_info[ :overflow_infos ].delete( p1 )
+
+        if overflow_info && proxy_info[ :overflow_infos ].empty? then
+          puts "resume proxy after close p1 #{ overflow_info[ :p2_id ] }"
+          add_read( @proxy )
+        end
+      end
+
+      p1_info
+    end
+
     def close_proxy( proxy )
       return if proxy.nil? || proxy.closed?
       close_sock( proxy )
       proxy_info = @proxy_infos.delete( proxy )
       puts "close proxy"
-      proxy_info[ :srcs ].values.each{ | src | set_src_closing( src ) }
+      proxy_info[ :srcs ].values.each{ | src | close_src( src ) }
       proxy_info
     end
 
@@ -420,19 +518,30 @@ module Girl
       h = data[ 0 ]
 
       case h
-      when @h_traffic then
-        return if data.bytesize < 3
-        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        data = data[ 9..-1 ]
-        # puts "got h_traffic #{ src_id } #{ data.bytesize }" if @is_debug
-        src = proxy_info[ :srcs ][ src_id ]
-        add_src_wbuff( src, data )
+      when @h_a_new_p2 then
+        return if data.bytesize < 9
+        p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_a_new_p2 #{ p2_id }"
+        new_a_p1( p2_id )
       when @h_dst_close then
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         puts "got h_dst_close #{ src_id }" if @is_debug
         src = proxy_info[ :srcs ].delete( src_id )
         set_src_closing( src )
+      when @h_p2_close then
+        return if data.bytesize < 9
+        p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_p2_close #{ p2_id }"
+        p1, _ = @p1_infos.find{ | _, info | info[ :p2_id ] == p2_id }
+        set_p1_closing( p1 )
+      when @h_p2_traffic then
+        return if data.bytesize < 9
+        p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        data = data[ 9..-1 ]
+        # puts "got h_p2_traffic #{ p2_id } #{ data.bytesize }" if @is_debug
+        p1, _ = @p1_infos.find{ | _, info | info[ :p2_id ] == p2_id }
+        add_p1_wbuff( p1, data )
       when @h_response then
         return if data.bytesize < 3
         near_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -462,6 +571,13 @@ module Girl
             end
           end
         end
+      when @h_traffic then
+        return if data.bytesize < 3
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        data = data[ 9..-1 ]
+        # puts "got h_traffic #{ src_id } #{ data.bytesize }" if @is_debug
+        src = proxy_info[ :srcs ][ src_id ]
+        add_src_wbuff( src, data )
       end
     end
 
@@ -610,6 +726,39 @@ module Girl
       add_read( memd, :memd )
     end
 
+    def new_a_p1( p2_id )
+      check_expire_p1s
+
+      begin
+        p1 = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      rescue Exception => e
+        puts "new a p1 #{ e.class } #{ p2_id }"
+        return
+      end
+
+      p1.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+
+      begin
+        p1.connect_nonblock( @appd_addr )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "connect appd_addr #{ e.class } #{ p2_id }"
+        p1.close
+        return
+      end
+
+      p1_info = {
+        closing: false,
+        connected: false,
+        p2_id: p2_id,
+        wbuff: ''
+      }
+
+      @p1_infos[ p1 ] = p1_info
+      add_read( p1, :p1 )
+      add_write( p1 )
+    end
+
     def new_a_proxy
       proxy = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       proxy.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
@@ -628,14 +777,12 @@ module Girl
       end
 
       proxy_info = {
-        im: nil,
-        in: 0,
         is_syn: @is_client_fastopen,
-        out: 0,
-        overflow_infos: {}, # src => { :created_at :domain }
-        pause_domains: {}, # src => destination_domain
+        overflow_infos: {}, # sock => { :created_at :domain :p2_id :role(:src/:p1) }
+        pause_domains: {},  # src => destination_domain
+        pause_p2_ids: {},   # p1 => p2_id
         rbuff: '',
-        srcs: {}, # src_id => src
+        srcs: {},           # src_id => src
         wbuff: ''
       }
 
@@ -709,6 +856,21 @@ module Girl
 
     def pack_a_chunk( msg )
       "#{ [ msg.bytesize ].pack( 'n' ) }#{ msg }"
+    end
+
+    def pack_p2_traffic( p2_id, data )
+      chunks = ''
+
+      loop do
+        part = data[ 0, 65526 ]
+        # puts "add h_p2_traffic #{ p2_id } #{ part.bytesize }" if @is_debug
+        msg = "#{ @h_p2_traffic }#{ [ p2_id ].pack( 'Q>' ) }#{ part }"
+        chunks << pack_a_chunk( msg )
+        data = data[ part.bytesize..-1 ]
+        break if data.empty?
+      end
+
+      chunks
     end
 
     def pack_traffic( src_id, data )
@@ -820,7 +982,8 @@ module Girl
           resolv_caches: @resolv_caches.size,
           is_direct_caches: @is_direct_caches.size,
           response_caches: @response_caches.size,
-          response6_caches: @response6_caches.size
+          response6_caches: @response6_caches.size,
+          p1_infos: @p1_infos.size
         },
         updates_limit: @updates_limit,
         eliminate_count: @eliminate_count,
@@ -846,6 +1009,35 @@ module Girl
 
       @mem_infos[ mem ] = mem_info
       add_read( mem, :mem )
+    end
+
+    def read_p1( p1 )
+      begin
+        data = p1.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
+      rescue Exception => e
+        close_p1( p1 )
+        return
+      end
+
+      set_update( p1 )
+
+      if @proxy.nil? || @proxy.closed? then
+        close_p1( p1 )
+        return
+      end
+
+      p1_info = @p1_infos[ p1 ]
+      p2_id = p1_info[ :p2_id ]
+      add_proxy_wbuff( pack_p2_traffic( p2_id, data ) )
+      proxy_info = @proxy_infos[ @proxy ]
+
+      if proxy_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+        puts "pause p1 #{ p2_id }"
+        @reads.delete( p1 )
+        proxy_info[ :pause_p2_ids ][ p1 ] = p2_id
+      end
     end
 
     def read_proxy( proxy )
@@ -1306,6 +1498,14 @@ module Girl
       add_write( dst )
     end
 
+    def set_p1_closing( p1 )
+      return if p1.nil? || p1.closed?
+      p1_info = @p1_infos[ p1 ]
+      return if p1_info.nil? || p1_info[ :closing ]
+      p1_info[ :closing ] = true
+      add_write( p1 )
+    end
+
     def set_remote( src )
       return if src.nil? || src.closed?
       src_info = @src_infos[ src ]
@@ -1364,10 +1564,12 @@ module Girl
             close_dst( _sock )
           when :mem
             close_mem( _sock )
-          when :src
-            close_src( _sock )
+          when :p1
+            close_p1( _sock )
           when :rsv
             close_rsv( _sock )
+          when :src
+            close_src( _sock )
           else
             close_sock( _sock )
           end
@@ -1451,6 +1653,111 @@ module Girl
       mem_info[ :wbuff ] = data
     end
 
+    def write_p1( p1 )
+      if p1.closed? then
+        puts "write closed p1?"
+        return
+      end
+
+      p1_info = @p1_infos[ p1 ]
+      p1_info[ :connected ] = true
+      data = p1_info[ :wbuff ]
+
+      if data.empty? then
+        if p1_info[ :closing ] then
+          close_p1( p1 )
+        else
+          @writes.delete( p1 )
+        end
+
+        return
+      end
+
+      begin
+        written = p1.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
+      rescue Exception => e
+        close_p1( p1 )
+        return
+      end
+
+      set_update( p1 )
+      data = data[ written..-1 ]
+      p1_info[ :wbuff ] = data
+
+      if @proxy.nil? || @proxy.closed? then
+        close_p1( p1 )
+        return
+      end
+
+      proxy_info = @proxy_infos[ @proxy ]
+      overflow_info = proxy_info[ :overflow_infos ][ p1 ]
+
+      if overflow_info && ( p1_info[ :wbuff ].bytesize < RESUME_BELOW ) then
+        puts "delete overflow p1 #{ overflow_info[ :p2_id ] }"
+        proxy_info[ :overflow_infos ].delete( p1 )
+
+        if proxy_info[ :overflow_infos ].empty? then
+          puts "resume proxy #{ im }"
+          add_read( @proxy )
+        end
+      end
+    end
+
+    def write_proxy( proxy )
+      if proxy.closed? then
+        puts "write closed proxy?"
+        return
+      end
+
+      proxy_info = @proxy_infos[ proxy ]
+      data = proxy_info[ :wbuff ]
+
+      if data.empty? then
+        @writes.delete( proxy )
+        return
+      end
+
+      begin
+        if proxy_info[ :is_syn ] then
+          written = proxy.sendmsg_nonblock( data, 536870912, @proxyd_addr )
+          proxy_info[ :is_syn ] = false
+        else
+          written = proxy.write_nonblock( data )
+        end
+      rescue Errno::EINPROGRESS
+        return
+      rescue Exception => e
+        close_proxy( proxy )
+        return
+      end
+
+      set_update( proxy )
+      data = data[ written..-1 ]
+      proxy_info[ :wbuff ] = data
+
+      if proxy_info[ :wbuff ].bytesize < RESUME_BELOW then
+        if proxy_info[ :pause_domains ].any? then
+          proxy_info[ :pause_domains ].each do | src, domain |
+            puts "resume src #{ domain }"
+            add_read( src )
+          end
+
+          proxy_info[ :pause_domains ].clear
+        end
+
+        if proxy_info[ :pause_p2_ids ].any? then
+          proxy_info[ :pause_p2_ids ].each do | p1, p2_id |
+            puts "resume p1 #{ im } #{ p2_id }"
+            add_read( p1 )
+          end
+
+          proxy_info[ :pause_p2_ids ].clear
+        end
+      end
+    end
+
     def write_src( src )
       if src.closed? then
         puts "write closed src?"
@@ -1507,48 +1814,6 @@ module Girl
             add_read( @proxy )
           end
         end
-      end
-    end
-
-    def write_proxy( proxy )
-      if proxy.closed? then
-        puts "write closed proxy?"
-        return
-      end
-
-      proxy_info = @proxy_infos[ proxy ]
-      data = proxy_info[ :wbuff ]
-
-      if data.empty? then
-        @writes.delete( proxy )
-        return
-      end
-
-      begin
-        if proxy_info[ :is_syn ] then
-          written = proxy.sendmsg_nonblock( data, 536870912, @proxyd_addr )
-          proxy_info[ :is_syn ] = false
-        else
-          written = proxy.write_nonblock( data )
-        end
-      rescue Errno::EINPROGRESS
-        return
-      rescue Exception => e
-        close_proxy( proxy )
-        return
-      end
-
-      set_update( proxy )
-      data = data[ written..-1 ]
-      proxy_info[ :wbuff ] = data
-
-      if proxy_info[ :pause_domains ].any? && ( proxy_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-        proxy_info[ :pause_domains ].each do | src, domain |
-          puts "resume src #{ domain }"
-          add_read( src )
-        end
-
-        proxy_info[ :pause_domains ].clear
       end
     end
 
