@@ -18,6 +18,7 @@ module Girl
       h_a_new_source,
       h_a_new_p2,
       h_dst_close,
+      h_heartbeat,
       h_p1_close,
       h_p2_close,
       h_p2_traffic,
@@ -27,6 +28,8 @@ module Girl
       h_traffic,
       expire_connecting,
       expire_long_after,
+      expire_proxy_after,
+      expire_resolv_cache,
       expire_short_after,
       is_debug,
       is_client_fastopen,
@@ -46,7 +49,7 @@ module Girl
       @writes = []           # 写池
       @roles = {}            # sock =>  :dns / :dst / :infod / :mem / :memd / :p1 / :proxy / :redir / :rsv / :rsvd / :src / :tspd
       @updates = {}          # sock => updated_at
-      @proxy_infos = {}      # proxy => { :connected :created_at :is_syn :overflow_infos :pause_domains :pause_p2_ids :rbuff :srcs :wbuff }
+      @proxy_infos = {}      # proxy => { :is_syn :overflow_infos :pause_domains :pause_p2_ids :rbuff :recv_at :srcs :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
       @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :paused :proxy_proto :proxy_type :rbuff :src_id :wbuff }
       @dst_infos = {}        # dst => { :closing :connected :domain :ip :paused :port :src :wbuff }
@@ -64,6 +67,7 @@ module Girl
       @h_a_new_source = h_a_new_source
       @h_a_new_p2 = h_a_new_p2
       @h_dst_close = h_dst_close
+      @h_heartbeat = h_heartbeat
       @h_p1_close = h_p1_close
       @h_p2_close = h_p2_close
       @h_p2_traffic = h_p2_traffic
@@ -73,6 +77,8 @@ module Girl
       @h_traffic = h_traffic
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
+      @expire_proxy_after = expire_proxy_after
+      @expire_resolv_cache = expire_resolv_cache
       @expire_short_after = expire_short_after
       @is_debug = is_debug
       @is_client_fastopen = is_client_fastopen
@@ -88,7 +94,7 @@ module Girl
 
     def looping
       puts "looping"
-      loop_check_proxy
+      loop_heartbeat
 
       loop do
         rs, ws = IO.select( @reads, @writes )
@@ -507,6 +513,8 @@ module Girl
     def deal_msg( data )
       return if data.nil? || data.empty? || @proxy.closed?
       proxy_info = @proxy_infos[ @proxy ]
+      now = Time.new
+      proxy_info[ :recv_at ] = now
       h = data[ 0 ]
 
       case h
@@ -521,6 +529,8 @@ module Girl
         puts "got h_dst_close #{ src_id }" if @is_debug
         src = proxy_info[ :srcs ].delete( src_id )
         set_src_closing( src )
+      when @h_heartbeat then
+        puts "got h_heartbeat" if @is_debug
       when @h_p2_close then
         return if data.bytesize < 9
         p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -557,9 +567,9 @@ module Girl
             type = near_info[ :type ]
 
             if type == 1 then
-              @response_caches[ domain ] = [ data, Time.new, ip, true ]
+              @response_caches[ domain ] = [ data, now, ip, true ]
             else
-              @response6_caches[ domain ] = [ data, Time.new, ip, true ]
+              @response6_caches[ domain ] = [ data, now, ip, true ]
             end
           end
         end
@@ -603,11 +613,11 @@ module Girl
       [ msgs, part ]
     end
 
-    def loop_check_proxy
+    def loop_heartbeat
       Thread.new do
         loop do
-          sleep CHECK_PROXY_INTERVAL
-          msg = { message_type: 'check-proxy' }
+          sleep HEARTBEAT_INTERVAL
+          msg = { message_type: 'heartbeat' }
           send_data( @info, JSON.generate( msg ), @infod_addr )
         end
       end
@@ -798,13 +808,12 @@ module Girl
       head = "#{ chars.pack( 'C*' ) }#{ [ @im.bytesize ].pack( 'C' ) }#{ @im }"
 
       proxy_info = {
-        connected: false,
-        created_at: Time.new,
         is_syn: @is_client_fastopen,
         overflow_infos: {}, # sock => { :created_at :domain :p2_id :role(:src/:p1) }
         pause_domains: {},  # src => destination_domain
         pause_p2_ids: {},   # p1 => p2_id
         rbuff: '',
+        recv_at: nil,
         srcs: {},           # src_id => src
         wbuff: head
       }
@@ -984,12 +993,19 @@ module Girl
       message_type = msg[ :message_type ]
 
       case message_type
-      when 'check-proxy' then
+      when 'heartbeat' then
         if @proxy.closed? then
           new_a_proxy
         else
           proxy_info = @proxy_infos[ @proxy ]
-          new_a_proxy if !proxy_info[ :connected ] && ( Time.new - proxy_info[ :created_at ] >= @expire_connecting )
+
+          if Time.new.to_i - proxy_info[ :recv_at ].to_i >= @expire_proxy_after then
+            close_proxy( @proxy )
+            new_a_proxy
+          else
+            puts "heartbeat" if @is_debug
+            add_proxy_wbuff( pack_a_chunk( @h_heartbeat ) )
+          end
         end
       end
     end
@@ -1217,7 +1233,7 @@ module Girl
       if response_cache then
         response, created_at = response_cache
 
-        if Time.new - created_at < RESOLV_CACHE_EXPIRE then
+        if Time.new - created_at < @expire_resolv_cache then
           response[ 0, 2 ] = id
           send_data( @rsvd, response, addrinfo )
           return
@@ -1498,7 +1514,7 @@ module Girl
       if resolv_cache then
         ip, created_at = resolv_cache
 
-        if Time.new - created_at < RESOLV_CACHE_EXPIRE then
+        if Time.new - created_at < @expire_resolv_cache then
           make_tunnel( ip, src )
           return
         end
@@ -1773,7 +1789,6 @@ module Girl
       end
 
       proxy_info = @proxy_infos[ proxy ]
-      proxy_info[ :connected ] = true
       data = proxy_info[ :wbuff ]
 
       if data.empty? then
@@ -1791,6 +1806,7 @@ module Girl
       rescue Errno::EINPROGRESS
         return
       rescue Exception => e
+        puts "write proxy #{ e.class }"
         close_proxy( proxy )
         return
       end

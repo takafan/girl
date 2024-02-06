@@ -14,6 +14,7 @@ module Girl
       h_a_new_source,
       h_a_new_p2,
       h_dst_close,
+      h_heartbeat,
       h_p1_close,
       h_p2_close,
       h_p2_traffic,
@@ -23,6 +24,8 @@ module Girl
       h_traffic,
       expire_connecting,
       expire_long_after,
+      expire_proxy_after,
+      expire_resolv_cache,
       expire_short_after,
       is_debug,
       is_server_fastopen )
@@ -50,6 +53,7 @@ module Girl
       @h_a_new_source = h_a_new_source
       @h_a_new_p2 = h_a_new_p2
       @h_dst_close = h_dst_close
+      @h_heartbeat = h_heartbeat
       @h_p1_close = h_p1_close
       @h_p2_close = h_p2_close
       @h_p2_traffic = h_p2_traffic
@@ -59,6 +63,8 @@ module Girl
       @h_traffic = h_traffic
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
+      @expire_proxy_after = expire_proxy_after
+      @expire_resolv_cache = expire_resolv_cache
       @expire_short_after = expire_short_after
       @is_debug = is_debug
       @is_server_fastopen = is_server_fastopen
@@ -71,6 +77,7 @@ module Girl
 
     def looping
       puts "looping"
+      loop_heartbeat
       loop_check_traff
 
       loop do
@@ -577,6 +584,16 @@ module Girl
       end
     end
 
+    def loop_heartbeat
+      Thread.new do
+        loop do
+          sleep HEARTBEAT_INTERVAL
+          msg = { message_type: 'heartbeat' }
+          send_data( @info, JSON.generate( msg ), @infod_addr )
+        end
+      end
+    end
+
     def new_a_dst( domain, ip, port, src_id, proxy )
       return if proxy.nil? || proxy.closed?
       proxy_info = @proxy_infos[ proxy ]
@@ -834,6 +851,8 @@ module Girl
       message_type = msg[ :message_type ]
 
       case message_type
+      when 'heartbeat' then
+        @proxy_infos.select{ | _, info | info[ :im ] }.each{ | proxy, _ | add_proxy_wbuff( proxy, pack_a_chunk( @h_heartbeat ) ) }
       when 'reset-traffic' then
         puts "reset traffic"
         @im_infos.each{ | _, info | info[ :in ] = info[ :out ] = 0 }
@@ -1055,6 +1074,7 @@ module Girl
           im_info[ :p2d ] = new_a_p2d( im_info[ :p2d_host ], im_info[ :p2d_port ], im, proxy ) unless im_info[ :p2d ]
         end
 
+        add_proxy_wbuff( proxy, pack_a_chunk( @h_heartbeat ) )
         data = data[ ( @head_len + 1 + len )..-1 ]
         return if data.empty?
       end
@@ -1119,7 +1139,7 @@ module Girl
       if resolv_cache then
         ip, created_at, im = resolv_cache
 
-        if Time.new - created_at < RESOLV_CACHE_EXPIRE then
+        if Time.new - created_at < @expire_resolv_cache then
           new_a_dst( domain, ip, port, src_id, proxy )
           return
         end
