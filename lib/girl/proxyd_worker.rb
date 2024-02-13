@@ -1,5 +1,5 @@
 module Girl
-  class ProxydWorker2
+  class ProxydWorker
     include Dns
 
     def initialize(
@@ -22,6 +22,8 @@ module Girl
       h_response,
       h_src_close,
       h_traffic,
+      h_pause_dst,
+      h_resume_dst,
       expire_connecting,
       expire_long_after,
       expire_proxy_after,
@@ -61,6 +63,8 @@ module Girl
       @h_response = h_response
       @h_src_close = h_src_close
       @h_traffic = h_traffic
+      @h_pause_dst = h_pause_dst
+      @h_resume_dst = h_resume_dst
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
       @expire_proxy_after = expire_proxy_after

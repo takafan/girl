@@ -1,5 +1,5 @@
 module Girl
-  class ProxyWorker2
+  class ProxyWorker
     include Dns
 
     def initialize(
@@ -12,6 +12,7 @@ module Girl
       im,
       directs,
       remotes,
+      cache_root,
       appd_host,
       appd_port,
       head_len,
@@ -26,6 +27,8 @@ module Girl
       h_response,
       h_src_close,
       h_traffic,
+      h_pause_dst,
+      h_resume_dst,
       expire_connecting,
       expire_long_after,
       expire_proxy_after,
@@ -45,13 +48,14 @@ module Girl
       @eliminate_count = 0   # 淘汰次数
       @directs = directs
       @remotes = remotes
+      @cache_root = cache_root
       @reads = []            # 读池
       @writes = []           # 写池
       @roles = {}            # sock =>  :dns / :dst / :infod / :mem / :memd / :p1 / :proxy / :redir / :rsv / :rsvd / :src / :tspd
       @updates = {}          # sock => updated_at
-      @proxy_infos = {}      # proxy => { :is_syn :overflow_infos :pause_domains :pause_p2_ids :rbuff :recv_at :srcs :wbuff }
+      @proxy_infos = {}      # proxy => { :is_syn :pause_domains :pause_p2_ids :rbuff :recv_at :srcs :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
-      @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :paused :proxy_proto :proxy_type :rbuff :src_id :wbuff }
+      @src_infos = {}        # src => { :addrinfo :cache :cache_id :cache_ids :closing :destination_domain :destination_port :dst :is_connect :paused :proxy_proto :proxy_type :rbuff :src_id :wbuff }
       @dst_infos = {}        # dst => { :closing :connected :domain :ip :paused :port :src :wbuff }
       @dns_infos = {}        # dns => { :domain :src }
       @rsv_infos = {}        # rsv => { :addrinfo :domain :type }
@@ -60,7 +64,7 @@ module Girl
       @is_direct_caches = {} # ip => true / false
       @response_caches = {}  # domain => [ response, created_at, ip, is_remote ]
       @response6_caches = {} # domain => [ response, created_at, ip, is_remote ]
-      @p1_infos = {}         # p1 => { :closing :connected :p2_id :wbuff }
+      @p1_infos = {}         # p1 => { :cache :cache_id :cache_ids :closing :connected :p2_id :wbuff }
       @appd_addr = Socket.sockaddr_in( appd_port, appd_host )
 
       @head_len = head_len
@@ -75,6 +79,8 @@ module Girl
       @h_response = h_response
       @h_src_close = h_src_close
       @h_traffic = h_traffic
+      @h_pause_dst = h_pause_dst
+      @h_resume_dst = h_resume_dst
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
       @expire_proxy_after = expire_proxy_after
@@ -188,30 +194,45 @@ module Girl
       add_write( mem )
     end
 
-    def add_p1_wbuff( p1, data )
+    def add_p1_cache( p1, data )
       return if p1.nil? || p1.closed? || data.empty?
       p1_info = @p1_infos[ p1 ]
-      p1_info[ :wbuff ] << data
-      add_write( p1 )
+      p1_info[ :cache ] << data
 
-      if !p1.closed? && ( p1_info[ :wbuff ].bytesize >= WBUFF_LIMIT ) then
-        if @proxy.closed? then
+      if p1_info[ :cache ].bytesize >= WBUFF_LIMIT then
+        path = File.join( @cache_root, "p1-#{ p1_info[ :p2_id ] }-#{ p1_info[ :cache_id ] }" )
+        puts "binwrite #{ path }"
+
+        begin
+          IO.binwrite( path, p1_info[ :cache ] )
+        rescue Exception => e
+          puts "binwrite #{ e.class }"
           close_p1( p1 )
           return
         end
 
-        p2_id = p1_info[ :p2_id ]
-        puts "overflow p1 #{ p2_id }"
-        @reads.delete( @proxy )
-        proxy_info = @proxy_infos[ @proxy ]
-
-        proxy_info[ :overflow_infos ][ p1 ] = {
-          created_at: Time.new,
-          domain: nil,
-          p2_id: p2_id,
-          role: :p1
-        }
+        p1_info[ :cache_ids ] << p1_info[ :cache_id ]
+        p1_info[ :cache ].clear
+        p1_info[ :cache_id ] += 1
       end
+    end
+
+    def add_p1_wbuff( p1, data )
+      return if p1.nil? || p1.closed? || data.empty?
+      p1_info = @p1_infos[ p1 ]
+
+      if p1_info[ :cache_ids ].any? || !p1_info[ :cache ].empty? then
+        add_p1_cache( p1, data )
+      else
+        p1_info[ :wbuff ] << data
+
+        if p1_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+          add_p1_cache( p1, p1_info[ :wbuff ] )
+          p1_info[ :wbuff ].clear
+        end
+      end
+
+      add_write( p1 )
     end
 
     def add_proxy_wbuff( data )
@@ -247,6 +268,29 @@ module Girl
       add_src_wbuff( src, data )
     end
 
+    def add_src_cache( src, data )
+      return if src.nil? || src.closed? || data.empty?
+      src_info = @src_infos[ src ]
+      src_info[ :cache ] << data
+
+      if src_info[ :cache ].bytesize >= WBUFF_LIMIT then
+        path = File.join( @cache_root, "src-#{ src_info[ :src_id ] }-#{ src_info[ :cache_id ] }" )
+        puts "binwrite #{ path } #{ src_info[ :destination_domain ] }"
+
+        begin
+          IO.binwrite( path, src_info[ :cache ] )
+        rescue Exception => e
+          puts "binwrite #{ e.class }"
+          close_src( src )
+          return
+        end
+
+        src_info[ :cache_ids ] << src_info[ :cache_id ]
+        src_info[ :cache ].clear
+        src_info[ :cache_id ] += 1
+      end
+    end
+
     def add_src_rbuff( src, data )
       return if src.nil? || src.closed? || data.empty?
       src_info = @src_infos[ src ]
@@ -262,38 +306,19 @@ module Girl
     def add_src_wbuff( src, data )
       return if src.nil? || src.closed? || data.empty?
       src_info = @src_infos[ src ]
-      src_info[ :wbuff ] << data
-      add_write( src )
 
-      if !src.closed? && ( src_info[ :wbuff ].bytesize >= WBUFF_LIMIT ) then
-        dst = src_info[ :dst ]
+      if src_info[ :cache_ids ].any? || !src_info[ :cache ].empty? then
+        add_src_cache( src, data )
+      else
+        src_info[ :wbuff ] << data
 
-        if dst then
-          dst_info = @dst_infos[ dst ]
-
-          if dst_info then
-            puts "overflow src #{ src_info[ :destination_domain ] }, pause dst"
-            @reads.delete( dst )
-            dst_info[ :paused ] = true
-          end
-        else
-          if @proxy.closed? then
-            close_src( src )
-            return
-          end
-
-          puts "overflow src #{ src_info[ :destination_domain ] }, pause proxy"
-          @reads.delete( @proxy )
-          proxy_info = @proxy_infos[ @proxy ]
-
-          proxy_info[ :overflow_infos ][ src ] = {
-            created_at: Time.new,
-            domain: src_info[ :destination_domain ],
-            p2_id: nil,
-            role: :src
-          }
+        if src_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
+          add_src_cache( src, src_info[ :wbuff ] )
+          src_info[ :wbuff ].clear
         end
       end
+
+      add_write( src )
     end
 
     def add_write( sock )
@@ -349,24 +374,6 @@ module Girl
         puts "expire p1 #{ info[ :p2_id ] }" if @is_debug
         close_p1( p1 )
       end
-
-      unless @proxy.closed? then
-        proxy_info = @proxy_infos[ @proxy ]
-        overflow_infos = proxy_info[ :overflow_infos ].select{ | _, info | ( info[ :role ] == :p1 ) && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }
-
-        if overflow_infos.any? then
-          overflow_infos.each do | p1, info |
-            puts "expire overflow p1 #{ info[ :p2_id ] }"
-            close_p1( p1 )
-            proxy_info[ :overflow_infos ].delete( p1 )
-          end
-
-          if proxy_info[ :overflow_infos ].empty? then
-            puts "resume proxy"
-            add_read( @proxy )
-          end
-        end
-      end
     end
 
     def check_expire_rsvs
@@ -384,24 +391,6 @@ module Girl
       @src_infos.select{ | src, _ | now.to_i - @updates[ src ].to_i >= @expire_long_after }.each do | src, info |
         puts "expire src #{ info[ :destination_domain ] }" if @is_debug
         close_src( src )
-      end
-
-      unless @proxy.closed? then
-        proxy_info = @proxy_infos[ @proxy ]
-        overflow_infos = proxy_info[ :overflow_infos ].select{ | _, info | ( info[ :role ] == :src ) && ( now.to_i - info[ :created_at ].to_i >= @expire_short_after ) }
-
-        if overflow_infos.any? then
-          overflow_infos.each do | src, info |
-            puts "expire overflow src #{ info[ :domain ] }"
-            close_src( src )
-            proxy_info[ :overflow_infos ].delete( src )
-          end
-
-          if proxy_info[ :overflow_infos ].empty? then
-            puts "resume proxy"
-            add_read( @proxy )
-          end
-        end
       end
     end
 
@@ -435,20 +424,21 @@ module Girl
       p2_id = p1_info[ :p2_id ]
       puts "close p1 #{ p2_id }"
 
+      if p1_info[ :cache_ids ].any? then
+        path = File.join( @cache_root, "p1-#{ p2_id }-*" )
+        
+        begin
+          puts "delete cache after close p1 #{ path }"
+          FileUtils.rm_rf( Dir.glob( path ) )
+        rescue Exception => e
+          puts "delete cache #{ e.class }"
+        end
+      end
+
       unless p1_info[ :closing ] then
         puts "add h_p1_close #{ p2_id }"
         msg = "#{ @h_p1_close }#{ [ p2_id ].pack( 'Q>' ) }"
         add_proxy_wbuff( pack_a_chunk( msg ) )
-      end
-
-      unless @proxy.closed? then
-        proxy_info = @proxy_infos[ @proxy ]
-        overflow_info = proxy_info[ :overflow_infos ].delete( p1 )
-
-        if overflow_info && proxy_info[ :overflow_infos ].empty? then
-          puts "resume proxy after close p1 #{ overflow_info[ :p2_id ] }"
-          add_read( @proxy )
-        end
       end
 
       p1_info
@@ -484,26 +474,31 @@ module Girl
       return nil if src.nil? || src.closed?
       close_sock( src )
       src_info = @src_infos.delete( src )
+      src_id = src_info[ :src_id ]
       puts "close src #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }" if @is_debug
+      
+      if src_info[ :cache_ids ].any? then
+        path = File.join( @cache_root, "src-#{ src_id }-*" )
+        
+        begin
+          puts "delete cache after close src #{ path }"
+          FileUtils.rm_rf( Dir.glob( path ) )
+        rescue Exception => e
+          puts "delete cache #{ e.class }"
+        end
+      end
+
       dst = src_info[ :dst ]
 
       if dst then
         set_dst_closing( dst )
       elsif !@proxy.closed? then
         proxy_info = @proxy_infos[ @proxy ]
-        src_id = src_info[ :src_id ]
 
         if proxy_info[ :srcs ].delete( src_id ) then
           puts "add h_src_close #{ src_id }" if @is_debug
           msg = "#{ @h_src_close }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( pack_a_chunk( msg ) )
-        end
-
-        overflow_info = proxy_info[ :overflow_infos ].delete( src )
-
-        if overflow_info && proxy_info[ :overflow_infos ].empty? then
-          puts "resume proxy after close src #{ overflow_info[ :domain ] }"
-          add_read( @proxy )
         end
       end
 
@@ -774,6 +769,9 @@ module Girl
       end
 
       p1_info = {
+        cache: '',
+        cache_id: 0,
+        cache_ids: [],
         closing: false,
         connected: false,
         p2_id: p2_id,
@@ -809,7 +807,6 @@ module Girl
 
       proxy_info = {
         is_syn: @is_client_fastopen,
-        overflow_infos: {}, # sock => { :created_at :domain :p2_id :role(:src/:p1) }
         pause_domains: {},  # src => destination_domain
         pause_p2_ids: {},   # p1 => p2_id
         rbuff: '',
@@ -1145,6 +1142,9 @@ module Girl
 
       src_info = {
         addrinfo: addrinfo,
+        cache: '',
+        cache_id: 0,
+        cache_ids: [],
         closing: false,
         destination_domain: nil,
         destination_port: nil,
@@ -1466,6 +1466,9 @@ module Girl
 
       src_info = {
         addrinfo: addrinfo,
+        cache: '',
+        cache_id: 0,
+        cache_ids: [],
         closing: false,
         destination_domain: dest_ip,
         destination_port: dest_port,
@@ -1741,13 +1744,27 @@ module Girl
       data = p1_info[ :wbuff ]
 
       if data.empty? then
-        if p1_info[ :closing ] then
+        if p1_info[ :cache_ids ].any? then
+          cache_id = p1_info[ :cache_ids ].shift
+          path = File.join( @cache_root, "p1-#{ p1_info[ :p2_id ] }-#{ cache_id }" )
+
+          begin
+            puts "binread #{ path }"
+            data = IO.binread( path )
+            File.delete( path )
+          rescue Exception => e
+            puts "binread #{ e.class }"
+          end
+        elsif !p1_info[ :cache ].empty? then
+          data = p1_info[ :cache ].dup
+          p1_info[ :cache ].clear
+        elsif p1_info[ :closing ] then
           close_p1( p1 )
+          return
         else
           @writes.delete( p1 )
+          return
         end
-
-        return
       end
 
       begin
@@ -1762,24 +1779,6 @@ module Girl
       set_update( p1 )
       data = data[ written..-1 ]
       p1_info[ :wbuff ] = data
-
-      if @proxy.closed? then
-        close_p1( p1 )
-        return
-      end
-
-      proxy_info = @proxy_infos[ @proxy ]
-      overflow_info = proxy_info[ :overflow_infos ][ p1 ]
-
-      if overflow_info && ( p1_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-        puts "delete overflow p1 #{ overflow_info[ :p2_id ] }"
-        proxy_info[ :overflow_infos ].delete( p1 )
-
-        if proxy_info[ :overflow_infos ].empty? then
-          puts "resume proxy #{ im }"
-          add_read( @proxy )
-        end
-      end
     end
 
     def write_proxy( proxy )
@@ -1846,13 +1845,27 @@ module Girl
       data = src_info[ :wbuff ]
 
       if data.empty? then
-        if src_info[ :closing ] then
+        if src_info[ :cache_ids ].any? then
+          cache_id = src_info[ :cache_ids ].shift
+          path = File.join( @cache_root, "src-#{ src_info[ :src_id ] }-#{ cache_id }" )
+
+          begin
+            puts "binread #{ path } #{ src_info[ :destination_domain ] }"
+            data = IO.binread( path )
+            File.delete( path )
+          rescue Exception => e
+            puts "binread #{ e.class }"
+          end
+        elsif !src_info[ :cache ].empty? then
+          data = src_info[ :cache ].dup
+          src_info[ :cache ].clear
+        elsif src_info[ :closing ] then
           close_src( src )
+          return
         else
           @writes.delete( src )
+          return
         end
-
-        return
       end
 
       begin
@@ -1867,32 +1880,6 @@ module Girl
       set_update( src )
       data = data[ written..-1 ]
       src_info[ :wbuff ] = data
-      dst = src_info[ :dst ]
-
-      if dst then
-        unless dst.closed? then
-          dst_info = @dst_infos[ dst ]
-
-          if dst_info[ :paused ] && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-            puts "resume dst #{ dst_info[ :domain ] }"
-            add_read( dst )
-            dst_info[ :paused ] = false unless dst.closed?
-          end
-        end
-      elsif !@proxy.closed? then
-        proxy_info = @proxy_infos[ @proxy ]
-        overflow_info = proxy_info[ :overflow_infos ][ src ]
-
-        if overflow_info && ( src_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "delete overflow #{ overflow_info[ :domain ] }"
-          proxy_info[ :overflow_infos ].delete( src )
-
-          if proxy_info[ :overflow_infos ].empty? then
-            puts "resume proxy"
-            add_read( @proxy )
-          end
-        end
-      end
     end
 
   end
