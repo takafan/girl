@@ -23,20 +23,22 @@ module Girl
         ims = conf[ :ims ]
         p2d_host = conf[ :p2d_host ]
         p2d_port = conf[ :p2d_port ]
-        head_len = conf[ :head_len ]             # 头长度
-        h_a_new_source = conf[ :h_a_new_source ] # A
-        h_a_new_p2 = conf[ :h_a_new_p2 ]         # B
-        h_dst_close = conf[ :h_dst_close ]       # D
-        h_heartbeat = conf[ :h_heartbeat ]       # H
-        h_p1_close = conf[ :h_p1_close ]         # I
-        h_p2_close = conf[ :h_p2_close ]         # J
-        h_p2_traffic = conf[ :h_p2_traffic ]     # K
-        h_query = conf[ :h_query ]               # Q
-        h_response = conf[ :h_response ]         # R
-        h_src_close = conf[ :h_src_close ]       # S
-        h_traffic = conf[ :h_traffic ]           # T
-        h_pause_dst = conf[ :h_pause_dst ]       # U
-        h_resume_dst = conf[ :h_resume_dst ]     # V
+        head_len = conf[ :head_len ]               # 头长度
+        h_a_new_source = conf[ :h_a_new_source ]   # A
+        h_a_new_p2 = conf[ :h_a_new_p2 ]           # B
+        h_dst_close = conf[ :h_dst_close ]         # D
+        h_heartbeat = conf[ :h_heartbeat ]         # H
+        h_p1_close = conf[ :h_p1_close ]           # I
+        h_p2_close = conf[ :h_p2_close ]           # J
+        h_p2_traffic = conf[ :h_p2_traffic ]       # K
+        h_query = conf[ :h_query ]                 # Q
+        h_response = conf[ :h_response ]           # R
+        h_src_close = conf[ :h_src_close ]         # S
+        h_traffic = conf[ :h_traffic ]             # T
+        h_p1_overflow = conf[ :h_p1_overflow ]     # U
+        h_p1_underhalf = conf[ :h_p1_underhalf ]   # V
+        h_src_overflow = conf[ :h_src_overflow ]   # W
+        h_src_underhalf = conf[ :h_src_underhalf ] # X
         expire_connecting = conf[ :expire_connecting ]     # 连接多久没有建成关闭（秒）
         expire_long_after = conf[ :expire_long_after ]     # 长连接多久没有新流量关闭（秒）
         expire_proxy_after = conf[ :expire_proxy_after ]   # proxy多久没有收到流量重建（秒）
@@ -85,8 +87,10 @@ module Girl
       h_response = h_response ? h_response.to_s : 'R'
       h_src_close = h_src_close ? h_src_close.to_s : 'S'
       h_traffic = h_traffic ? h_traffic.to_s : 'T'
-      h_pause_dst = h_pause_dst ? h_pause_dst.to_s : 'U'
-      h_resume_dst = h_resume_dst ? h_resume_dst.to_s : 'V'
+      h_p1_overflow = h_p1_overflow ? h_p1_overflow.to_s : 'U'
+      h_p1_underhalf = h_p1_underhalf ? h_p1_underhalf.to_s : 'V'
+      h_src_overflow = h_src_overflow ? h_src_overflow.to_s : 'W'
+      h_src_underhalf = h_src_underhalf ? h_src_underhalf.to_s : 'X'
       expire_connecting = expire_connecting ? expire_connecting.to_i : 5
       expire_long_after = expire_long_after ? expire_long_after.to_i : 3600
       expire_proxy_after = expire_proxy_after ? expire_proxy_after.to_i : 60
@@ -133,8 +137,10 @@ module Girl
         h_response,
         h_src_close,
         h_traffic,
-        h_pause_dst,
-        h_resume_dst,
+        h_p1_overflow,
+        h_p1_underhalf,
+        h_src_overflow,
+        h_src_underhalf,
         expire_connecting,
         expire_long_after,
         expire_proxy_after,

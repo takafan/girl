@@ -4,6 +4,7 @@ module Girl
   READ_SIZE            = 4 * 1024 * 1024  # 一次读多少
   WBUFF_LIMIT          = 30 * 1024 * 1024 # 写前上限，超过上限暂停读
   RESUME_BELOW         = WBUFF_LIMIT / 2  # 降到多少以下恢复读
+  CLOSE_ABOVE          = WBUFF_LIMIT * 3  # 超过多少强制关闭
   HEARTBEAT_INTERVAL   = 10               # 心跳间隔
   CHECK_TRAFF_INTERVAL = 3600             # 检查今天是否是流量计数重置日间隔
   HTTP_OK = "HTTP/1.1 200 OK\r\n\r\n"

@@ -22,8 +22,10 @@ module Girl
       h_response,
       h_src_close,
       h_traffic,
-      h_pause_dst,
-      h_resume_dst,
+      h_p1_overflow,
+      h_p1_underhalf,
+      h_src_overflow,
+      h_src_underhalf,
       expire_connecting,
       expire_long_after,
       expire_proxy_after,
@@ -44,12 +46,12 @@ module Girl
       @proxy_infos = {}    # proxy => { :addrinfo :im :overflow_infos :p2s :pause_domains :pause_p2_ids :rbuff :src_infos :wbuff }
       @im_infos = {}       # im => { :addrinfo :in :out :p2d :p2d_host :p2d_port :proxy }
       @mem_infos = {}      # mem => { :wbuff }
-      @dst_infos = {}      # dst => { :closing :connected :domain :im :ip :port :proxy :rbuffs :src_id :wbuff }
+      @dst_infos = {}      # dst => { :closing :connected :domain :im :ip :paused :port :proxy :rbuffs :src_id :wbuff }
       @dns_infos = {}      # dns => { :domain :im :port :proxy :src_id }
       @rsv_infos = {}      # rsv => { :domain :im :near_id :proxy  }
       @resolv_caches = {}  # domain => [ ip, created_at, im ]
       @p2d_infos = {}      # p2d => { :im }
-      @p2_infos = {}       # p2 => { :addrinfo :im :p2_id :proxy :wbuff }
+      @p2_infos = {}       # p2 => { :addrinfo :im :p2_id :paused :proxy :wbuff }
 
       @head_len = head_len
       @h_a_new_source = h_a_new_source
@@ -63,8 +65,10 @@ module Girl
       @h_response = h_response
       @h_src_close = h_src_close
       @h_traffic = h_traffic
-      @h_pause_dst = h_pause_dst
-      @h_resume_dst = h_resume_dst
+      @h_p1_overflow = h_p1_overflow
+      @h_p1_underhalf = h_p1_underhalf
+      @h_src_overflow = h_src_overflow
+      @h_src_underhalf = h_src_underhalf
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
       @expire_proxy_after = expire_proxy_after
@@ -525,6 +529,58 @@ module Girl
             end
           end
         end
+      when @h_p1_overflow then
+        return if data.bytesize < 9
+        p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_p1_overflow #{ im } #{ p2_id }"
+        p2 = proxy_info[ :p2s ][ p2_id ]
+
+        if p2 && !p2.closed? then
+          @reads.delete( p2 )
+          p2_info = @p2_infos[ p2 ]
+          p2_info[ :paused ] = true
+        end
+      when @h_p1_underhalf then
+        return if data.bytesize < 9
+        p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_p1_underhalf #{ im } #{ p2_id }"
+        p2 = proxy_info[ :p2s ][ p2_id ]
+
+        if p2 && !p2.closed? then
+          add_read( p2 )
+          p2_info = @p2_infos[ p2 ]
+          p2_info[ :paused ] = false
+        end
+      when @h_src_overflow then
+        return if data.bytesize < 9
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_src_overflow #{ im } #{ src_id }"
+        src_info = proxy_info[ :src_infos ][ src_id ]
+
+        if src_info then
+          dst = src_info[ :dst ]
+
+          if dst && !dst.closed? then
+            @reads.delete( dst )
+            dst_info = @dst_infos[ dst ]
+            dst_info[ :paused ] = true
+          end
+        end
+      when @h_src_underhalf then
+        return if data.bytesize < 9
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_src_underhalf #{ im } #{ src_id }"
+        src_info = proxy_info[ :src_infos ][ src_id ]
+
+        if src_info then
+          dst = src_info[ :dst ]
+
+          if dst && !dst.closed? then
+            add_read( dst )
+            dst_info = @dst_infos[ dst ]
+            dst_info[ :paused ] = false
+          end
+        end
       end
     end
 
@@ -632,6 +688,7 @@ module Girl
         domain: domain,
         im: im,
         ip: ip,
+        paused: false,
         port: port,
         proxy: proxy,
         rbuffs: [],
@@ -829,7 +886,7 @@ module Girl
       proxy_info = @proxy_infos[ proxy ]
 
       if proxy_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "pause dst #{ im } #{ dst_info[ :domain ] }"
+        puts "pause dst #{ im } #{ src_id } #{ dst_info[ :domain ] }"
         @reads.delete( dst )
         proxy_info[ :pause_domains ][ dst ] = dst_info[ :domain ]
       end
@@ -963,7 +1020,7 @@ module Girl
       proxy_info = @proxy_infos[ proxy ]
 
       if proxy_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "pause p2 #{ im }"
+        puts "pause p2 #{ im } #{ p2_id }"
         @reads.delete( p2 )
         proxy_info[ :pause_p2_ids ][ p2 ] = p2_id
       end
@@ -987,6 +1044,7 @@ module Girl
         addrinfo: addrinfo,
         im: im,
         p2_id: p2_id,
+        paused: false,
         wbuff: ''
       }
 
@@ -1416,8 +1474,12 @@ module Girl
       if proxy_info[ :wbuff ].bytesize < RESUME_BELOW then
         if proxy_info[ :pause_domains ].any? then
           proxy_info[ :pause_domains ].each do | dst, domain |
-            puts "resume dst #{ im } #{ domain }"
-            add_read( dst )
+            dst_info = @dst_infos[ dst ]
+
+            if dst_info && !dst_info[ :paused ] then
+              puts "resume dst #{ im } #{ dst_info[ :src_id ] } #{ domain }"
+              add_read( dst )
+            end
           end
 
           proxy_info[ :pause_domains ].clear
@@ -1425,8 +1487,12 @@ module Girl
 
         if proxy_info[ :pause_p2_ids ].any? then
           proxy_info[ :pause_p2_ids ].each do | p2, p2_id |
-            puts "resume p2 #{ im } #{ p2_id }"
-            add_read( p2 )
+            p2_info = @p2_infos[ p2 ]
+
+            if p2_info && !p2_info[ :paused ] then
+              puts "resume p2 #{ im } #{ p2_id }"
+              add_read( p2 )
+            end
           end
 
           proxy_info[ :pause_p2_ids ].clear
