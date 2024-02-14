@@ -55,8 +55,8 @@ module Girl
       @updates = {}          # sock => updated_at
       @proxy_infos = {}      # proxy => { :is_syn :pause_domains :pause_p2_ids :rbuff :recv_at :srcs :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
-      @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :overflowing :paused :proxy_proto :proxy_type :rbuff :src_id :wbuff }
-      @dst_infos = {}        # dst => { :closing :connected :domain :ip :paused :port :src :wbuff }
+      @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :overflowing :proxy_proto :proxy_type :rbuff :src_id :wbuff }
+      @dst_infos = {}        # dst => { :closing :connected :domain :ip :overflowing :port :src :wbuff }
       @dns_infos = {}        # dns => { :domain :src }
       @rsv_infos = {}        # rsv => { :addrinfo :domain :type }
       @near_infos = {}       # near_id => { :addrinfo :created_at :domain :id :type }
@@ -174,19 +174,15 @@ module Girl
       return if dst.nil? || dst.closed? || data.empty?
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
-      add_write( dst )
-      return if dst.closed?
+      bytesize = dst_info[ :wbuff ].bytesize
 
-      if dst_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        src = dst_info[ :src ]
-
-        if src && !src.closed? then
-          src_info = @src_infos[ src ]
-          puts "pause direct src #{ src_info[ :destination_domain ] }"
-          @reads.delete( src )
-          src_info[ :paused ] = true
-        end
+      if !dst_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
+        puts "pause src while dst overflow #{ dst_info[ :domain ] } #{ bytesize / 1024 / 1024 }M"
+        @reads.delete( dst_info[ :src ] )
+        dst_info[ :overflowing ] = true
       end
+
+      add_write( dst )
     end
 
     def add_mem_wbuff( mem, data )
@@ -212,8 +208,8 @@ module Girl
         puts "p1 #{ p2_id } #{ bytesize / 1024 / 1024 }M" if @is_debug
 
         unless p1_info[ :overflowing ] then
-          puts "p1 overflow #{ p2_id } #{ bytesize / 1024 / 1024 }M"
           p1_info[ :overflowing ] = true
+          puts "add h_p1_overflow #{ p2_id } #{ bytesize / 1024 / 1024 }M"
           msg = "#{ @h_p1_overflow }#{ [ p2_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( pack_a_chunk( msg ) )
         end
@@ -280,15 +276,17 @@ module Girl
         return
       end
 
-      if bytesize >= WBUFF_LIMIT then
-        puts "src #{ src_id } #{ bytesize / 1024 / 1024 }M" if @is_debug
-
-        unless src_info[ :overflowing ] then
-          puts "src overflow #{ src_id } #{ bytesize / 1024 / 1024 }M"
-          src_info[ :overflowing ] = true
+      if !src_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
+        if src_info[ :proxy_type ] == :direct then
+          puts "pause dst while src overflow #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
+          @reads.delete( src_info[ :dst ] )
+        elsif src_info[ :proxy_type ] == :remote then
+          puts "add h_src_overflow #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
           msg = "#{ @h_src_overflow }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( pack_a_chunk( msg ) )
         end
+
+        src_info[ :overflowing ] = true
       end
 
       add_write( src )
@@ -438,11 +436,11 @@ module Girl
       src_info = @src_infos.delete( src )
       src_id = src_info[ :src_id ]
       puts "close src #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }" if @is_debug
-      dst = src_info[ :dst ]
-
-      if dst then
+      
+      if src_info[ :proxy_type ] == :direct then
+        dst = src_info[ :dst ]
         set_dst_closing( dst )
-      elsif !@proxy.closed? then
+      elsif ( src_info[ :proxy_type ] == :remote ) && !@proxy.closed? then
         proxy_info = @proxy_infos[ @proxy ]
 
         if proxy_info[ :srcs ].delete( src_id ) then
@@ -641,7 +639,6 @@ module Girl
         connected: false,
         domain: domain,
         ip: ip,
-        paused: false,
         port: port,
         src: src,
         wbuff: ''
@@ -1048,9 +1045,10 @@ module Girl
       # puts "read p1 #{ p2_id } #{ data.bytesize }" if @is_debug
       add_proxy_wbuff( pack_p2_traffic( p2_id, data ) )
       proxy_info = @proxy_infos[ @proxy ]
+      bytesize = proxy_info[ :wbuff ].bytesize
 
-      if proxy_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-        puts "pause p1 #{ p2_id }"
+      if bytesize >= WBUFF_LIMIT then
+        puts "pause p1 while proxy overflow #{ p2_id } #{ bytesize / 1024 / 1024 }M"
         @reads.delete( p1 )
         proxy_info[ :pause_p2_ids ][ p1 ] = p2_id
       end
@@ -1096,7 +1094,6 @@ module Girl
         dst: nil,
         is_connect: true,
         overflowing: false,
-        paused: false,
         proxy_proto: :uncheck, # :uncheck / :http / :socks5
         proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
         rbuff: '',
@@ -1366,9 +1363,10 @@ module Girl
         src_id = src_info[ :src_id ]
         add_proxy_wbuff( pack_traffic( src_id, data ) )
         proxy_info = @proxy_infos[ @proxy ]
+        bytesize = proxy_info[ :wbuff ].bytesize
 
-        if proxy_info[ :wbuff ].bytesize >= WBUFF_LIMIT then
-          puts "pause src #{ src_info[ :destination_domain ] }"
+        if bytesize >= WBUFF_LIMIT then
+          puts "pause src while proxy overflow #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
           @reads.delete( src )
           proxy_info[ :pause_domains ][ src ] = src_info[ :destination_domain ]
         end
@@ -1418,7 +1416,6 @@ module Girl
         dst: nil,
         is_connect: true,
         overflowing: false,
-        paused: false,
         proxy_proto: :uncheck, # :uncheck / :http / :socks5
         proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
         rbuff: '',
@@ -1635,16 +1632,12 @@ module Girl
       set_update( dst )
       data = data[ written..-1 ]
       dst_info[ :wbuff ] = data
-      src = dst_info[ :src ]
+      bytesize = dst_info[ :wbuff ].bytesize
 
-      if src && !src.closed? then
-        src_info = @src_infos[ src ]
-
-        if src_info[ :paused ] && ( dst_info[ :wbuff ].bytesize < RESUME_BELOW ) then
-          puts "resume direct src #{ src_info[ :destination_domain ] }"
-          add_read( src )
-          src_info[ :paused ] = false unless src.closed?
-        end
+      if dst_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
+        puts "resume src while dst underhalf #{ dst_info[ :domain ] } #{ bytesize / 1024 / 1024 }M"
+        add_read( dst_info[ :src ] )
+        dst_info[ :overflowing ] = false
       end
     end
 
@@ -1713,10 +1706,10 @@ module Girl
 
       if p1_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
         p2_id = p1_info[ :p2_id ]
-        puts "p1 underhalf #{ p2_id } #{ bytesize / 1024 / 1024 }M"
-        p1_info[ :overflowing ] = false
+        puts "add h_p1_underhalf #{ p2_id } #{ bytesize / 1024 / 1024 }M"
         msg = "#{ @h_p1_underhalf }#{ [ p2_id ].pack( 'Q>' ) }"
         add_proxy_wbuff( pack_a_chunk( msg ) )
+        p1_info[ :overflowing ] = false
       end
     end
 
@@ -1809,10 +1802,17 @@ module Girl
       
       if src_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
         src_id = src_info[ :src_id ]
-        puts "src underhalf #{ src_id } #{ bytesize / 1024 / 1024 }M"
+
+        if src_info[ :proxy_type ] == :direct then
+          puts "resume dst while src underhalf #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
+          add_read( src_info[ :dst ] )
+        else
+          puts "add h_src_underhalf #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
+          msg = "#{ @h_src_underhalf }#{ [ src_id ].pack( 'Q>' ) }"
+          add_proxy_wbuff( pack_a_chunk( msg ) )
+        end
+
         src_info[ :overflowing ] = false
-        msg = "#{ @h_src_underhalf }#{ [ src_id ].pack( 'Q>' ) }"
-        add_proxy_wbuff( pack_a_chunk( msg ) )
       end
     end
 
