@@ -22,14 +22,18 @@ module Girl
       h_p1_close,
       h_p2_close,
       h_p2_traffic,
+      h_p1_overflow,
+      h_p1_underhalf,
+      h_p2_overflow,
+      h_p2_underhalf,
       h_query,
       h_response,
       h_src_close,
       h_traffic,
-      h_p1_overflow,
-      h_p1_underhalf,
       h_src_overflow,
       h_src_underhalf,
+      h_dst_overflow,
+      h_dst_underhalf,
       expire_connecting,
       expire_long_after,
       expire_proxy_after,
@@ -43,17 +47,17 @@ module Girl
       @proxyd_addr = Socket.sockaddr_in( proxyd_port, proxyd_host )
       @nameserver_addrs = nameservers.map{ | n | Socket.sockaddr_in( 53, n ) }
       @im = im
+      @directs = directs
+      @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
       @update_roles = [ :dns, :dst, :mem, :p1, :src, :rsv ] # 参与淘汰的角色
       @updates_limit = 1008  # 淘汰池上限，1015(mac) - info, infod, memd, proxy, redir, rsvd, tspd
       @eliminate_count = 0   # 淘汰次数
-      @directs = directs
-      @remotes = remotes
       @reads = []            # 读池
       @writes = []           # 写池
       @roles = {}            # sock =>  :dns / :dst / :infod / :mem / :memd / :p1 / :proxy / :redir / :rsv / :rsvd / :src / :tspd
       @updates = {}          # sock => updated_at
-      @proxy_infos = {}      # proxy => { :is_syn :pause_domains :pause_p2_ids :rbuff :recv_at :srcs :wbuff }
+      @proxy_infos = {}      # proxy => { :is_syn :rbuff :recv_at :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
       @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :overflowing :proxy_proto :proxy_type :rbuff :src_id :wbuff }
       @dst_infos = {}        # dst => { :closing :connected :domain :ip :overflowing :port :src :wbuff }
@@ -75,14 +79,18 @@ module Girl
       @h_p1_close = h_p1_close
       @h_p2_close = h_p2_close
       @h_p2_traffic = h_p2_traffic
+      @h_p1_overflow = h_p1_overflow
+      @h_p1_underhalf = h_p1_underhalf
+      @h_p2_overflow = h_p2_overflow
+      @h_p2_underhalf = h_p2_underhalf
       @h_query = h_query
       @h_response = h_response
       @h_src_close = h_src_close
       @h_traffic = h_traffic
-      @h_p1_overflow = h_p1_overflow
-      @h_p1_underhalf = h_p1_underhalf
       @h_src_overflow = h_src_overflow
       @h_src_underhalf = h_src_underhalf
+      @h_dst_overflow = h_dst_overflow
+      @h_dst_underhalf = h_dst_underhalf
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
       @expire_proxy_after = expire_proxy_after
@@ -171,13 +179,13 @@ module Girl
     private
 
     def add_dst_wbuff( dst, data )
-      return if dst.nil? || dst.closed? || data.empty?
+      return if dst.nil? || dst.closed? || data.nil? || data.empty?
       dst_info = @dst_infos[ dst ]
       dst_info[ :wbuff ] << data
       bytesize = dst_info[ :wbuff ].bytesize
 
       if !dst_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
-        puts "pause src while dst overflow #{ dst_info[ :domain ] } #{ bytesize / 1024 / 1024 }M"
+        puts "dst overflow #{ dst_info[ :domain ] }"
         @reads.delete( dst_info[ :src ] )
         dst_info[ :overflowing ] = true
       end
@@ -186,42 +194,47 @@ module Girl
     end
 
     def add_mem_wbuff( mem, data )
-      return if mem.nil? || mem.closed? || data.empty?
+      return if mem.nil? || mem.closed? || data.nil? || data.empty?
       mem_info = @mem_infos[ mem ]
       mem_info[ :wbuff ] << data
       add_write( mem )
     end
 
     def add_p1_wbuff( p1, data )
-      return if p1.nil? || p1.closed? || data.empty?
+      return if p1.nil? || p1.closed? || data.nil? || data.empty?
       p1_info = @p1_infos[ p1 ]
+      p1_info[ :wbuff ] << data
       bytesize = p1_info[ :wbuff ].bytesize
       p2_id = p1_info[ :p2_id ]
 
       if bytesize >= CLOSE_ABOVE then
-        puts "close overflow p1 #{ p2_id } #{ bytesize / 1024 / 1024 }M"
+        puts "close overflow p1 #{ p2_id }"
         close_p1( p1 )
         return
       end
 
-      if bytesize >= WBUFF_LIMIT then
-        puts "p1 #{ p2_id } #{ bytesize / 1024 / 1024 }M" if @is_debug
-
-        unless p1_info[ :overflowing ] then
-          p1_info[ :overflowing ] = true
-          puts "add h_p1_overflow #{ p2_id } #{ bytesize / 1024 / 1024 }M"
-          msg = "#{ @h_p1_overflow }#{ [ p2_id ].pack( 'Q>' ) }"
-          add_proxy_wbuff( pack_a_chunk( msg ) )
-        end
+      if !p1_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
+        puts "add h_p1_overflow #{ p2_id }"
+        msg = "#{ @h_p1_overflow }#{ [ p2_id ].pack( 'Q>' ) }"
+        add_proxy_wbuff( pack_a_chunk( msg ) )
+        p1_info[ :overflowing ] = true
       end
-
+      
       add_write( p1 )
     end
 
     def add_proxy_wbuff( data )
-      return if data.empty? || @proxy.closed?
+      return if @proxy.closed? || data.nil? || data.empty?
       proxy_info = @proxy_infos[ @proxy ]
       proxy_info[ :wbuff ] << data
+      bytesize = proxy_info[ :wbuff ].bytesize
+
+      if bytesize >= CLOSE_ABOVE then
+        puts "close overflow proxy"
+        close_proxy( @proxy )
+        return
+      end
+
       add_write( @proxy )
     end
 
@@ -252,7 +265,7 @@ module Girl
     end
 
     def add_src_rbuff( src, data )
-      return if src.nil? || src.closed? || data.empty?
+      return if src.nil? || src.closed? || data.nil? || data.empty?
       src_info = @src_infos[ src ]
       puts "add src rbuff #{ data.bytesize }" if @is_debug
       src_info[ :rbuff ] << data
@@ -264,24 +277,25 @@ module Girl
     end
 
     def add_src_wbuff( src, data )
-      return if src.nil? || src.closed? || data.empty?
+      return if src.nil? || src.closed? || data.nil? || data.empty?
       src_info = @src_infos[ src ]
       src_info[ :wbuff ] << data
       bytesize = src_info[ :wbuff ].bytesize
       src_id = src_info[ :src_id ]
+      domain = src_info[ :destination_domain ]
 
       if bytesize >= CLOSE_ABOVE then
-        puts "close overflow src #{ src_id } #{ bytesize / 1024 / 1024 }M"
+        puts "close overflow src #{ src_id } #{ domain }"
         close_src( src )
         return
       end
 
       if !src_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
         if src_info[ :proxy_type ] == :direct then
-          puts "pause dst while src overflow #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
+          puts "src overflow #{ src_id } #{ domain }"
           @reads.delete( src_info[ :dst ] )
         elsif src_info[ :proxy_type ] == :remote then
-          puts "add h_src_overflow #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
+          puts "add h_src_overflow #{ src_id } #{ domain }"
           msg = "#{ @h_src_overflow }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( pack_a_chunk( msg ) )
         end
@@ -377,7 +391,7 @@ module Girl
       return nil if dst.nil? || dst.closed?
       close_sock( dst )
       dst_info = @dst_infos.delete( dst )
-      puts "close dst #{ dst_info[ :domain ] } #{ dst_info[ :port ] }" if @is_debug
+      puts "close dst #{ dst_info[ :domain ] }" if @is_debug
       set_src_closing( dst_info[ :src ] ) if dst_info
       dst_info
     end
@@ -392,10 +406,9 @@ module Girl
       return nil if p1.nil? || p1.closed?
       close_sock( p1 )
       p1_info = @p1_infos.delete( p1 )
-      p2_id = p1_info[ :p2_id ]
-      puts "close p1 #{ p2_id }"
-
-      unless p1_info[ :closing ] then
+      
+      unless @proxy.closed? then
+        p2_id = p1_info[ :p2_id ]
         puts "add h_p1_close #{ p2_id }"
         msg = "#{ @h_p1_close }#{ [ p2_id ].pack( 'Q>' ) }"
         add_proxy_wbuff( pack_a_chunk( msg ) )
@@ -409,7 +422,8 @@ module Girl
       close_sock( proxy )
       proxy_info = @proxy_infos.delete( proxy )
       puts "close proxy"
-      proxy_info[ :srcs ].values.each{ | src | close_src( src ) }
+      @src_infos.each{ | src, _ | close_src( src ) }
+      @p1_infos.each{ | p1, _ | close_p1( p1 ) }
       proxy_info
     end
 
@@ -435,19 +449,15 @@ module Girl
       close_sock( src )
       src_info = @src_infos.delete( src )
       src_id = src_info[ :src_id ]
-      puts "close src #{ src_info[ :destination_domain ] } #{ src_info[ :destination_port ] }" if @is_debug
+      domain = src_info[ :destination_domain ]
+      puts "close src #{ domain }" if @is_debug
       
       if src_info[ :proxy_type ] == :direct then
-        dst = src_info[ :dst ]
-        set_dst_closing( dst )
+        set_dst_closing( src_info[ :dst ] )
       elsif ( src_info[ :proxy_type ] == :remote ) && !@proxy.closed? then
-        proxy_info = @proxy_infos[ @proxy ]
-
-        if proxy_info[ :srcs ].delete( src_id ) then
-          puts "add h_src_close #{ src_id }" if @is_debug
-          msg = "#{ @h_src_close }#{ [ src_id ].pack( 'Q>' ) }"
-          add_proxy_wbuff( pack_a_chunk( msg ) )
-        end
+        puts "add h_src_close #{ src_id }" if @is_debug
+        msg = "#{ @h_src_close }#{ [ src_id ].pack( 'Q>' ) }"
+        add_proxy_wbuff( pack_a_chunk( msg ) )
       end
 
       src_info
@@ -470,7 +480,7 @@ module Girl
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         puts "got h_dst_close #{ src_id }" if @is_debug
-        src = proxy_info[ :srcs ].delete( src_id )
+        src, _ = @src_infos.find{ | _, info | info[ :src_id ] == src_id }
         set_src_closing( src )
       when @h_heartbeat then
         puts "got h_heartbeat" if @is_debug
@@ -487,6 +497,18 @@ module Girl
         # puts "got h_p2_traffic #{ p2_id } #{ data.bytesize }" if @is_debug
         p1, _ = @p1_infos.find{ | _, info | info[ :p2_id ] == p2_id }
         add_p1_wbuff( p1, data )
+      when @h_p2_overflow then
+        return if data.bytesize < 9
+        p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_p2_overflow #{ p2_id }"
+        p1, _ = @p1_infos.find{ | _, info | info[ :p2_id ] == p2_id }
+        @reads.delete( p1 )
+      when @h_p2_underhalf then
+        return if data.bytesize < 9
+        p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_p2_underhalf #{ p2_id }"
+        p1, _ = @p1_infos.find{ | _, info | info[ :p2_id ] == p2_id }
+        add_read( p1 )
       when @h_response then
         return if data.bytesize < 3
         near_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -517,12 +539,24 @@ module Girl
           end
         end
       when @h_traffic then
-        return if data.bytesize < 3
+        return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
         data = data[ 9..-1 ]
         # puts "got h_traffic #{ src_id } #{ data.bytesize }" if @is_debug
-        src = proxy_info[ :srcs ][ src_id ]
+        src, _ = @src_infos.find{ | _, info | info[ :src_id ] == src_id }
         add_src_wbuff( src, data )
+      when @h_dst_overflow then
+        return if data.bytesize < 9
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_dst_overflow #{ src_id }"
+        src, _ = @src_infos.find{ | _, info | info[ :src_id ] == src_id }
+        @reads.delete( src )
+      when @h_dst_underhalf then
+        return if data.bytesize < 9
+        src_id = data[ 1, 8 ].unpack( 'Q>' ).first
+        puts "got h_dst_underhalf #{ src_id }"
+        src, _ = @src_infos.find{ | _, info | info[ :src_id ] == src_id }
+        add_read( src )
       end
     end
 
@@ -639,6 +673,7 @@ module Girl
         connected: false,
         domain: domain,
         ip: ip,
+        overflowing: false,
         port: port,
         src: src,
         wbuff: ''
@@ -663,7 +698,7 @@ module Girl
       data = src_info[ :rbuff ].dup
 
       unless data.empty? then
-        puts "move src rbuff to dst #{ domain } #{ port } #{ data.bytesize }" if @is_debug
+        puts "move src rbuff to dst #{ domain } #{ data.bytesize }" if @is_debug
         add_dst_wbuff( dst, data )
       end
     end
@@ -752,11 +787,8 @@ module Girl
 
       proxy_info = {
         is_syn: @is_client_fastopen,
-        pause_domains: {},  # src => destination_domain
-        pause_p2_ids: {},   # p1 => p2_id
         rbuff: '',
         recv_at: nil,
-        srcs: {},           # src_id => src
         wbuff: head
       }
 
@@ -1044,14 +1076,6 @@ module Girl
       p2_id = p1_info[ :p2_id ]
       # puts "read p1 #{ p2_id } #{ data.bytesize }" if @is_debug
       add_proxy_wbuff( pack_p2_traffic( p2_id, data ) )
-      proxy_info = @proxy_infos[ @proxy ]
-      bytesize = proxy_info[ :wbuff ].bytesize
-
-      if bytesize >= WBUFF_LIMIT then
-        puts "pause p1 while proxy overflow #{ p2_id } #{ bytesize / 1024 / 1024 }M"
-        @reads.delete( p1 )
-        proxy_info[ :pause_p2_ids ][ p1 ] = p2_id
-      end
     end
 
     def read_proxy( proxy )
@@ -1362,14 +1386,6 @@ module Girl
       when :remote then
         src_id = src_info[ :src_id ]
         add_proxy_wbuff( pack_traffic( src_id, data ) )
-        proxy_info = @proxy_infos[ @proxy ]
-        bytesize = proxy_info[ :wbuff ].bytesize
-
-        if bytesize >= WBUFF_LIMIT then
-          puts "pause src while proxy overflow #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
-          @reads.delete( src )
-          proxy_info[ :pause_domains ][ src ] = src_info[ :destination_domain ]
-        end
       when :direct then
         dst = src_info[ :dst ]
 
@@ -1543,18 +1559,16 @@ module Girl
       end
 
       src_id = src_info[ :src_id ]
-      destination_domain = src_info[ :destination_domain ]
-      destination_port = src_info[ :destination_port ]
-      domain_port = [ destination_domain, destination_port ].join( ':' )
+      domain = src_info[ :destination_domain ]
+      port = src_info[ :destination_port ]
+      domain_port = [ domain, port ].join( ':' )
       puts "add h_a_new_source #{ src_id } #{ domain_port }" if @is_debug
       msg = "#{ @h_a_new_source }#{ [ src_id ].pack( 'Q>' ) }#{ domain_port }"
       add_proxy_wbuff( pack_a_chunk( msg ) )
-      proxy_info = @proxy_infos[ @proxy ]
-      proxy_info[ :srcs ][ src_id ] = src
       data = src_info[ :rbuff ].dup
 
       unless data.empty? then
-        puts "move src rbuff to proxy #{ destination_domain } #{ destination_port } #{ data.bytesize }" if @is_debug
+        puts "move src rbuff to proxy #{ domain } #{ data.bytesize }" if @is_debug
         add_proxy_wbuff( pack_traffic( src_id, data ) )
       end
     end
@@ -1635,7 +1649,7 @@ module Girl
       bytesize = dst_info[ :wbuff ].bytesize
 
       if dst_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
-        puts "resume src while dst underhalf #{ dst_info[ :domain ] } #{ bytesize / 1024 / 1024 }M"
+        puts "dst underhalf #{ dst_info[ :domain ] }"
         add_read( dst_info[ :src ] )
         dst_info[ :overflowing ] = false
       end
@@ -1706,7 +1720,7 @@ module Girl
 
       if p1_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
         p2_id = p1_info[ :p2_id ]
-        puts "add h_p1_underhalf #{ p2_id } #{ bytesize / 1024 / 1024 }M"
+        puts "add h_p1_underhalf #{ p2_id }"
         msg = "#{ @h_p1_underhalf }#{ [ p2_id ].pack( 'Q>' ) }"
         add_proxy_wbuff( pack_a_chunk( msg ) )
         p1_info[ :overflowing ] = false
@@ -1745,26 +1759,6 @@ module Girl
       set_update( proxy )
       data = data[ written..-1 ]
       proxy_info[ :wbuff ] = data
-
-      if proxy_info[ :wbuff ].bytesize < RESUME_BELOW then
-        if proxy_info[ :pause_domains ].any? then
-          proxy_info[ :pause_domains ].each do | src, domain |
-            puts "resume src #{ domain }"
-            add_read( src )
-          end
-
-          proxy_info[ :pause_domains ].clear
-        end
-
-        if proxy_info[ :pause_p2_ids ].any? then
-          proxy_info[ :pause_p2_ids ].each do | p1, p2_id |
-            puts "resume p1 #{ im } #{ p2_id }"
-            add_read( p1 )
-          end
-
-          proxy_info[ :pause_p2_ids ].clear
-        end
-      end
     end
 
     def write_src( src )
@@ -1802,12 +1796,13 @@ module Girl
       
       if src_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
         src_id = src_info[ :src_id ]
+        domain = src_info[ :destination_domain ]
 
         if src_info[ :proxy_type ] == :direct then
-          puts "resume dst while src underhalf #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
+          puts "src underhalf #{ src_id } #{ domain }"
           add_read( src_info[ :dst ] )
         else
-          puts "add h_src_underhalf #{ src_id } #{ src_info[ :destination_domain ] } #{ bytesize / 1024 / 1024 }M"
+          puts "add h_src_underhalf #{ src_id } #{ domain }"
           msg = "#{ @h_src_underhalf }#{ [ src_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( pack_a_chunk( msg ) )
         end
