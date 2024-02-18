@@ -19,10 +19,6 @@ girl.gemspec
 lib/girl.rb
 lib/girl/dns.rb
 lib/girl/head.rb
-lib/girl/mirrord_worker.rb
-lib/girl/mirrord.rb
-lib/girl/p1_worker.rb
-lib/girl/p1.rb
 lib/girl/proxy_worker.rb
 lib/girl/proxy.rb
 lib/girl/proxyd_worker.rb

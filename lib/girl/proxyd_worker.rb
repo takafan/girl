@@ -47,7 +47,7 @@ module Girl
       @writes = []         # 写池
       @roles = {}          # sock => :dns / :dst / :infod / :mem / :memd / :p2 / :p2d / :proxy / :proxyd / :rsv
       @updates = {}        # sock => updated_at
-      @proxy_infos = {}    # proxy => { :addrinfo :im :rbuff :src_infos :wbuff }
+      @proxy_infos = {}    # proxy => { :addrinfo :im :paused_dsts :paused_p2s :rbuff :src_infos :wbuff }
       @im_infos = {}       # im => { :addrinfo :in :out :p2d :p2d_host :p2d_port :proxy }
       @mem_infos = {}      # mem => { :wbuff }
       @dst_infos = {}      # dst => { :closing :connected :domain :im :ip :overflowing :port :proxy :rbuffs :src_id :wbuff }
@@ -347,12 +347,11 @@ module Girl
 
       unless proxy.closed? then
         proxy_info = @proxy_infos[ proxy ]
-        
-        if proxy_info[ :src_infos ].delete( src_id ) then
-          puts "add h_dst_close #{ im } #{ src_id }" if @is_debug
-          msg = "#{ @h_dst_close }#{ [ src_id ].pack( 'Q>' ) }"
-          add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
-        end
+        proxy_info[ :paused_dsts ].delete( dst )
+        proxy_info[ :src_infos ].delete( src_id )
+        puts "add h_dst_close #{ im } #{ src_id }" if @is_debug
+        msg = "#{ @h_dst_close }#{ [ src_id ].pack( 'Q>' ) }"
+        add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
       end
 
       dst_info
@@ -377,6 +376,8 @@ module Girl
         proxy = im_info[ :proxy ]
 
         if proxy && !proxy.closed? then
+          proxy_info = @proxy_infos[ proxy ]
+          proxy_info[ :paused_p2s ].delete( p2 )
           puts "add h_p2_close #{ im } #{ p2_id }"
           msg = "#{ @h_p2_close }#{ [ p2_id ].pack( 'Q>' ) }"
           add_proxy_wbuff( proxy, pack_a_chunk( msg ) )
@@ -453,9 +454,10 @@ module Girl
       when @h_p1_overflow then
         return if data.bytesize < 9
         p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        puts "got h_p1_overflow #{ im } #{ p2_id }"
+        puts "got h_p1_overflow pause p2 #{ im } #{ p2_id }"
         p2, _ = @p2_infos.find{ | _, info | ( info[ :im ] == im ) && ( info[ :p2_id ] == p2_id ) }
         @reads.delete( p2 )
+        proxy_info[ :paused_p2s ].delete( p2 )
       when @h_p1_underhalf then
         return if data.bytesize < 9
         p2_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -501,9 +503,16 @@ module Girl
       when @h_src_overflow then
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
-        puts "got h_src_overflow #{ im } #{ src_id }"
+        puts "got h_src_overflow pause dst #{ im } #{ src_id }"
         src_info = proxy_info[ :src_infos ][ src_id ]
-        @reads.delete( src_info[ :dst ] ) if src_info
+
+        if src_info then
+          dst = src_info[ :dst ]
+          @reads.delete( dst )
+          # 远端收取目的地比传给近端快，近端收取远端又比传给客户端快（2g wifi），流量即在远端proxy堆积，又在近端src堆积
+          # 这种情况只等待近端src降半，等到降半消息才恢复读dst，忽略proxy降半
+          proxy_info[ :paused_dsts ].delete( dst )
+        end
       when @h_src_underhalf then
         return if data.bytesize < 9
         src_id = data[ 1, 8 ].unpack( 'Q>' ).first
@@ -812,6 +821,17 @@ module Girl
       im_info[ :in ] += data.bytesize if im_info
       src_id = dst_info[ :src_id ]
       add_proxy_wbuff( proxy, pack_traffic( src_id, data ) )
+
+      unless proxy.closed? then
+        proxy_info = @proxy_infos[ proxy ]
+        bytesize = proxy_info[ :wbuff ].bytesize
+
+        if ( bytesize >= WBUFF_LIMIT ) && !proxy_info[ :paused_dsts ].include?( dst ) then
+          puts "proxy overflow pause dst #{ im } #{ src_id } #{ dst_info[ :domain ] }"
+          @reads.delete( dst )
+          proxy_info[ :paused_dsts ] << dst
+        end
+      end
     end
 
     def read_infod( infod )
@@ -933,6 +953,17 @@ module Girl
       proxy = im_info[ :proxy ]
       p2_id = p2_info[ :p2_id ]
       add_proxy_wbuff( proxy, pack_p2_traffic( p2_id, data ) )
+
+      unless proxy.closed? then
+        proxy_info = @proxy_infos[ proxy ]
+        bytesize = proxy_info[ :wbuff ].bytesize
+
+        if ( bytesize >= WBUFF_LIMIT ) && !proxy_info[ :paused_p2s ].include?( p2 ) then
+          puts "proxy overflow pause p2 #{ im } #{ p2_id }"
+          @reads.delete( p2 )
+          proxy_info[ :paused_p2s ] << p2
+        end
+      end
     end
 
     def read_p2d( p2d )
@@ -1070,6 +1101,8 @@ module Girl
       proxy_info = {
         addrinfo: addrinfo,
         im: nil,
+        paused_dsts: [],
+        paused_p2s: [],
         rbuff: '',
         src_infos: {}, # src_id => { :created_at :dst :rbuff }
         wbuff: ''
@@ -1355,6 +1388,21 @@ module Girl
       im_info[ :out ] += written if im_info
       data = data[ written..-1 ]
       proxy_info[ :wbuff ] = data
+      bytesize = proxy_info[ :wbuff ].bytesize
+
+      if bytesize < RESUME_BELOW then
+        if proxy_info[ :paused_dsts ].any? then
+          puts "proxy underhalf resume dsts #{ im } #{ proxy_info[ :paused_dsts ].size }"
+          proxy_info[ :paused_dsts ].each{ | dst | add_read( dst ) }
+          proxy_info[ :paused_dsts ].clear
+        end
+  
+        if proxy_info[ :paused_p2s ].any? then
+          puts "proxy underhalf resume p2s #{ im } #{ proxy_info[ :paused_p2s ].size }"
+          proxy_info[ :paused_p2s ].each{ | p2 | add_read( p2 ) }
+          proxy_info[ :paused_p2s ].clear
+        end
+      end
     end
 
   end

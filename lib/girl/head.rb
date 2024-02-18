@@ -17,8 +17,4 @@ module Girl
 192.168.0.0/16
 255.255.255.255/32
 EOF
-  ROOM_TITLE_LIMIT          = 16    # 房间名称字数
-  CHECK_APP_EXPIRE_INTERVAL = 3600  # 检查app过期间隔
-  EXPIRE_APP_AFTER          = 86400 # app多久没有新流量，过期
-  RENEW_CTL_INTERVAL        = 10    # p1心跳间隔
 end
