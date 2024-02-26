@@ -270,8 +270,9 @@ config dnsmasq
 其它linux：`vi /etc/dnsmasq.d/girl.conf`
 
 ```conf
+listen-address=10.8.0.1
 no-resolv
-server=127.0.0.1#7777
+server=127.0.0.1#5077
 ```
 
 设备端dns只设妹子一个，避免解析到假ip。
