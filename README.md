@@ -74,7 +74,7 @@ ruby proxyd.run.rb
 }
 ```
 
-### 近端，可以是本机，内网服务器，路由器，各种派:
+### 近端，可以是本机，内网服务器，路由器，各种派，也可以是国内vps:
 
 1. 安装ruby：
 
@@ -272,7 +272,9 @@ config dnsmasq
 ```conf
 listen-address=10.8.0.1
 no-resolv
-server=127.0.0.1#5077
+server=127.0.0.1#7777
 ```
 
 设备端dns只设妹子一个，避免解析到假ip。
+
+透明转发也可用于国内vps，配合openvpn，使手机在蜂窝网络上外网。
