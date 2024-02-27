@@ -267,7 +267,11 @@ config dnsmasq
         list server '127.0.0.1#7777'
 ```
 
-其它linux：`vi /etc/dnsmasq.d/girl.conf`
+设备端dns只设妹子一个，避免解析到假ip。
+
+透明转发也可用于国内vps，配合openvpn，使手机在蜂窝网络上外网。
+
+dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
 
 ```conf
 listen-address=10.8.0.1
@@ -275,6 +279,10 @@ no-resolv
 server=127.0.0.1#7777
 ```
 
-设备端dns只设妹子一个，避免解析到假ip。
+openvpn服务端配置添加redirect-gateway，它会要求客户端dns查询一律走vpn：
 
-透明转发也可用于国内vps，配合openvpn，使手机在蜂窝网络上外网。
+```conf
+server 10.8.0.0 255.255.255.0
+push "redirect-gateway def1"
+push "dhcp-option DNS 10.8.0.1"
+```
