@@ -283,6 +283,6 @@ openvpn服务端配置添加redirect-gateway，它会要求客户端dns查询一
 
 ```conf
 server 10.8.0.0 255.255.255.0
-push "redirect-gateway def1"
+push "redirect-gateway def1 bypass-dhcp"
 push "dhcp-option DNS 10.8.0.1"
 ```
