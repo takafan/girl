@@ -120,7 +120,7 @@ ruby proxy.run.rb
     "proxyd_port": 6060,                          // 远端端口
     "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
     "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
-    "nameserver": "192.168.1.1  114.114.114.114", // dns服务器，多个用空格分隔
+    "nameserver": "192.168.1.1  114.114.114.114", // 直连dns服务器，多个用空格分隔
     "im": "taka-pc"                               // 设备标识
 }
 ```
