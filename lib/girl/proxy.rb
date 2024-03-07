@@ -25,6 +25,7 @@ module Girl
       puts "load #{ config_path } #{ conf.inspect }"
       redir_port = conf[ :redir_port ]
       memd_port = conf[ :memd_port ]
+      relayd_port = conf[ :relayd_port ]
       tspd_port = conf[ :tspd_port ]
       proxyd_host = conf[ :proxyd_host ]
       proxyd_port = conf[ :proxyd_port ]
@@ -54,7 +55,7 @@ module Girl
       h_src_underhalf = conf[ :h_src_underhalf ] # V
       h_dst_overflow = conf[ :h_dst_overflow ]   # W
       h_dst_underhalf = conf[ :h_dst_underhalf ] # X
-      
+
       expire_connecting = conf[ :expire_connecting ]     # 连接多久没有建成关闭（秒）
       expire_long_after = conf[ :expire_long_after ]     # 长连接多久没有新流量关闭（秒）
       expire_proxy_after = conf[ :expire_proxy_after ]   # proxy多久没有收到流量重建（秒）
@@ -64,6 +65,7 @@ module Girl
 
       redir_port = redir_port ? redir_port.to_i : 6666
       memd_port = memd_port ? memd_port.to_i : redir_port + 1
+      relayd_port = relayd_port ? relayd_port.to_i : redir_port + 2
       tspd_port = tspd_port ? tspd_port.to_i : 7777
       raise "missing proxyd host" unless proxyd_host
       proxyd_port = proxyd_port ? proxyd_port.to_i : 6060
@@ -128,8 +130,8 @@ module Girl
         end
       end
 
-      puts "girl proxy #{ Girl::VERSION } #{ im }"
-      puts "#{ redir_port } #{ tspd_port } #{ proxyd_host } #{ proxyd_port } #{ appd_host } #{ appd_port } #{ nameservers.inspect } #{ is_client_fastopen } #{ is_server_fastopen }"
+      puts "girl proxy #{ Girl::VERSION } #{ im } #{ redir_port } #{ relayd_port } #{ tspd_port }"
+      puts "#{ proxyd_host } #{ proxyd_port } #{ appd_host } #{ appd_port } #{ nameservers.inspect } #{ is_client_fastopen } #{ is_server_fastopen }"
       puts "#{ direct_path } #{ directs.size } directs"
       puts "#{ remote_path } #{ remotes.size } remotes"
 
@@ -141,6 +143,7 @@ module Girl
       worker = Girl::ProxyWorker.new(
         redir_port,
         memd_port,
+        relayd_port,
         tspd_port,
         proxyd_host,
         proxyd_port,

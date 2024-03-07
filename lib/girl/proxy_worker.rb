@@ -5,6 +5,7 @@ module Girl
     def initialize(
       redir_port,
       memd_port,
+      relayd_port,
       tspd_port,
       proxyd_host,
       proxyd_port,
@@ -51,14 +52,16 @@ module Girl
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{ | info | info.ipv4? }.map{ | info | info.ip_address }
       @update_roles = [ :dns, :dst, :mem, :p1, :src, :rsv ] # 参与淘汰的角色
-      @updates_limit = 1008  # 淘汰池上限，1015(mac) - info, infod, memd, proxy, redir, rsvd, tspd
+      @updates_limit = 1007  # 淘汰池上限，1015(mac) - info, infod, memd, proxy, redir, relayd, rsvd, tspd
       @eliminate_count = 0   # 淘汰次数
       @reads = []            # 读池
       @writes = []           # 写池
-      @roles = {}            # sock =>  :dns / :dst / :infod / :mem / :memd / :p1 / :proxy / :redir / :rsv / :rsvd / :src / :tspd
+      @roles = {}            # sock =>  :dns / :dst / :girl / :infod / :mem / :memd / :p1 / :proxy / :redir / :relay / :relayd / :rsv / :rsvd / :src / :tspd
       @updates = {}          # sock => updated_at
       @proxy_infos = {}      # proxy => { :is_syn :paused_p1s :paused_srcs :rbuff :recv_at :wbuff }
       @mem_infos = {}        # mem => { :wbuff }
+      @relay_infos = {}      # relay => { :addrinfo :closing :girl :overflowing :wbuff }
+      @girl_infos = {}       # girl => { :closing :connected :is_syn :overflowing :relay :wbuff }
       @src_infos = {}        # src => { :addrinfo :closing :destination_domain :destination_port :dst :is_connect :overflowing :proxy_proto :proxy_type :rbuff :src_id :wbuff }
       @dst_infos = {}        # dst => { :closing :connected :domain :ip :overflowing :port :src :wbuff }
       @dns_infos = {}        # dns => { :domain :src }
@@ -103,6 +106,7 @@ module Girl
       new_a_redir( redir_port )
       new_a_infod( redir_port )
       new_a_memd( memd_port )
+      new_a_relayd( relayd_port )
       new_a_rsvd( tspd_port )
       new_a_tspd( tspd_port )
       new_a_proxy
@@ -123,6 +127,8 @@ module Girl
             read_dns( sock )
           when :dst then
             read_dst( sock )
+          when :girl then
+            read_girl( sock )
           when :infod then
             read_infod( sock )
           when :mem then
@@ -135,6 +141,10 @@ module Girl
             read_proxy( sock )
           when :redir then
             read_redir( sock )
+          when :relay then
+            read_relay( sock )
+          when :relayd then
+            read_relayd( sock )
           when :rsv then
             read_rsv( sock )
           when :rsvd then
@@ -154,12 +164,16 @@ module Girl
           case role
           when :dst then
             write_dst( sock )
+          when :girl then
+            write_girl( sock )
           when :mem then
             write_mem( sock )
           when :p1 then
             write_p1( sock )
           when :proxy then
             write_proxy( sock )
+          when :relay then
+            write_relay( sock )
           when :src then
             write_src( sock )
           else
@@ -184,6 +198,12 @@ module Girl
       dst_info[ :wbuff ] << data
       bytesize = dst_info[ :wbuff ].bytesize
 
+      if bytesize >= CLOSE_ABOVE then
+        puts "close overflow dst #{ dst_info[ :domain ] }"
+        close_dst( dst )
+        return
+      end
+
       if !dst_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
         puts "dst overflow pause src #{ dst_info[ :domain ] }"
         @reads.delete( dst_info[ :src ] )
@@ -191,6 +211,27 @@ module Girl
       end
 
       add_write( dst )
+    end
+
+    def add_girl_wbuff( girl, data )
+      return if girl.nil? || girl.closed? || data.nil? || data.empty?
+      girl_info = @girl_infos[ girl ]
+      girl_info[ :wbuff ] << data
+      bytesize = girl_info[ :wbuff ].bytesize
+
+      if bytesize >= CLOSE_ABOVE then
+        puts "close overflow girl"
+        close_girl( girl )
+        return
+      end
+
+      if !girl_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
+        puts "girl overflow pause relay"
+        @reads.delete( girl_info[ :relay ] )
+        girl_info[ :overflowing ] = true
+      end
+
+      add_write( girl )
     end
 
     def add_mem_wbuff( mem, data )
@@ -219,7 +260,7 @@ module Girl
         add_proxy_wbuff( pack_a_chunk( msg ) )
         p1_info[ :overflowing ] = true
       end
-      
+
       add_write( p1 )
     end
 
@@ -251,6 +292,27 @@ module Girl
       if @update_roles.include?( role ) then
         set_update( sock )
       end
+    end
+
+    def add_relay_wbuff( relay, data )
+      return if relay.nil? || relay.closed? || data.nil? || data.empty?
+      relay_info = @relay_infos[ relay ]
+      relay_info[ :wbuff ] << data
+      bytesize = relay_info[ :wbuff ].bytesize
+
+      if bytesize >= CLOSE_ABOVE then
+        puts "close overflow relay #{ relay_info[ :addrinfo ].ip_unpack.inspect }"
+        close_relay( relay )
+        return
+      end
+
+      if !relay_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
+        puts "relay overflow pause girl #{ relay_info[ :addrinfo ].ip_unpack.inspect }"
+        @reads.delete( relay_info[ :girl ] )
+        relay_info[ :overflowing ] = true
+      end
+
+      add_write( relay )
     end
 
     def add_socks5_conn_reply( src )
@@ -334,6 +396,15 @@ module Girl
       end
     end
 
+    def check_expire_girls
+      now = Time.new
+
+      @girl_infos.select{ | girl, info | info[ :connected ] ? ( now.to_i - @updates[ girl ].to_i >= @expire_long_after ) : ( now.to_i - @updates[ girl ].to_i >= @expire_connecting ) }.each do | girl, _ |
+        puts "expire girl" if @is_debug
+        close_girl( girl )
+      end
+    end
+
     def check_expire_mems
       now = Time.new
 
@@ -358,6 +429,15 @@ module Girl
       @p1_infos.select{ | p1, info | info[ :connected ] ? ( now.to_i - @updates[ p1 ].to_i >= @expire_long_after ) : ( now.to_i - @updates[ p1 ].to_i >= @expire_connecting ) }.each do | p1, info |
         puts "expire p1 #{ info[ :p2_id ] }" if @is_debug
         close_p1( p1 )
+      end
+    end
+
+    def check_expire_relays
+      now = Time.new
+
+      @relay_infos.select{ | relay, _ | now.to_i - @updates[ relay ].to_i >= @expire_long_after }.each do | relay, info |
+        puts "expire relay #{ info[ :addrinfo ].ip_unpack.inspect }" if @is_debug
+        close_relay( relay )
       end
     end
 
@@ -396,6 +476,15 @@ module Girl
       dst_info
     end
 
+    def close_girl( girl )
+      return nil if girl.nil? || girl.closed?
+      close_sock( girl )
+      girl_info = @girl_infos.delete( girl )
+      puts "close girl" if @is_debug
+      set_relay_closing( girl_info[ :relay ] ) if girl_info
+      girl_info
+    end
+
     def close_mem( mem )
       return nil if mem.nil? || mem.closed?
       close_sock( mem )
@@ -406,7 +495,7 @@ module Girl
       return nil if p1.nil? || p1.closed?
       close_sock( p1 )
       p1_info = @p1_infos.delete( p1 )
-      
+
       unless @proxy.closed? then
         proxy_info = @proxy_infos[ @proxy ]
         proxy_info[ :paused_p1s ].delete( p1 )
@@ -427,6 +516,15 @@ module Girl
       @src_infos.each{ | src, _ | close_src( src ) }
       @p1_infos.each{ | p1, _ | close_p1( p1 ) }
       proxy_info
+    end
+
+    def close_relay( relay )
+      return nil if relay.nil? || relay.closed?
+      close_sock( relay )
+      relay_info = @relay_infos.delete( relay )
+      puts "close relay" if @is_debug
+      set_girl_closing( relay_info[ :girl ] ) if relay_info
+      relay_info
     end
 
     def close_rsv( rsv )
@@ -453,7 +551,7 @@ module Girl
       src_id = src_info[ :src_id ]
       domain = src_info[ :destination_domain ]
       puts "close src #{ domain }" if @is_debug
-      
+
       if src_info[ :proxy_type ] == :direct then
         set_dst_closing( src_info[ :dst ] )
       elsif ( src_info[ :proxy_type ] == :remote ) && !@proxy.closed? then
@@ -709,6 +807,45 @@ module Girl
       end
     end
 
+    def new_a_girl( relay )
+      return if relay.nil? || relay.closed?
+      check_expire_girls
+
+      begin
+        girl = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      rescue Exception => e
+        puts "new a girl #{ e.class }"
+        close_girl( girl )
+        return
+      end
+
+      girl.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+
+      begin
+        girl.connect_nonblock( @proxyd_addr )
+      rescue IO::WaitWritable
+      rescue Exception => e
+        puts "girl connect proxyd #{ e.class }"
+        girl.close
+        close_girl( girl )
+        return
+      end
+
+      girl_info = {
+        closing: false,
+        connected: false,
+        is_syn: @is_client_fastopen,
+        overflowing: false,
+        relay: relay,
+        wbuff: ''
+      }
+
+      @girl_infos[ girl ] = girl_info
+      add_read( girl, :girl )
+      add_write( girl )
+      girl
+    end
+
     def new_a_infod( infod_port )
       infod_ip = '127.0.0.1'
       infod_addr = Socket.sockaddr_in( infod_port, infod_ip )
@@ -820,6 +957,19 @@ module Girl
       add_read( redir, :redir )
       @redir_port = redir_port
       @redir_local_address = redir.local_address
+    end
+
+    def new_a_relayd( relayd_port )
+      relayd_ip = '0.0.0.0'
+      relayd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
+      relayd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+      relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
+      relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
+      relayd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
+      relayd.bind( Socket.sockaddr_in( relayd_port, relayd_ip ) )
+      relayd.listen( BACKLOG )
+      puts "relayd listen on #{ relayd_ip } #{ relayd_port }"
+      add_read( relayd, :relayd )
     end
 
     def new_a_rsv( data, addrinfo, domain, type )
@@ -955,6 +1105,22 @@ module Girl
       add_src_wbuff( src, data )
     end
 
+    def read_girl( girl )
+      begin
+        data = girl.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
+      rescue Exception => e
+        close_girl( girl )
+        return
+      end
+
+      set_update( girl )
+      girl_info = @girl_infos[ girl ]
+      relay = girl_info[ :relay ]
+      add_relay_wbuff( relay, data )
+    end
+
     def read_infod( infod )
       begin
         data, addrinfo, rflags, *controls = infod.recvmsg
@@ -1026,6 +1192,8 @@ module Girl
           updates: @updates.size,
           proxy_infos: @proxy_infos.size,
           mem_infos: @mem_infos.size,
+          relay_infos: @relay_infos.size,
+          girl_infos: @girl_infos.size,
           src_infos: @src_infos.size,
           dst_infos: @dst_infos.size,
           dns_infos: @dns_infos.size,
@@ -1146,6 +1314,47 @@ module Girl
 
       @src_infos[ src ] = src_info
       add_read( src, :src )
+    end
+
+    def read_relay( relay )
+      begin
+        data = relay.read_nonblock( READ_SIZE )
+      rescue Errno::ENOTCONN => e
+        return
+      rescue Exception => e
+        close_relay( relay )
+        return
+      end
+
+      set_update( relay )
+      relay_info = @relay_infos[ relay ]
+      girl = relay_info[ :girl ]
+      add_girl_wbuff( girl, data )
+    end
+
+    def read_relayd( relayd )
+      check_expire_relays
+
+      begin
+        relay, addrinfo = relayd.accept_nonblock
+      rescue IO::WaitReadable, Errno::EINTR => e
+        puts "relayd accept #{ e.class }"
+        return
+      end
+
+      puts "relayd accept a relay #{ addrinfo.ip_unpack.inspect }"
+
+      relay_info = {
+        addrinfo: addrinfo,
+        closing: false,
+        girl: nil,
+        overflowing: false,
+        wbuff: ''
+      }
+
+      @relay_infos[ relay ] = relay_info
+      add_read( relay, :relay )
+      relay_info[ :girl ] = new_a_girl( relay )
     end
 
     def read_rsv( rsv )
@@ -1409,7 +1618,7 @@ module Girl
         unless @proxy.closed? then
           proxy_info = @proxy_infos[ @proxy ]
           bytesize = proxy_info[ :wbuff ].bytesize
-  
+
           if ( bytesize >= WBUFF_LIMIT ) && !proxy_info[ :paused_srcs ].include?( src ) then
             puts "proxy overflow pause src #{ src_id } #{ src_info[ :destination_domain ] }"
             @reads.delete( src )
@@ -1559,12 +1768,28 @@ module Girl
       add_write( dst )
     end
 
+    def set_girl_closing( girl )
+      return if girl.nil? || girl.closed?
+      girl_info = @girl_infos[ girl ]
+      return if girl_info.nil? || girl_info[ :closing ]
+      girl_info[ :closing ] = true
+      add_write( girl )
+    end
+
     def set_p1_closing( p1 )
       return if p1.nil? || p1.closed?
       p1_info = @p1_infos[ p1 ]
       return if p1_info.nil? || p1_info[ :closing ]
       p1_info[ :closing ] = true
       add_write( p1 )
+    end
+
+    def set_relay_closing( relay )
+      return if relay.nil? || relay.closed?
+      relay_info = @relay_infos[ relay ]
+      return if relay_info.nil? || relay_info[ :closing ]
+      relay_info[ :closing ] = true
+      add_write( relay )
     end
 
     def set_remote( src )
@@ -1574,7 +1799,7 @@ module Girl
         close_src( src )
         return
       end
-      
+
       src_info = @src_infos[ src ]
       src_info[ :proxy_type ] = :remote
 
@@ -1627,10 +1852,14 @@ module Girl
             close_dns( _sock )
           when :dst
             close_dst( _sock )
+          when :girl
+            close_girl( _sock )
           when :mem
             close_mem( _sock )
           when :p1
             close_p1( _sock )
+          when :relay
+            close_relay( _sock )
           when :rsv
             close_rsv( _sock )
           when :src
@@ -1682,6 +1911,52 @@ module Girl
         puts "dst underhalf #{ dst_info[ :domain ] }"
         add_read( dst_info[ :src ] )
         dst_info[ :overflowing ] = false
+      end
+    end
+
+    def write_girl( girl )
+      if girl.closed? then
+        puts "write closed girl?"
+        return
+      end
+
+      girl_info = @girl_infos[ girl ]
+      girl_info[ :connected ] = true
+      data = girl_info[ :wbuff ]
+
+      if data.empty? then
+        if girl_info[ :closing ] then
+          close_girl( girl )
+        else
+          @writes.delete( girl )
+        end
+
+        return
+      end
+
+      begin
+        if girl_info[ :is_syn ] then
+          written = girl.sendmsg_nonblock( data, 536870912, @proxyd_addr )
+          girl_info[ :is_syn ] = false
+        else
+          written = girl.write_nonblock( data )
+        end
+      rescue Errno::EINPROGRESS
+        return
+      rescue Exception => e
+        close_girl( girl )
+        return
+      end
+
+      set_update( girl )
+      data = data[ written..-1 ]
+      girl_info[ :wbuff ] = data
+      bytesize = girl_info[ :wbuff ].bytesize
+
+      if girl_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
+        puts "girl underhalf"
+        add_read( girl_info[ :relay ] )
+        girl_info[ :overflowing ] = false
       end
     end
 
@@ -1797,7 +2072,7 @@ module Girl
           proxy_info[ :paused_srcs ].each{ | src | add_read( src ) }
           proxy_info[ :paused_srcs ].clear
         end
-  
+
         if proxy_info[ :paused_p1s ].any? then
           puts "proxy underhalf resume p1s #{ proxy_info[ :paused_p1s ].size }"
           proxy_info[ :paused_p1s ].each{ | p1 | add_read( p1 ) }
@@ -1838,7 +2113,7 @@ module Girl
       data = data[ written..-1 ]
       src_info[ :wbuff ] = data
       bytesize = src_info[ :wbuff ].bytesize
-      
+
       if src_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
         src_id = src_info[ :src_id ]
         domain = src_info[ :destination_domain ]
@@ -1853,6 +2128,46 @@ module Girl
         end
 
         src_info[ :overflowing ] = false
+      end
+    end
+
+    def write_relay( relay )
+      if relay.closed? then
+        puts "write closed relay?"
+        return
+      end
+
+      relay_info = @relay_infos[ relay ]
+      data = relay_info[ :wbuff ]
+
+      if data.empty? then
+        if relay_info[ :closing ] then
+          close_relay( relay )
+        else
+          @writes.delete( relay )
+        end
+
+        return
+      end
+
+      begin
+        written = relay.write_nonblock( data )
+      rescue Errno::EINPROGRESS
+        return
+      rescue Exception => e
+        close_relay( relay )
+        return
+      end
+
+      set_update( relay )
+      data = data[ written..-1 ]
+      relay_info[ :wbuff ] = data
+      bytesize = relay_info[ :wbuff ].bytesize
+
+      if relay_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
+        puts "relay underhalf"
+        add_read( relay_info[ :girl ] )
+        relay_info[ :overflowing ] = false
       end
     end
 
