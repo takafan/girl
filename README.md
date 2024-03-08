@@ -118,7 +118,7 @@ ruby proxy.run.rb
     "redir_port": 6666,                           // 代理端口
     "relayd_port": 6668,                          // 中继端口（监听）
     "tspd_port": 7777,                            // 透明转发端口
-    "proxyd_host": "1.2.3.4",                     // 远端服务器/中继
+    "proxyd_host": "1.2.3.4",                     // 远端/中继服务器
     "proxyd_port": 6060,                          // 远端/中继端口
     "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
     "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
