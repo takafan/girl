@@ -271,7 +271,7 @@ config dnsmasq
 
 设备端dns只设妹子一个，避免解析到假ip。
 
-透明转发也可用于国内vps，配合openvpn，使手机在蜂窝网络上外网。
+透明转发也可用于国内vps，配合openvpn，使手机在蜂窝网络上外网，相比直连海外openvpn，透明转发可在国内区分国内外目的地。
 
 dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
 
