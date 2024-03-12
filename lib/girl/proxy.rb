@@ -23,9 +23,12 @@ module Girl
 
       conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
       puts "load #{ config_path } #{ conf.inspect }"
+      redir_host = conf[ :redir_host ]
       redir_port = conf[ :redir_port ]
       memd_port = conf[ :memd_port ]
+      relayd_host = conf[ :relayd_host ]
       relayd_port = conf[ :relayd_port ]
+      tspd_host = conf[ :tspd_host ]
       tspd_port = conf[ :tspd_port ]
       proxyd_host = conf[ :proxyd_host ]
       proxyd_port = conf[ :proxyd_port ]
@@ -55,7 +58,6 @@ module Girl
       h_src_underhalf = conf[ :h_src_underhalf ] # V
       h_dst_overflow = conf[ :h_dst_overflow ]   # W
       h_dst_underhalf = conf[ :h_dst_underhalf ] # X
-
       expire_connecting = conf[ :expire_connecting ]     # 连接多久没有建成关闭（秒）
       expire_long_after = conf[ :expire_long_after ]     # 长连接多久没有新流量关闭（秒）
       expire_proxy_after = conf[ :expire_proxy_after ]   # proxy多久没有收到流量重建（秒）
@@ -63,9 +65,12 @@ module Girl
       expire_short_after = conf[ :expire_short_after ]   # 短连接创建多久后关闭（秒）
       is_debug = conf[ :is_debug ]
 
+      redir_host = redir_host ? redir_host.to_s : '0.0.0.0'
       redir_port = redir_port ? redir_port.to_i : 6666
       memd_port = memd_port ? memd_port.to_i : redir_port + 1
+      relayd_host = relayd_host ? relayd_host.to_s : '0.0.0.0'
       relayd_port = relayd_port ? relayd_port.to_i : redir_port + 2
+      tspd_host = tspd_host ? tspd_host.to_s : '0.0.0.0'
       tspd_port = tspd_port ? tspd_port.to_i : 7777
       raise "missing proxyd host" unless proxyd_host
       proxyd_port = proxyd_port ? proxyd_port.to_i : 6060
@@ -141,9 +146,12 @@ module Girl
       end
 
       worker = Girl::ProxyWorker.new(
+        redir_host,
         redir_port,
         memd_port,
+        relayd_host,
         relayd_port,
+        tspd_host,
         tspd_port,
         proxyd_host,
         proxyd_port,

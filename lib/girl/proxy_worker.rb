@@ -3,9 +3,12 @@ module Girl
     include Dns
 
     def initialize(
+      redir_host,
       redir_port,
       memd_port,
+      relayd_host,
       relayd_port,
+      tspd_host,
       tspd_port,
       proxyd_host,
       proxyd_port,
@@ -103,12 +106,12 @@ module Girl
       @is_client_fastopen = is_client_fastopen
       @is_server_fastopen = is_server_fastopen
 
-      new_a_redir( redir_port )
+      new_a_redir( redir_host, redir_port )
       new_a_infod( redir_port )
       new_a_memd( memd_port )
-      new_a_relayd( relayd_port )
-      new_a_rsvd( tspd_port )
-      new_a_tspd( tspd_port )
+      new_a_relayd( relayd_host, relayd_port )
+      new_a_rsvd( tspd_host, tspd_port )
+      new_a_tspd( tspd_host, tspd_port )
       new_a_proxy
     end
 
@@ -710,14 +713,14 @@ module Girl
       domain = src_info[ :destination_domain ]
       port = src_info[ :destination_port ]
 
-      if @local_ips.include?( ip ) && [ @redir_port, @tspd_port ].include?( port ) then
+      if @local_ips.include?( ip ) && [ @redir_port, @relayd_port, @tspd_port ].include?( port ) then
         puts "ignore #{ ip }:#{ port }"
         close_src( src )
         return
       end
 
-      if [ domain, ip ].include?( @proxyd_host )  then
-        # 访问远端，直连
+      if [ domain, ip ].include?( @proxyd_host ) && ![ 80, 443 ].include?( port ) then
+        # 访问远端非http端口，直连
         puts "direct #{ ip } #{ port }"
         new_a_dst( ip, src )
         return
@@ -847,12 +850,12 @@ module Girl
     end
 
     def new_a_infod( infod_port )
-      infod_ip = '127.0.0.1'
-      infod_addr = Socket.sockaddr_in( infod_port, infod_ip )
+      infod_host = '127.0.0.1'
+      infod_addr = Socket.sockaddr_in( infod_port, infod_host )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
-      puts "infod bind on #{ infod_ip } #{ infod_port }"
+      puts "infod bind on #{ infod_host } #{ infod_port }"
       add_read( infod, :infod )
       info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       @infod_addr = infod_addr
@@ -861,14 +864,14 @@ module Girl
     end
 
     def new_a_memd( memd_port )
-      memd_ip = '127.0.0.1'
+      memd_host = '127.0.0.1'
       memd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       memd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 ) if @is_server_fastopen
-      memd.bind( Socket.sockaddr_in( memd_port, memd_ip ) )
+      memd.bind( Socket.sockaddr_in( memd_port, memd_host ) )
       memd.listen( 5 )
-      puts "memd listen on #{ memd_ip } #{ memd_port }"
+      puts "memd listen on #{ memd_host } #{ memd_port }"
       add_read( memd, :memd )
     end
 
@@ -944,32 +947,31 @@ module Girl
       proxy_info
     end
 
-    def new_a_redir( redir_port )
-      redir_ip = '0.0.0.0'
+    def new_a_redir( redir_host, redir_port )
       redir = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       redir.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       redir.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
-      redir.bind( Socket.sockaddr_in( redir_port, redir_ip ) )
+      redir.bind( Socket.sockaddr_in( redir_port, redir_host ) )
       redir.listen( BACKLOG )
-      puts "redir listen on #{ redir_ip } #{ redir_port }"
+      puts "redir listen on #{ redir_host } #{ redir_port }"
       add_read( redir, :redir )
       @redir_port = redir_port
       @redir_local_address = redir.local_address
     end
 
-    def new_a_relayd( relayd_port )
-      relayd_ip = '0.0.0.0'
+    def new_a_relayd( relayd_host, relayd_port )
       relayd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       relayd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       relayd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       relayd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
-      relayd.bind( Socket.sockaddr_in( relayd_port, relayd_ip ) )
+      relayd.bind( Socket.sockaddr_in( relayd_port, relayd_host ) )
       relayd.listen( BACKLOG )
-      puts "relayd listen on #{ relayd_ip } #{ relayd_port }"
+      puts "relayd listen on #{ relayd_host } #{ relayd_port }"
       add_read( relayd, :relayd )
+      @relayd_port = relayd_port
     end
 
     def new_a_rsv( data, addrinfo, domain, type )
@@ -994,27 +996,25 @@ module Girl
       add_read( rsv, :rsv )
     end
 
-    def new_a_rsvd( rsvd_port )
-      rsvd_ip = '0.0.0.0'
-      rsvd_addr = Socket.sockaddr_in( rsvd_port, rsvd_ip )
+    def new_a_rsvd( rsvd_host, rsvd_port )
+      rsvd_addr = Socket.sockaddr_in( rsvd_port, rsvd_host )
       rsvd = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       rsvd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       rsvd.bind( rsvd_addr )
-      puts "rsvd bind on #{ rsvd_ip } #{ rsvd_port }"
+      puts "rsvd bind on #{ rsvd_host } #{ rsvd_port }"
       add_read( rsvd, :rsvd )
       @rsvd = rsvd
     end
 
-    def new_a_tspd( tspd_port )
-      tspd_ip = '0.0.0.0'
+    def new_a_tspd( tspd_host, tspd_port )
       tspd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       tspd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEADDR, 1 )
       tspd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       tspd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
-      tspd.bind( Socket.sockaddr_in( tspd_port, tspd_ip ) )
+      tspd.bind( Socket.sockaddr_in( tspd_port, tspd_host ) )
       tspd.listen( BACKLOG )
-      puts "tspd listen on #{ tspd_ip } #{ tspd_port }"
+      puts "tspd listen on #{ tspd_host } #{ tspd_port }"
       add_read( tspd, :tspd )
       @tspd_port = tspd_port
     end
@@ -1686,7 +1686,7 @@ module Girl
     def resolve_domain( domain, src )
       return if src.nil? || src.closed?
 
-      unless domain =~ /^[0-9a-zA-Z\-\.]{1,63}$/ then
+      unless domain =~ /^(?=^.{3,255}$)[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+$/ then
         # 忽略非法域名
         puts "ignore #{ domain }"
         close_src( src )

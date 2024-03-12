@@ -170,7 +170,7 @@ module Girl
         close_dst( dst )
         return
       end
-      
+
       if !dst_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
         proxy = dst_info[ :proxy ]
         puts "add h_dst_overflow #{ im } #{ src_id } #{ domain }"
@@ -209,7 +209,7 @@ module Girl
         close_p2( p2 )
         return
       end
-      
+
       if !p2_info[ :overflowing ] && ( bytesize >= WBUFF_LIMIT ) then
         proxy = im_info[ :proxy ]
         puts "add h_p2_overflow #{ im } #{ p2_id }"
@@ -641,12 +641,12 @@ module Girl
     end
 
     def new_a_infod( infod_port )
-      infod_ip = '127.0.0.1'
-      infod_addr = Socket.sockaddr_in( infod_port, infod_ip )
+      infod_host = '127.0.0.1'
+      infod_addr = Socket.sockaddr_in( infod_port, infod_host )
       infod = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       infod.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       infod.bind( infod_addr )
-      puts "infod bind on #{ infod_ip } #{ infod_port }"
+      puts "infod bind on #{ infod_host } #{ infod_port }"
       add_read( infod, :infod )
       info = Socket.new( Socket::AF_INET, Socket::SOCK_DGRAM, 0 )
       @infod_addr = infod_addr
@@ -655,14 +655,14 @@ module Girl
     end
 
     def new_a_memd( memd_port )
-      memd_ip = '127.0.0.1'
+      memd_host = '127.0.0.1'
       memd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       memd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       memd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, 5 ) if @is_server_fastopen
-      memd.bind( Socket.sockaddr_in( memd_port, memd_ip ) )
+      memd.bind( Socket.sockaddr_in( memd_port, memd_host ) )
       memd.listen( 5 )
-      puts "memd listen on #{ memd_ip } #{ memd_port }"
+      puts "memd listen on #{ memd_host } #{ memd_port }"
       add_read( memd, :memd )
     end
 
@@ -715,14 +715,14 @@ module Girl
     end
 
     def new_a_proxyd( proxyd_port )
-      proxyd_ip = '0.0.0.0'
+      proxyd_host = '0.0.0.0'
       proxyd = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
       proxyd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
       proxyd.setsockopt( Socket::SOL_SOCKET, Socket::SO_REUSEPORT, 1 ) if RUBY_PLATFORM.include?( 'linux' )
       proxyd.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_FASTOPEN, BACKLOG ) if @is_server_fastopen
-      proxyd.bind( Socket.sockaddr_in( proxyd_port, proxyd_ip ) )
+      proxyd.bind( Socket.sockaddr_in( proxyd_port, proxyd_host ) )
       proxyd.listen( BACKLOG )
-      puts "proxyd listen on #{ proxyd_ip } #{ proxyd_port }"
+      puts "proxyd listen on #{ proxyd_host } #{ proxyd_port }"
       add_read( proxyd, :proxyd )
     end
 
@@ -1120,7 +1120,7 @@ module Girl
       domain = domain_port[ 0...colon_idx ]
       port = domain_port[ ( colon_idx + 1 )..-1 ].to_i
 
-      if ( domain !~ /^[0-9a-zA-Z\-\.]{1,63}$/ ) || ( domain =~ /^((0\.\d{1,3}\.\d{1,3}\.\d{1,3})|(10\.\d{1,3}\.\d{1,3}\.\d{1,3})|(127\.\d{1,3}\.\d{1,3}\.\d{1,3})|(169\.254\.\d{1,3}\.\d{1,3})|(172\.((1[6-9])|(2\d)|(3[01]))\.\d{1,3}\.\d{1,3})|(192\.168\.\d{1,3}\.\d{1,3})|(255\.255\.255\.255)|(localhost))$/ ) then
+      if ( domain !~ /^(?=^.{3,255}$)[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+$/ ) || ( domain =~ /^((0\.\d{1,3}\.\d{1,3}\.\d{1,3})|(10\.\d{1,3}\.\d{1,3}\.\d{1,3})|(127\.\d{1,3}\.\d{1,3}\.\d{1,3})|(169\.254\.\d{1,3}\.\d{1,3})|(172\.((1[6-9])|(2\d)|(3[01]))\.\d{1,3}\.\d{1,3})|(192\.168\.\d{1,3}\.\d{1,3})|(255\.255\.255\.255)|(localhost))$/ ) then
         # 忽略非法域名，内网地址
         puts "ignore #{ domain }"
         return
@@ -1348,7 +1348,7 @@ module Girl
       data = data[ written..-1 ]
       p2_info[ :wbuff ] = data
       bytesize = p2_info[ :wbuff ].bytesize
-      
+
       if p2_info[ :overflowing ] && ( bytesize < RESUME_BELOW ) then
         proxy = im_info[ :proxy ]
         p2_id = p2_info[ :p2_id ]
@@ -1396,7 +1396,7 @@ module Girl
           proxy_info[ :paused_dsts ].each{ | dst | add_read( dst ) }
           proxy_info[ :paused_dsts ].clear
         end
-  
+
         if proxy_info[ :paused_p2s ].any? then
           puts "proxy underhalf resume p2s #{ im } #{ proxy_info[ :paused_p2s ].size }"
           proxy_info[ :paused_p2s ].each{ | p2 | add_read( p2 ) }
