@@ -155,19 +155,19 @@ ytimg.com
 直连：
 
 ```bash
-curl --verbose -x '' -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
+curl -x '' -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
 ```
 
 走妹子：
 
 ```bash
-curl --verbose -x http://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
+curl -x http://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
 ```
 
 或者：
 
 ```bash
-curl --verbose -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
+curl -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
 ```
 
 妹子同时支持http, http tunnel, socks5, 以及透明转发。
