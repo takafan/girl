@@ -267,6 +267,7 @@ config dnsmasq
         option localuse 1
         option noresolv 1
         list server '127.0.0.1#7777'
+        list listen_address '127.0.0.1'
         list listen_address '192.168.1.59'
 ```
 
