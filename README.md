@@ -255,6 +255,8 @@ table ip nat {
 }
 ```
 
+* `ip daddr { {direct.txt} } return`一大坨写在nft里是把国内流量交给内核转，不写则是给妹子转，如果eth0是内网ip，上级网关又没开ip_forward，就只能靠妹子转。
+
 开机自动执行：`echo -e 'nft -f /boot/transparent.conf\nexit 0' > /etc/rc.local`
 
 openwrt默认由dnsmasq监听53端口，转给妹子：`vi /etc/config/dhcp`
@@ -271,7 +273,7 @@ config dnsmasq
         list listen_address '192.168.1.59'
 ```
 
-设备端dns只设妹子一个，避免解析到假ip。
+* 设备端dns只设妹子一个，避免解析到假ip。
 
 透明转发也可用于国内vps，配合openvpn，使手机在蜂窝网络上外网，相比直连海外openvpn，透明转发可在国内区分国内外目的地。
 
