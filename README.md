@@ -115,26 +115,26 @@ ruby proxy.run.rb
 
 ```js
 {
-    "redir_port": 6666,                           // 代理端口
-    "relayd_port": 6668,                          // 中继端口（监听）
-    "tspd_port": 7777,                            // 透明转发端口
-    "proxyd_host": "1.2.3.4",                     // 远端/中继服务器
-    "proxyd_port": 6060,                          // 远端/中继端口
-    "direct_path": "C:/girl.win/girl.direct.txt", // 直连ip段
-    "remote_path": "C:/girl.win/girl.remote.txt", // 交给远端解析的域名列表
-    "nameserver": "192.168.1.1  114.114.114.114", // 直连dns服务器，多个用空格分隔
-    "im": "taka-pc"                               // 近端标识
+    "redir_port": 6666,                              // 代理端口
+    "relayd_port": 6668,                             // 中继端口（监听）
+    "tspd_port": 7777,                               // 透明转发端口
+    "proxyd_host": "1.2.3.4",                        // 远端/中继服务器
+    "proxyd_port": 6060,                             // 远端/中继端口
+    "direct_path": "C:/Users/taka/proxy.direct.txt", // 直连ip段
+    "remote_path": "C:/Users/taka/proxy.remote.txt", // 交给远端解析的域名列表
+    "nameserver": "192.168.1.1  114.114.114.114",    // 直连dns服务器，多个用空格分隔
+    "im": "taka-pc"                                  // 近端标识
 }
 ```
 
-6. girl.direct.txt
+6. proxy.direct.txt
 
 ```bash
 curl -O http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
-cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > girl.direct.txt
+cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > proxy.direct.txt
 ```
 
-7. girl.remote.txt
+7. proxy.remote.txt
 
 ```txt
 google.com
