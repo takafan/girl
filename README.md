@@ -93,8 +93,8 @@ opkg install ruby ruby-gems ruby-did-you-mean ruby-enc-extra ruby-rdoc
 2. 安装妹子：
 
 ```bash
-gem sources --add https://mirrors.tuna.tsinghua.edu.cn/rubygems/ --remove https://rubygems.org/
-gem fetch girl && gem install girl --local
+gem sources --add https://gems.ruby-china.com/ --remove https://rubygems.org/
+gem install girl
 ```
 
 3. 创建 proxy.run.rb：
