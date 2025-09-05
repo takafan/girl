@@ -98,7 +98,7 @@ ruby proxy.run.rb
 ```js
 {
     "redir_port": 6666,                          // 代理端口
-    "relayd_port": 6668,                         // 中继端口，不暴露远端ip，用国内vps做中继，近端所在场所只能看见近端和国内ip往来流量
+    "relayd_port": 6668,                         // 中继端口
     "tspd_port": 7777,                           // 网关端口
     "proxyd_host": "1.2.3.4",                    // 远端服务器
     "proxyd_port": 6060,                         // 远端端口
@@ -108,6 +108,8 @@ ruby proxy.run.rb
     "im": "taka-pc"                              // 近端标识
 }
 ```
+
+* 中继端口用于不暴露远端ip，拿国内vps做中继，近端所在场所只能看见近端和国内ip往来流量
 
 6. proxy.direct.txt
 
