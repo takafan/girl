@@ -13,34 +13,34 @@ netstat -s | grep "SYNs to LISTEN"
 
 =end
 
-conn_count = ARGV[ 0 ] ? ARGV[ 0 ].to_i : 1000
-puts "conn_count #{ conn_count }"
+conn_count = ARGV[0] ? ARGV[0].to_i : 1000
+puts "conn_count #{conn_count}"
 
 RLIMIT = 1024
 
-if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
-  Process.setrlimit( :NOFILE, RLIMIT )
-  puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }" 
+if %w[darwin linux].any?{|plat| RUBY_PLATFORM.include?(plat)}
+  Process.setrlimit(:NOFILE, RLIMIT)
+  puts "NOFILE #{Process.getrlimit(:NOFILE).inspect}" 
 end
 
-config_path = File.expand_path( '../test.conf.json', __FILE__ )
-config = JSON.parse( IO.binread( config_path ), symbolize_names: true )
+config_path = File.expand_path('../test.conf.json', __FILE__)
+config = JSON.parse(IO.binread(config_path), symbolize_names: true)
 puts config.inspect
-server_host = config[ :server_host ]
-server_port = config[ :server_port ]
-server_addr = Socket.sockaddr_in( server_port, server_host )
+server_host = config[:server_host]
+server_port = config[:server_port]
+server_addr = Socket.sockaddr_in(server_port, server_host)
 
 reads = []
 writes = []
 t0 = Time.new
 
-conn_count.times do | i |
-  print " #{ i }"
-  client = Socket.new( Socket::AF_INET, Socket::SOCK_STREAM, 0 )
-  client.setsockopt( Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1 )
+conn_count.times do |i|
+  print " #{i}"
+  client = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+  client.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1)
 
   begin
-    client.connect_nonblock( server_addr )
+    client.connect_nonblock(server_addr)
   rescue IO::WaitWritable
   end
   
@@ -48,60 +48,58 @@ conn_count.times do | i |
   writes << client
 end
 
-puts "reads.size #{ reads.size }"
+puts "reads.size #{reads.size}"
 rcount = 0
 eof_count = 0
 err_count = 0
 
 loop do
-  if reads.size + writes.size == 0 then
+  if reads.size + writes.size == 0
     puts
     break
   end
 
-  print " s#{ reads.size }+#{ writes.size }"
-  rs, ws, es = IO.select( reads, writes )
+  print " s#{reads.size}+#{writes.size}"
+  rs, ws, es = IO.select(reads, writes)
 
-  rs.each do | sock |
+  rs.each do |sock|
     begin
-      data = sock.read_nonblock( 65535 )
+      data = sock.read_nonblock(65535)
       rcount += 1
-      print " #{ rcount }"
+      print " #{rcount}"
 
-      if rcount == conn_count then
-        puts " all responsed r#{ rcount } #{ Time.new - t0 }s"
+      if rcount == conn_count
+        puts " all responsed r#{rcount} #{Time.new - t0}s"
       end
     rescue Exception => e
-      if e.is_a?( EOFError ) then
+      if e.is_a?(EOFError)
         eof_count += 1
-        print " eof#{ eof_count }"
+        print " eof#{eof_count}"
       else
         err_count += 1
-        print " #{ e.class } err#{ err_count }"
+        print " #{e.class} err#{err_count}"
       end
 
       sock.close
-      reads.delete( sock )
+      reads.delete(sock)
 
-      if err_count + rcount == conn_count then
-        puts " all read r#{ rcount } eof#{ eof_count } err#{ err_count } #{ Time.new - t0 }s"
+      if err_count + rcount == conn_count
+        puts " all read r#{rcount} eof#{eof_count} err#{err_count} #{Time.new - t0}s"
       end
     end
   end
 
-  if ws.any? then
-    ws.each do | sock |
+  if ws.any?
+    ws.each do |sock|
       data2 = 'lala'
-      sock.write_nonblock( data2 )
-      writes.delete( sock )
+      sock.write_nonblock(data2)
+      writes.delete(sock)
     end
 
-    if writes.empty? then
-      puts " all connected #{ Time.new - t0 }s"
-    end
+    puts " all connected #{Time.new - t0}s" if writes.empty?
   end
 
-  es.each do | sock |
+  es.each do |sock|
     puts " select error ??? "
   end
 end

@@ -11,63 +11,63 @@ require 'socket'
 module Girl
   class Proxyd
 
-    def initialize( config_path = nil )
-      if config_path then
-        raise "not found config file #{ config_path }" unless File.exist?( config_path )
-        conf = JSON.parse( IO.binread( config_path ), symbolize_names: true )
-        puts "load #{ config_path } #{ conf.inspect }"
-        proxyd_port = conf[ :proxyd_port ]
-        memd_port = conf[ :memd_port ]
-        nameserver = conf[ :nameserver ]
-        reset_traff_day = conf[ :reset_traff_day ]
-        ims = conf[ :ims ]
-        p2d_host = conf[ :p2d_host ]
-        p2d_port = conf[ :p2d_port ]
-        head_len = conf[ :head_len ]               # 头长度
-        h_a_new_source = conf[ :h_a_new_source ]   # A
-        h_a_new_p2 = conf[ :h_a_new_p2 ]           # B
-        h_dst_close = conf[ :h_dst_close ]         # D
-        h_heartbeat = conf[ :h_heartbeat ]         # H
-        h_p1_close = conf[ :h_p1_close ]           # I
-        h_p2_close = conf[ :h_p2_close ]           # J
-        h_p2_traffic = conf[ :h_p2_traffic ]       # K
-        h_p1_overflow = conf[ :h_p1_overflow ]     # L
-        h_p1_underhalf = conf[ :h_p1_underhalf ]   # M
-        h_p2_overflow = conf[ :h_p2_overflow ]     # N
-        h_p2_underhalf = conf[ :h_p2_underhalf ]   # O
-        h_query = conf[ :h_query ]                 # Q
-        h_response = conf[ :h_response ]           # R
-        h_src_close = conf[ :h_src_close ]         # S
-        h_traffic = conf[ :h_traffic ]             # T
-        h_src_overflow = conf[ :h_src_overflow ]   # U
-        h_src_underhalf = conf[ :h_src_underhalf ] # V
-        h_dst_overflow = conf[ :h_dst_overflow ]   # W
-        h_dst_underhalf = conf[ :h_dst_underhalf ] # X
-        expire_connecting = conf[ :expire_connecting ]     # 连接多久没有建成关闭（秒）
-        expire_long_after = conf[ :expire_long_after ]     # 长连接多久没有新流量关闭（秒）
-        expire_proxy_after = conf[ :expire_proxy_after ]   # proxy多久没有收到流量重建（秒）
-        expire_resolv_cache = conf[ :expire_resolv_cache ] # dns查询结果缓存多久（秒）
-        expire_short_after = conf[ :expire_short_after ]   # 短连接创建多久后关闭（秒）
-        is_debug = conf[ :is_debug ]
+    def initialize(config_path = nil)
+      if config_path
+        raise "not found config file #{config_path}" unless File.exist?(config_path)
+        conf = JSON.parse(IO.binread(config_path), symbolize_names: true)
+        puts "load #{config_path} #{conf.inspect}"
+        proxyd_port = conf[:proxyd_port]
+        memd_port = conf[:memd_port]
+        nameserver = conf[:nameserver]
+        reset_traff_day = conf[:reset_traff_day]
+        ims = conf[:ims]
+        p2d_host = conf[:p2d_host]
+        p2d_port = conf[:p2d_port]
+        head_len = conf[:head_len]               # 头长度
+        h_a_new_source = conf[:h_a_new_source]   # A
+        h_a_new_p2 = conf[:h_a_new_p2]           # B
+        h_dst_close = conf[:h_dst_close]         # D
+        h_heartbeat = conf[:h_heartbeat]         # H
+        h_p1_close = conf[:h_p1_close]           # I
+        h_p2_close = conf[:h_p2_close]           # J
+        h_p2_traffic = conf[:h_p2_traffic]       # K
+        h_p1_overflow = conf[:h_p1_overflow]     # L
+        h_p1_underhalf = conf[:h_p1_underhalf]   # M
+        h_p2_overflow = conf[:h_p2_overflow]     # N
+        h_p2_underhalf = conf[:h_p2_underhalf]   # O
+        h_query = conf[:h_query]                 # Q
+        h_response = conf[:h_response]           # R
+        h_src_close = conf[:h_src_close]         # S
+        h_traffic = conf[:h_traffic]             # T
+        h_src_overflow = conf[:h_src_overflow]   # U
+        h_src_underhalf = conf[:h_src_underhalf] # V
+        h_dst_overflow = conf[:h_dst_overflow]   # W
+        h_dst_underhalf = conf[:h_dst_underhalf] # X
+        expire_connecting = conf[:expire_connecting]     # 连接多久没有建成关闭（秒）
+        expire_long_after = conf[:expire_long_after]     # 长连接多久没有新流量关闭（秒）
+        expire_proxy_after = conf[:expire_proxy_after]   # proxy多久没有收到流量重建（秒）
+        expire_resolv_cache = conf[:expire_resolv_cache] # dns查询结果缓存多久（秒）
+        expire_short_after = conf[:expire_short_after]   # 短连接创建多久后关闭（秒）
+        is_debug = conf[:is_debug]
       end
 
       proxyd_port = proxyd_port ? proxyd_port.to_i : 6060
       memd_port = memd_port ? memd_port.to_i : proxyd_port + 1
 
-      if nameserver then
-        nameservers = nameserver.split( ' ' )
+      if nameserver
+        nameservers = nameserver.split(' ')
       else
         nameservers = []
         resolv_path = '/etc/resolv.conf'
 
-        if File.exist?( resolv_path ) then
-          text = IO.read( '/etc/resolv.conf' )
+        if File.exist?(resolv_path)
+          text = IO.read('/etc/resolv.conf')
 
-          text.split( "\n" ).each do | line |
-            match_data = /^nameserver \d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}/.match( line )
+          text.split("\n").each do |line|
+            match_data = /^nameserver \d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}/.match(line)
 
-            if match_data then
-              nameservers << match_data[ 0 ].split(' ')[ 1 ].strip
+            if match_data
+              nameservers << match_data[0].split(' ')[1].strip
               break if nameservers.size >= 3
             end
           end
@@ -106,23 +106,20 @@ module Girl
       expire_short_after = expire_short_after ? expire_short_after.to_i : 5
       is_server_fastopen = false
 
-      if RUBY_PLATFORM.include?( 'linux' ) then
-        IO.popen( 'sysctl -n net.ipv4.tcp_fastopen' ) do | io |
+      if RUBY_PLATFORM.include?('linux')
+        IO.popen('sysctl -n net.ipv4.tcp_fastopen') do |io|
           output = io.read
           val = output.to_i % 4
-
-          if [ 2, 3 ].include?( val ) then
-            is_server_fastopen = true
-          end
+          is_server_fastopen = true if [2, 3].include?(val)
         end
       end
 
-      puts "girl proxyd #{ Girl::VERSION }"
-      puts "#{ proxyd_port } #{ memd_port } #{ p2d_host } #{ p2d_port } #{ nameservers.inspect } #{ reset_traff_day } #{ is_server_fastopen }"
+      puts "girl proxyd #{Girl::VERSION}"
+      puts "#{proxyd_port} #{memd_port} #{p2d_host} #{p2d_port} #{nameservers.inspect} #{reset_traff_day} #{is_server_fastopen}"
 
-      if %w[ darwin linux ].any?{ | plat | RUBY_PLATFORM.include?( plat ) } then
-        Process.setrlimit( :NOFILE, RLIMIT )
-        puts "NOFILE #{ Process.getrlimit( :NOFILE ).inspect }"
+      if %w[darwin linux].any?{|plat| RUBY_PLATFORM.include?(plat)}
+        Process.setrlimit(:NOFILE, RLIMIT)
+        puts "NOFILE #{Process.getrlimit(:NOFILE).inspect}"
       end
 
       worker = Girl::ProxydWorker.new(
@@ -161,7 +158,7 @@ module Girl
         is_debug,
         is_server_fastopen )
 
-      Signal.trap( :TERM ) do
+      Signal.trap(:TERM) do
         puts 'exit'
         worker.quit!
       end
