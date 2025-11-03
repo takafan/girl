@@ -17,6 +17,7 @@ module Girl
         conf = JSON.parse(IO.binread(config_path), symbolize_names: true)
         puts "load #{config_path} #{conf.inspect}"
         proxyd_port = conf[:proxyd_port]
+        bigd_port = conf[:bigd_port]
         memd_port = conf[:memd_port]
         nameserver = conf[:nameserver]
         reset_traff_day = conf[:reset_traff_day]
@@ -31,28 +32,20 @@ module Girl
         h_p1_close = conf[:h_p1_close]           # I
         h_p2_close = conf[:h_p2_close]           # J
         h_p2_traffic = conf[:h_p2_traffic]       # K
-        h_p1_overflow = conf[:h_p1_overflow]     # L
-        h_p1_underhalf = conf[:h_p1_underhalf]   # M
-        h_p2_overflow = conf[:h_p2_overflow]     # N
-        h_p2_underhalf = conf[:h_p2_underhalf]   # O
         h_query = conf[:h_query]                 # Q
         h_response = conf[:h_response]           # R
         h_src_close = conf[:h_src_close]         # S
         h_traffic = conf[:h_traffic]             # T
-        h_src_overflow = conf[:h_src_overflow]   # U
-        h_src_underhalf = conf[:h_src_underhalf] # V
-        h_dst_overflow = conf[:h_dst_overflow]   # W
-        h_dst_underhalf = conf[:h_dst_underhalf] # X
         expire_connecting = conf[:expire_connecting]     # 连接多久没有建成关闭（秒）
         expire_long_after = conf[:expire_long_after]     # 长连接多久没有新流量关闭（秒）
-        expire_proxy_after = conf[:expire_proxy_after]   # proxy多久没有收到流量重建（秒）
         expire_resolv_cache = conf[:expire_resolv_cache] # dns查询结果缓存多久（秒）
         expire_short_after = conf[:expire_short_after]   # 短连接创建多久后关闭（秒）
         is_debug = conf[:is_debug]
       end
 
       proxyd_port = proxyd_port ? proxyd_port.to_i : 6060
-      memd_port = memd_port ? memd_port.to_i : proxyd_port + 1
+      bigd_port = bigd_port ? bigd_port.to_i : proxyd_port + 1
+      memd_port = memd_port ? memd_port.to_i : proxyd_port + 2
 
       if nameserver
         nameservers = nameserver.split(' ')
@@ -78,7 +71,7 @@ module Girl
       reset_traff_day = reset_traff_day ? reset_traff_day.to_i : 1
       ims = [] unless ims
       p2d_host = p2d_host ? p2d_host.to_s : '127.0.0.1'
-      p2d_port = p2d_port ? p2d_port.to_i : proxyd_port + 2
+      p2d_port = p2d_port ? p2d_port.to_i : proxyd_port + 3
       head_len = head_len ? head_len.to_i : 59
       h_a_new_source = h_a_new_source ? h_a_new_source.to_s : 'A'
       h_a_new_p2 = h_a_new_p2 ? h_a_new_p2.to_s : 'B'
@@ -87,21 +80,12 @@ module Girl
       h_p1_close = h_p1_close ? h_p1_close.to_s : 'I'
       h_p2_close = h_p2_close ? h_p2_close.to_s : 'J'
       h_p2_traffic = h_p2_traffic ? h_p2_traffic.to_s : 'K'
-      h_p1_overflow = h_p1_overflow ? h_p1_overflow.to_s : 'L'
-      h_p1_underhalf = h_p1_underhalf ? h_p1_underhalf.to_s : 'M'
-      h_p2_overflow = h_p2_overflow ? h_p2_overflow.to_s : 'N'
-      h_p2_underhalf = h_p2_underhalf ? h_p2_underhalf.to_s : 'O'
       h_query = h_query ? h_query.to_s : 'Q'
       h_response = h_response ? h_response.to_s : 'R'
       h_src_close = h_src_close ? h_src_close.to_s : 'S'
       h_traffic = h_traffic ? h_traffic.to_s : 'T'
-      h_src_overflow = h_src_overflow ? h_src_overflow.to_s : 'U'
-      h_src_underhalf = h_src_underhalf ? h_src_underhalf.to_s : 'V'
-      h_dst_overflow = h_dst_overflow ? h_dst_overflow.to_s : 'W'
-      h_dst_underhalf = h_dst_underhalf ? h_dst_underhalf.to_s : 'X'
       expire_connecting = expire_connecting ? expire_connecting.to_i : 5
       expire_long_after = expire_long_after ? expire_long_after.to_i : 3600
-      expire_proxy_after = expire_proxy_after ? expire_proxy_after.to_i : 60
       expire_resolv_cache = expire_resolv_cache ? expire_resolv_cache.to_i : 600
       expire_short_after = expire_short_after ? expire_short_after.to_i : 5
       is_server_fastopen = false
@@ -115,7 +99,7 @@ module Girl
       end
 
       puts "girl proxyd #{Girl::VERSION}"
-      puts "#{proxyd_port} #{memd_port} #{p2d_host} #{p2d_port} #{nameservers.inspect} #{reset_traff_day} #{is_server_fastopen}"
+      puts "#{proxyd_port} #{bigd_port} #{memd_port} #{p2d_host} #{p2d_port} #{nameservers.inspect} #{reset_traff_day} #{is_server_fastopen}"
 
       if %w[darwin linux].any?{|plat| RUBY_PLATFORM.include?(plat)}
         Process.setrlimit(:NOFILE, RLIMIT)
@@ -124,6 +108,7 @@ module Girl
 
       worker = Girl::ProxydWorker.new(
         proxyd_port,
+        bigd_port,
         memd_port,
         nameservers,
         reset_traff_day,
@@ -138,25 +123,16 @@ module Girl
         h_p1_close,
         h_p2_close,
         h_p2_traffic,
-        h_p1_overflow,
-        h_p1_underhalf,
-        h_p2_overflow,
-        h_p2_underhalf,
         h_query,
         h_response,
         h_src_close,
         h_traffic,
-        h_src_overflow,
-        h_src_underhalf,
-        h_dst_overflow,
-        h_dst_underhalf,
         expire_connecting,
         expire_long_after,
-        expire_proxy_after,
         expire_resolv_cache,
         expire_short_after,
         is_debug,
-        is_server_fastopen )
+        is_server_fastopen)
 
       Signal.trap(:TERM) do
         puts 'exit'

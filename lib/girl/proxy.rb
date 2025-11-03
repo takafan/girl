@@ -1,4 +1,3 @@
-require 'fileutils'
 require 'girl/dns'
 require 'girl/head'
 require 'girl/proxy_worker'
@@ -23,12 +22,11 @@ module Girl
       redir_host = conf[:redir_host]
       redir_port = conf[:redir_port]
       memd_port = conf[:memd_port]
-      relayd_host = conf[:relayd_host]
-      relayd_port = conf[:relayd_port]
       tspd_host = conf[:tspd_host]
       tspd_port = conf[:tspd_port]
       proxyd_host = conf[:proxyd_host]
       proxyd_port = conf[:proxyd_port]
+      bigd_port = conf[:bigd_port]
       nameserver = conf[:nameserver]
       im = conf[:im]
       direct_path = conf[:direct_path]
@@ -43,18 +41,10 @@ module Girl
       h_p1_close = conf[:h_p1_close]           # I
       h_p2_close = conf[:h_p2_close]           # J
       h_p2_traffic = conf[:h_p2_traffic]       # K
-      h_p1_overflow = conf[:h_p1_overflow]     # L
-      h_p1_underhalf = conf[:h_p1_underhalf]   # M
-      h_p2_overflow = conf[:h_p2_overflow]     # N
-      h_p2_underhalf = conf[:h_p2_underhalf]   # O
       h_query = conf[:h_query]                 # Q
       h_response = conf[:h_response]           # R
       h_src_close = conf[:h_src_close]         # S
       h_traffic = conf[:h_traffic]             # T
-      h_src_overflow = conf[:h_src_overflow]   # U
-      h_src_underhalf = conf[:h_src_underhalf] # V
-      h_dst_overflow = conf[:h_dst_overflow]   # W
-      h_dst_underhalf = conf[:h_dst_underhalf] # X
       expire_connecting = conf[:expire_connecting]     # 连接多久没有建成关闭（秒）
       expire_long_after = conf[:expire_long_after]     # 长连接多久没有新流量关闭（秒）
       expire_proxy_after = conf[:expire_proxy_after]   # proxy多久没有收到流量重建（秒）
@@ -64,13 +54,12 @@ module Girl
 
       redir_host = redir_host ? redir_host.to_s : '0.0.0.0'
       redir_port = redir_port ? redir_port.to_i : 6666
-      memd_port = memd_port ? memd_port.to_i : redir_port + 1
-      relayd_host = relayd_host ? relayd_host.to_s : '0.0.0.0'
-      relayd_port = relayd_port ? relayd_port.to_i : redir_port + 2
+      memd_port = memd_port ? memd_port.to_i : redir_port + 2
       tspd_host = tspd_host ? tspd_host.to_s : '0.0.0.0'
       tspd_port = tspd_port ? tspd_port.to_i : 7777
       raise "missing proxyd host" unless proxyd_host
       proxyd_port = proxyd_port ? proxyd_port.to_i : 6060
+      bigd_port = bigd_port ? bigd_port.to_i : proxyd_port + 1
       nameserver = '114.114.114.114' unless nameserver
       nameservers = nameserver.split(' ')
       im = 'office-pc' unless im
@@ -98,18 +87,10 @@ module Girl
       h_p1_close = h_p1_close ? h_p1_close.to_s : 'I'
       h_p2_close = h_p2_close ? h_p2_close.to_s : 'J'
       h_p2_traffic = h_p2_traffic ? h_p2_traffic.to_s : 'K'
-      h_p1_overflow = h_p1_overflow ? h_p1_overflow.to_s : 'L'
-      h_p1_underhalf = h_p1_underhalf ? h_p1_underhalf.to_s : 'M'
-      h_p2_overflow = h_p2_overflow ? h_p2_overflow.to_s : 'N'
-      h_p2_underhalf = h_p2_underhalf ? h_p2_underhalf.to_s : 'O'
       h_query = h_query ? h_query.to_s : 'Q'
       h_response = h_response ? h_response.to_s : 'R'
       h_src_close = h_src_close ? h_src_close.to_s : 'S'
       h_traffic = h_traffic ? h_traffic.to_s : 'T'
-      h_src_overflow = h_src_overflow ? h_src_overflow.to_s : 'U'
-      h_src_underhalf = h_src_underhalf ? h_src_underhalf.to_s : 'V'
-      h_dst_overflow = h_dst_overflow ? h_dst_overflow.to_s : 'W'
-      h_dst_underhalf = h_dst_underhalf ? h_dst_underhalf.to_s : 'X'
       expire_connecting = expire_connecting ? expire_connecting.to_i : 5
       expire_long_after = expire_long_after ? expire_long_after.to_i : 3600
       expire_proxy_after = expire_proxy_after ? expire_proxy_after.to_i : 60
@@ -126,7 +107,7 @@ module Girl
         end
       end
 
-      puts "girl proxy #{Girl::VERSION} #{im} #{redir_port} #{relayd_port} #{tspd_port}"
+      puts "girl proxy #{Girl::VERSION} #{im} #{redir_port} #{tspd_port}"
       puts "#{proxyd_host} #{proxyd_port} #{appd_host} #{appd_port} #{nameservers.inspect} #{is_client_fastopen} #{is_server_fastopen}"
       puts "#{direct_path} #{directs.size} directs"
       puts "#{remote_path} #{remotes.size} remotes"
@@ -140,12 +121,11 @@ module Girl
         redir_host,
         redir_port,
         memd_port,
-        relayd_host,
-        relayd_port,
         tspd_host,
         tspd_port,
         proxyd_host,
         proxyd_port,
+        bigd_port,
         nameservers,
         im,
         directs,
@@ -160,18 +140,10 @@ module Girl
         h_p1_close,
         h_p2_close,
         h_p2_traffic,
-        h_p1_overflow,
-        h_p1_underhalf,
-        h_p2_overflow,
-        h_p2_underhalf,
         h_query,
         h_response,
         h_src_close,
         h_traffic,
-        h_src_overflow,
-        h_src_underhalf,
-        h_dst_overflow,
-        h_dst_underhalf,
         expire_connecting,
         expire_long_after,
         expire_proxy_after,
@@ -179,7 +151,7 @@ module Girl
         expire_short_after,
         is_debug,
         is_client_fastopen,
-        is_server_fastopen )
+        is_server_fastopen)
 
       Signal.trap(:TERM) do
         puts 'exit'
