@@ -37,7 +37,6 @@ module Girl
       is_debug,
       is_client_fastopen,
       is_server_fastopen)
-
       @proxyd_host = proxyd_host
       @proxyd_addr = Socket.sockaddr_in(proxyd_port, proxyd_host)
       @bigd_addr = Socket.sockaddr_in(bigd_port, proxyd_host)
@@ -47,7 +46,7 @@ module Girl
       @remotes = remotes
       @local_ips = Socket.ip_address_list.select{|info| info.ipv4?}.map{|info| info.ip_address}
       @update_roles = [:dns, :dst, :mem, :p1, :src, :rsv] # 参与淘汰的角色
-      @updates_limit = 1008  # 淘汰池上限，1015(mac) - info, infod, memd, proxy, redir, rsvd, tspd
+      @updates_limit = 1008  # 淘汰池上限，1015(mac) - [info infod memd proxy redir rsvd tspd]
       @eliminate_count = 0   # 淘汰次数
       @reads = []            # 读池
       @writes = []           # 写池
@@ -61,13 +60,12 @@ module Girl
       @dns_infos = {}        # dns => {:domain :src}
       @rsv_infos = {}        # rsv => {:addrinfo :domain :type}
       @near_infos = {}       # near_id => {:addrinfo :created_at :domain :id :type}
-      @resolv_caches = {}    # domain => [ip, created_at]
+      @resolv_caches = {}    # domain => [ip created_at]
       @is_direct_caches = {} # ip => true / false
-      @response_caches = {}  # domain => [response, created_at, ip, is_remote]
-      @response6_caches = {} # domain => [response, created_at, ip, is_remote]
+      @response_caches = {}  # domain => [response created_at ip is_remote]
+      @response6_caches = {} # domain => [response created_at ip is_remote]
       @p1_infos = {}         # p1 => {:closing :connected :in :is_big :overflowing :p2_id :wbuff}
       @appd_addr = Socket.sockaddr_in(appd_port, appd_host)
-
       @head_len = head_len
       @h_a_new_source = h_a_new_source
       @h_a_new_p2 = h_a_new_p2
@@ -88,7 +86,6 @@ module Girl
       @is_debug = is_debug
       @is_client_fastopen = is_client_fastopen
       @is_server_fastopen = is_server_fastopen
-
       new_a_redir(redir_host, redir_port)
       new_a_infod(redir_port)
       new_a_memd(memd_port)
@@ -173,7 +170,7 @@ module Girl
     private
 
     def add_big_wbuff(data)
-      return if @big.nil? || @big.closed? || data.nil? || data.empty?
+      return if @big.closed? || data.nil? || data.empty?
       big_info = @big_infos[@big]
       big_info[:wbuff] << data
       bytesize = big_info[:wbuff].bytesize
@@ -187,19 +184,10 @@ module Girl
       if !big_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
         puts "big overflow"
         big_info[:overflowing] = true
-        
-        @src_infos.select{|_, info| info[:is_big]}.each do |src, info|
-          puts "pause src #{info[:destination_domain]}"
-          @reads.delete(src)
-        end
-
-        @p1_infos.select{|_, info| info[:is_big]}.each do |p1, info|
-          puts "pause p1 #{info[:p2_id]}"
-          @reads.delete(p1)
-        end
       end
 
       add_write(@big)
+      big_info[:overflowing]
     end
 
     def add_dst_wbuff(dst, data)
@@ -1169,12 +1157,6 @@ module Girl
       end
 
       set_update(p1)
-
-      if @proxy.closed?
-        close_p1(p1)
-        return
-      end
-
       p1_info = @p1_infos[p1]
       p1_info[:in] += data.bytesize
       p2_id = p1_info[:p2_id]
@@ -1187,8 +1169,23 @@ module Girl
       data = pack_p2_traffic(p2_id, data)
       
       if p1_info[:is_big]
-        add_big_wbuff(data)
+        if @big.closed?
+          close_p1(p1)
+          return
+        end
+
+        overflowing = add_big_wbuff(data)
+
+        if overflowing
+          puts "big overflowing pause p1 #{p2_id}"
+          @reads.delete(p1)
+        end
       else
+        if @proxy.closed?
+          close_p1(p1)
+          return
+        end
+
         add_proxy_wbuff(data)
       end
     end
@@ -1497,19 +1494,34 @@ module Girl
         end
       when :remote
         src_info[:in] += data.bytesize
+        src_id = src_info[:src_id]
         domain = src_info[:destination_domain]
 
         if !src_info[:is_big] && (src_info[:in] >= READ_SIZE)
-          puts "set src is big #{domain}"
+          puts "set src is big #{src_id} #{domain}"
           src_info[:is_big] = true
         end
 
-        src_id = src_info[:src_id]
         data = pack_traffic(src_id, data)
 
         if src_info[:is_big]
-          add_big_wbuff(data)
+          if @big.closed?
+            close_src(src)
+            return
+          end
+
+          overflowing = add_big_wbuff(data)
+
+          if overflowing
+            puts "big overflowing pause src #{src_id} #{domain}"
+            @reads.delete(src)
+          end
         else
+          if @proxy.closed?
+            close_src(src)
+            return
+          end
+
           add_proxy_wbuff(data)
         end
       when :direct
@@ -1772,7 +1784,7 @@ module Girl
         big_info[:overflowing] = false
 
         @src_infos.select{|_, info| info[:is_big]}.each do |src, info|
-          puts "resume src #{info[:destination_domain]}"
+          puts "resume src #{info[:src_id]} #{info[:destination_domain]}"
           add_read(src)
         end
 
@@ -1976,8 +1988,9 @@ module Girl
       src_info[:wbuff] = data
 
       if src_info[:wbuff].empty? && src_info[:overflowing]
+        src_id = src_info[:src_id]
         domain = src_info[:destination_domain]
-        puts "src empty #{domain}"
+        puts "src empty #{src_id} #{domain}"
         src_info[:overflowing] = false
 
         if src_info[:proxy_type] == :direct

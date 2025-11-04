@@ -29,11 +29,10 @@ module Girl
       expire_short_after,
       is_debug,
       is_server_fastopen)
-
       @nameserver_addrs = nameservers.map{|n| Socket.sockaddr_in(53, n)}
       @reset_traff_day = reset_traff_day
       @update_roles = [:big, :dns, :dst, :mem, :p2, :proxy, :rsv] # 参与淘汰的角色
-      @updates_limit = 1011 - ims.size # 淘汰池上限，1015(mac) - info, infod, memd, proxyd, p2ds(=ims)
+      @updates_limit = 1010 - ims.size # 淘汰池上限，1015(mac) - [bigd info infod memd proxyd] - p2ds
       @eliminate_count = 0 # 淘汰次数
       @reads = []          # 读池
       @writes = []         # 写池
@@ -42,15 +41,14 @@ module Girl
       @proxy_infos = {}    # proxy => {:addrinfo :im :rbuff :wbuff}
       @big_infos = {}      # big => {:addrinfo :im :overflowing :rbuff :wbuff}
       @im_infos = {}       # im => {:addrinfo :big :big_connect_at :in :out :p2d :p2d_host :p2d_port :proxy :proxy_connect_at}
-      @src_infos = {}      # src_id => {:created_at, :dst :im :rbuff}
+      @src_infos = {}      # src_id => {:created_at :dst :im :rbuff}
       @mem_infos = {}      # mem => {:wbuff}
       @dst_infos = {}      # dst => {:closing :connected :domain :im :in :ip :is_big :overflowing :port :rbuffs :src_id :wbuff}
       @dns_infos = {}      # dns => {:domain :im :port :src_id}
       @rsv_infos = {}      # rsv => {:domain :im :near_id}
-      @resolv_caches = {}  # domain => [:ip :created_at]
+      @resolv_caches = {}  # domain => [ip created_at]
       @p2d_infos = {}      # p2d => {:im}
       @p2_infos = {}       # p2 => {:addrinfo :closing :im :in :is_big :overflowing :p2_id :wbuff}
-
       @head_len = head_len
       @h_a_new_source = h_a_new_source
       @h_a_new_p2 = h_a_new_p2
@@ -69,7 +67,6 @@ module Girl
       @expire_short_after = expire_short_after
       @is_debug = is_debug
       @is_server_fastopen = is_server_fastopen
-
       init_im_infos(ims, p2d_host, p2d_port)
       new_a_proxyd(proxyd_port)
       new_a_bigd(bigd_port)
@@ -164,19 +161,10 @@ module Girl
       if !big_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
         puts "big overflow #{im}"
         big_info[:overflowing] = true
-        
-        @dst_infos.select{|_, info| (info[:im] == im) && info[:is_big]}.each do |dst, info|
-          puts "pause dst #{info[:domain]}"
-          @reads.delete(dst)
-        end
-
-        @p2_infos.select{|_, info| (info[:im] == im) && info[:is_big]}.each do |p2, info|
-          puts "pause p2 #{info[:p2_id]}"
-          @reads.delete(p2)
-        end
       end
 
       add_write(big)
+      big_info[:overflowing]
     end
 
     def add_dst_wbuff(dst, data)
@@ -450,10 +438,9 @@ module Girl
         im_info = @im_infos[im]
 
         if im_info
-          proxy = im_info[:proxy]
           puts "add h_p2_close #{im} #{p2_id}"
           msg = "#{@h_p2_close}#{[p2_id].pack('Q>')}"
-          add_proxy_wbuff(proxy, pack_a_chunk(msg))
+          add_proxy_wbuff(im_info[:proxy], pack_a_chunk(msg))
         end
       end
 
@@ -693,7 +680,7 @@ module Girl
         im: im,
         in: 0,
         ip: ip,
-        is_big: false, # 收来的流量是否是大流量
+        is_big: false, # 是否收流量大户
         overflowing: false,
         port: port,
         rbuffs: [],
@@ -969,9 +956,11 @@ module Girl
       dst_info = @dst_infos[dst]
       dst_info[:in] += data.bytesize
       im = dst_info[:im]
+      src_id = dst_info[:src_id]
+      domain = dst_info[:domain]
 
       if !dst_info[:is_big] && (dst_info[:in] >= READ_SIZE)
-        puts "set dst is big #{im} #{dst_info[:domain]}"
+        puts "set dst is big #{im} #{src_id} #{domain}"
         dst_info[:is_big] = true
       end
 
@@ -983,14 +972,30 @@ module Girl
       end
 
       im_info[:in] += data.bytesize
-      src_id = dst_info[:src_id]
       data = pack_traffic(src_id, data)
 
       if dst_info[:is_big]
         big = im_info[:big]
-        add_big_wbuff(big, data)
+
+        if big.nil? || big.closed?
+          close_dst(dst)
+          return
+        end
+
+        overflowing = add_big_wbuff(big, data)
+
+        if overflowing
+          puts "big overflowing pause dst #{src_id} #{domain}"
+          @reads.delete(dst)
+        end
       else
         proxy = im_info[:proxy]
+
+        if proxy.nil? || proxy.closed?
+          close_dst(dst)
+          return
+        end
+
         add_proxy_wbuff(proxy, data)
       end
     end
@@ -1127,9 +1132,26 @@ module Girl
 
       if p2_info[:is_big]
         big = im_info[:big]
-        add_big_wbuff(big, data)
+
+        if big.nil? || big.closed?
+          close_p2(p2)
+          return
+        end
+
+        overflowing = add_big_wbuff(big, data)
+
+        if overflowing
+          puts "big overflowing pause p2 #{p2_id}"
+          @reads.delete(p2)
+        end
       else
         proxy = im_info[:proxy]
+
+        if proxy.nil? || proxy.closed?
+          close_p2(p2)
+          return
+        end
+
         add_proxy_wbuff(proxy, data)
       end
     end
@@ -1152,7 +1174,7 @@ module Girl
         closing: false,
         im: im,
         in: 0,
-        is_big: false, # 收来的流量是否是大流量
+        is_big: false, # 是否收流量大户
         overflowing: false,
         p2_id: p2_id,
         wbuff: ''
@@ -1160,10 +1182,9 @@ module Girl
       add_read(p2, :p2)
       im_info = @im_infos[im]
       return unless im_info
-      proxy = im_info[:proxy]
       puts "add h_a_new_p2 #{im} #{p2_id}"
       msg = "#{@h_a_new_p2}#{[p2_id].pack('Q>')}"
-      add_proxy_wbuff(proxy, pack_a_chunk(msg))
+      add_proxy_wbuff(im_info[:proxy], pack_a_chunk(msg))
     end
 
     def read_rsv(rsv)
@@ -1184,6 +1205,12 @@ module Girl
 
         if im_info
           proxy = im_info[:proxy]
+
+          if proxy.nil? || proxy.closed?
+            close_rsv(rsv)
+            return
+          end
+
           near_id = rsv_info[:near_id]
           puts "add h_response #{im} #{near_id} #{rsv_info[:domain]} #{data.bytesize}" if @is_debug
           msg = "#{@h_response}#{[near_id].pack('Q>')}#{data}"
@@ -1454,7 +1481,7 @@ module Girl
         big_info[:overflowing] = false
 
         @dst_infos.select{|_, info| (info[:im] == im) && info[:is_big]}.each do |dst, info|
-          puts "resume dst #{info[:domain]}"
+          puts "resume dst #{info[:src_id]} #{info[:domain]}"
           add_read(dst)
         end
 
@@ -1507,10 +1534,11 @@ module Girl
       
       data = data[written..-1]
       dst_info[:wbuff] = data
+      src_id = dst_info[:src_id]
       domain = dst_info[:domain]
 
       if dst_info[:wbuff].empty? && dst_info[:overflowing]
-        puts "dst empty #{im} #{domain}"
+        puts "dst empty #{im} #{src_id} #{domain}"
         dst_info[:overflowing] = false
 
         if big
