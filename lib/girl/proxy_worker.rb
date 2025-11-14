@@ -29,6 +29,10 @@ module Girl
       h_response,
       h_src_close,
       h_traffic,
+      h_dst_switch_to_big,
+      h_p2_switch_to_big,
+      h_src_switch_to_big,
+      h_p1_switch_to_big,
       expire_connecting,
       expire_long_after,
       expire_proxy_after,
@@ -55,7 +59,7 @@ module Girl
       @proxy_infos = {}      # proxy => {:is_syn :rbuff :recv_at :wbuff}
       @big_infos = {}        # big => {:is_syn :overflowing :rbuff :recv_at :wbuff}
       @mem_infos = {}        # mem => {:wbuff}
-      @src_infos = {}        # src => {:addrinfo :closing :destination_domain :destination_port :dst :in :is_big :is_connect :overflowing :proxy_proto :proxy_type :rbuff :src_id :wbuff}
+      @src_infos = {}        # src => {:addrinfo :closing :destination_domain :destination_port :dst :in :is_big :is_connect :overflowing :proxy_proto :proxy_type :rbuff :src_id :switched :wbuff :wpend}
       @dst_infos = {}        # dst => {:closing :connected :domain :ip :overflowing :port :src :wbuff}
       @dns_infos = {}        # dns => {:domain :src}
       @rsv_infos = {}        # rsv => {:addrinfo :domain :type}
@@ -64,7 +68,7 @@ module Girl
       @is_direct_caches = {} # ip => true / false
       @response_caches = {}  # domain => [response created_at ip is_remote]
       @response6_caches = {} # domain => [response created_at ip is_remote]
-      @p1_infos = {}         # p1 => {:closing :connected :in :is_big :overflowing :p2_id :wbuff}
+      @p1_infos = {}         # p1 => {:closing :connected :in :is_big :overflowing :p2_id :switched :wbuff :wpend}
       @appd_addr = Socket.sockaddr_in(appd_port, appd_host)
       @head_len = head_len
       @h_a_new_source = h_a_new_source
@@ -78,6 +82,10 @@ module Girl
       @h_response = h_response
       @h_src_close = h_src_close
       @h_traffic = h_traffic
+      @h_dst_switch_to_big = h_dst_switch_to_big
+      @h_p2_switch_to_big = h_p2_switch_to_big
+      @h_src_switch_to_big = h_src_switch_to_big
+      @h_p1_switch_to_big = h_p1_switch_to_big
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
       @expire_proxy_after = expire_proxy_after
@@ -246,6 +254,30 @@ module Girl
       add_write(p1)
     end
 
+    def add_p1_wpend(p1, data)
+      return if p1.nil? || p1.closed? || data.nil? || data.empty?
+      p1_info = @p1_infos[p1]
+      puts "add p1 wpend #{data.bytesize}" if @is_debug
+      p1_info[:wpend] << data
+      bytesize = p1_info[:wpend].bytesize
+      p2_id = p1_info[:p2_id]
+
+      if bytesize >= CLOSE_ABOVE
+        puts "p1 wpend full"
+        close_p1(p1)
+      end
+
+      if !p1_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
+        puts "p1 overflow #{p2_id}"
+        p1_info[:overflowing] = true
+
+        if @big
+          puts 'pause big'
+          @reads.delete(@big)
+        end
+      end
+    end
+
     def add_proxy_wbuff(data)
       return if @proxy.closed? || data.nil? || data.empty?
       proxy_info = @proxy_infos[@proxy]
@@ -291,7 +323,7 @@ module Girl
       puts "add src rbuff #{data.bytesize}" if @is_debug
       src_info[:rbuff] << data
 
-      if src_info[:rbuff].bytesize >= WBUFF_LIMIT
+      if src_info[:rbuff].bytesize >= CLOSE_ABOVE
         puts "src rbuff full"
         close_src(src)
       end
@@ -325,6 +357,34 @@ module Girl
       end
 
       add_write(src)
+    end
+
+    def add_src_wpend(src, data)
+      return if src.nil? || src.closed? || data.nil? || data.empty?
+      src_info = @src_infos[src]
+      puts "add src wpend #{data.bytesize}" if @is_debug
+      src_info[:wpend] << data
+      bytesize = src_info[:wpend].bytesize
+      src_id = src_info[:src_id]
+      domain = src_info[:destination_domain]
+
+      if bytesize >= CLOSE_ABOVE
+        puts "src wpend full"
+        close_src(src)
+      end
+
+      if !src_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
+        puts "src overflow #{src_id} #{domain}"
+        src_info[:overflowing] = true
+
+        if src_info[:proxy_type] == :direct
+          puts "pause dst"
+          @reads.delete(src_info[:dst])
+        elsif src_info[:proxy_type] == :remote
+          puts "pause big"
+          @reads.delete(@big)
+        end
+      end
     end
 
     def add_write(sock)
@@ -521,15 +581,29 @@ module Girl
         p2_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
         # puts "big got h_p2_traffic #{p2_id} #{data.bytesize}" if @is_debug
-        p1, _ = @p1_infos.find{|_, info| info[:p2_id] == p2_id}
-        add_p1_wbuff(p1, data)
+        p1, p1_info = @p1_infos.find{|_, info| info[:p2_id] == p2_id}
+
+        if p1_info
+          if p1_info[:switched]
+            add_p1_wbuff(p1, data)
+          else
+            add_p1_wpend(p1, data)
+          end
+        end
       when @h_traffic
         return if data.bytesize < 9
         src_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
         # puts "big got h_traffic #{src_id} #{data.bytesize}" if @is_debug
-        src, _ = @src_infos.find{|_, info| info[:src_id] == src_id}
-        add_src_wbuff(src, data)
+        src, src_info = @src_infos.find{|_, info| info[:src_id] == src_id}
+
+        if src_info
+          if src_info[:switched]
+            add_src_wbuff(src, data)
+          else
+            add_src_wpend(src, data)
+          end
+        end
       end
     end
 
@@ -599,6 +673,39 @@ module Girl
         data = data[9..-1]
         src, _ = @src_infos.find{|_, info| info[:src_id] == src_id}
         add_src_wbuff(src, data)
+      when @h_dst_switch_to_big
+        return if data.bytesize < 9
+        src_id = data[1, 8].unpack('Q>').first
+        puts "got h_dst_switch_to_big #{src_id}" if @is_debug
+        src, src_info = @src_infos.find{|_, info| info[:src_id] == src_id}
+
+        if src_info && !src_info[:switched]
+          src_info[:switched] = true
+          
+          unless src_info[:wpend].empty?
+            data = src_info[:wpend].dup
+            domain = src_info[:destination_domain]
+            puts "move src wpend to wbuff #{domain} #{data.bytesize}"
+            src_info[:wpend].clear
+            add_src_wbuff(src, data)
+          end
+        end
+      when @h_p2_switch_to_big
+        return if data.bytesize < 9
+        p2_id = data[1, 8].unpack('Q>').first
+        puts "got h_p2_switch_to_big #{p2_id}" if @is_debug
+        p1, p1_info = @p1_infos.find{|_, info| info[:p2_id] == p2_id}
+
+        if p1_info && !p1_info[:switched]
+          p1_info[:switched] = true
+          
+          unless p1_info[:wpend].empty?
+            data = p1_info[:wpend].dup
+            puts "move p1 wpend to wbuff #{p2_id} #{data.bytesize}"
+            p1_info[:wpend].clear
+            add_p1_wbuff(p1, data)
+          end
+        end
       end
     end
 
@@ -768,10 +875,11 @@ module Girl
 
       add_read(dst, :dst)
       add_write(dst)
-      data = src_info[:rbuff].dup
-
-      unless data.empty?
+      
+      unless src_info[:rbuff].empty?
+        data = src_info[:rbuff].dup
         puts "move src rbuff to dst #{domain} #{data.bytesize}" if @is_debug
+        src_info[:rbuff].clear
         add_dst_wbuff(dst, data)
       end
     end
@@ -830,7 +938,9 @@ module Girl
         is_big: false,
         overflowing: false,
         p2_id: p2_id,
-        wbuff: ''
+        switched: false,
+        wbuff: '',
+        wpend: ''
       }
       add_read(p1, :p1)
       add_write(p1)
@@ -1161,9 +1271,16 @@ module Girl
       p1_info[:in] += data.bytesize
       p2_id = p1_info[:p2_id]
 
+      if @proxy.closed?
+        close_p1(p1)
+        return
+      end
+
       if !p1_info[:is_big] && (p1_info[:in] >= READ_SIZE)
         puts "set p1 is big #{p2_id}"
         p1_info[:is_big] = true
+        msg = "#{@h_p1_switch_to_big}#{[p2_id].pack('Q>')}"
+        add_proxy_wbuff(pack_a_chunk(msg))
       end
 
       data = pack_p2_traffic(p2_id, data)
@@ -1181,11 +1298,6 @@ module Girl
           @reads.delete(p1)
         end
       else
-        if @proxy.closed?
-          close_p1(p1)
-          return
-        end
-
         add_proxy_wbuff(data)
       end
     end
@@ -1235,7 +1347,9 @@ module Girl
         proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
         rbuff: '',
         src_id: src_id,
-        wbuff: ''
+        switched: false,
+        wbuff: '',
+        wpend: ''
       }
       add_read(src, :src)
     end
@@ -1497,9 +1611,16 @@ module Girl
         src_id = src_info[:src_id]
         domain = src_info[:destination_domain]
 
+        if @proxy.closed?
+          close_src(src)
+          return
+        end
+
         if !src_info[:is_big] && (src_info[:in] >= READ_SIZE)
           puts "set src is big #{src_id} #{domain}"
           src_info[:is_big] = true
+          msg = "#{@h_src_switch_to_big}#{[src_id].pack('Q>')}"
+          add_proxy_wbuff(pack_a_chunk(msg))
         end
 
         data = pack_traffic(src_id, data)
@@ -1517,11 +1638,6 @@ module Girl
             @reads.delete(src)
           end
         else
-          if @proxy.closed?
-            close_src(src)
-            return
-          end
-
           add_proxy_wbuff(data)
         end
       when :direct
@@ -1575,7 +1691,9 @@ module Girl
         proxy_type: :uncheck,  # :uncheck / :checking / :negotiation / :remote / :direct
         rbuff: '',
         src_id: src_id,
-        wbuff: ''
+        switched: false,
+        wbuff: '',
+        wpend: ''
       }
       add_read(src, :src)
       make_tunnel(dest_ip, src)
@@ -1698,10 +1816,11 @@ module Girl
       puts "add h_a_new_source #{src_id} #{domain_port}" if @is_debug
       msg = "#{@h_a_new_source}#{[src_id].pack('Q>')}#{domain_port}"
       add_proxy_wbuff(pack_a_chunk(msg))
-      data = src_info[:rbuff].dup
-
-      unless data.empty?
+      
+      unless src_info[:rbuff].empty?
+        data = src_info[:rbuff].dup
         puts "move src rbuff to proxy #{domain} #{data.bytesize}" if @is_debug
+        src_info[:rbuff].clear
         add_proxy_wbuff(pack_traffic(src_id, data))
       end
     end
@@ -1910,7 +2029,7 @@ module Girl
       p1_info[:wbuff] = data
       p2_id = p1_info[:p2_id]
 
-      if p1_info[:overflowing] && p1_info[:wbuff].empty?
+      if p1_info[:overflowing] && p1_info[:wbuff].empty? && p1_info[:wpend].empty?
         puts "p1 empty #{p2_id}"
         p1_info[:overflowing] = false
         puts "resume big"
@@ -1989,7 +2108,7 @@ module Girl
       data = data[written..-1]
       src_info[:wbuff] = data
 
-      if src_info[:wbuff].empty? && src_info[:overflowing]
+      if src_info[:overflowing] && src_info[:wbuff].empty? && src_info[:wpend].empty?
         src_id = src_info[:src_id]
         domain = src_info[:destination_domain]
         puts "src empty #{src_id} #{domain}"

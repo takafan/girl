@@ -24,18 +24,22 @@ module Girl
         ims = conf[:ims]
         p2d_host = conf[:p2d_host]
         p2d_port = conf[:p2d_port]
-        head_len = conf[:head_len]               # 头长度
-        h_a_new_source = conf[:h_a_new_source]   # A
-        h_a_new_p2 = conf[:h_a_new_p2]           # B
-        h_dst_close = conf[:h_dst_close]         # D
-        h_heartbeat = conf[:h_heartbeat]         # H
-        h_p1_close = conf[:h_p1_close]           # I
-        h_p2_close = conf[:h_p2_close]           # J
-        h_p2_traffic = conf[:h_p2_traffic]       # K
-        h_query = conf[:h_query]                 # Q
-        h_response = conf[:h_response]           # R
-        h_src_close = conf[:h_src_close]         # S
-        h_traffic = conf[:h_traffic]             # T
+        head_len = conf[:head_len]                       # 头长度
+        h_a_new_source = conf[:h_a_new_source]           # A
+        h_a_new_p2 = conf[:h_a_new_p2]                   # B
+        h_dst_close = conf[:h_dst_close]                 # D
+        h_heartbeat = conf[:h_heartbeat]                 # H
+        h_p1_close = conf[:h_p1_close]                   # I
+        h_p2_close = conf[:h_p2_close]                   # J
+        h_p2_traffic = conf[:h_p2_traffic]               # K
+        h_query = conf[:h_query]                         # Q
+        h_response = conf[:h_response]                   # R
+        h_src_close = conf[:h_src_close]                 # S
+        h_traffic = conf[:h_traffic]                     # T
+        h_dst_switch_to_big = conf[:h_dst_switch_to_big] # U
+        h_p2_switch_to_big = conf[:h_p2_switch_to_big]   # V
+        h_src_switch_to_big = conf[:h_src_switch_to_big] # W
+        h_p1_switch_to_big = conf[:h_p1_switch_to_big]   # X
         expire_connecting = conf[:expire_connecting]     # 连接多久没有建成关闭（秒）
         expire_long_after = conf[:expire_long_after]     # 长连接多久没有新流量关闭（秒）
         expire_resolv_cache = conf[:expire_resolv_cache] # dns查询结果缓存多久（秒）
@@ -84,6 +88,10 @@ module Girl
       h_response = h_response ? h_response.to_s : 'R'
       h_src_close = h_src_close ? h_src_close.to_s : 'S'
       h_traffic = h_traffic ? h_traffic.to_s : 'T'
+      h_dst_switch_to_big = h_dst_switch_to_big ? h_dst_switch_to_big.to_s : 'U'
+      h_p2_switch_to_big = h_p2_switch_to_big ? h_p2_switch_to_big.to_s : 'V'
+      h_src_switch_to_big = h_src_switch_to_big ? h_src_switch_to_big.to_s : 'W'
+      h_p1_switch_to_big = h_p1_switch_to_big ? h_p1_switch_to_big.to_s : 'X'
       expire_connecting = expire_connecting ? expire_connecting.to_i : 5
       expire_long_after = expire_long_after ? expire_long_after.to_i : 3600
       expire_resolv_cache = expire_resolv_cache ? expire_resolv_cache.to_i : 600
@@ -127,6 +135,10 @@ module Girl
         h_response,
         h_src_close,
         h_traffic,
+        h_dst_switch_to_big,
+        h_p2_switch_to_big,
+        h_src_switch_to_big,
+        h_p1_switch_to_big,
         expire_connecting,
         expire_long_after,
         expire_resolv_cache,

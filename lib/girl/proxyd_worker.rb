@@ -23,6 +23,10 @@ module Girl
       h_response,
       h_src_close,
       h_traffic,
+      h_dst_switch_to_big,
+      h_p2_switch_to_big,
+      h_src_switch_to_big,
+      h_p1_switch_to_big,
       expire_connecting,
       expire_long_after,
       expire_resolv_cache,
@@ -43,12 +47,12 @@ module Girl
       @im_infos = {}       # im => {:addrinfo :big :big_connect_at :in :out :p2d :p2d_host :p2d_port :proxy :proxy_connect_at}
       @src_infos = {}      # src_id => {:created_at :dst :im :rbuff}
       @mem_infos = {}      # mem => {:wbuff}
-      @dst_infos = {}      # dst => {:closing :connected :domain :im :in :ip :is_big :overflowing :port :rbuffs :src_id :wbuff}
+      @dst_infos = {}      # dst => {:closing :connected :domain :im :in :ip :is_big :overflowing :port :rbuffs :src_id :switched :wbuff :wpend}
       @dns_infos = {}      # dns => {:domain :im :port :src_id}
       @rsv_infos = {}      # rsv => {:domain :im :near_id}
       @resolv_caches = {}  # domain => [ip created_at]
       @p2d_infos = {}      # p2d => {:im}
-      @p2_infos = {}       # p2 => {:addrinfo :closing :im :in :is_big :overflowing :p2_id :wbuff}
+      @p2_infos = {}       # p2 => {:addrinfo :closing :im :in :is_big :overflowing :p2_id :switched :wbuff :wpend}
       @head_len = head_len
       @h_a_new_source = h_a_new_source
       @h_a_new_p2 = h_a_new_p2
@@ -61,6 +65,10 @@ module Girl
       @h_response = h_response
       @h_src_close = h_src_close
       @h_traffic = h_traffic
+      @h_dst_switch_to_big = h_dst_switch_to_big
+      @h_p2_switch_to_big = h_p2_switch_to_big
+      @h_src_switch_to_big = h_src_switch_to_big
+      @h_p1_switch_to_big = h_p1_switch_to_big
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
       @expire_resolv_cache = expire_resolv_cache
@@ -199,6 +207,37 @@ module Girl
       add_write(dst)
     end
 
+    def add_dst_wpend(dst, data)
+      return if dst.nil? || dst.closed? || data.nil? || data.empty?
+      dst_info = @dst_infos[dst]
+      puts "add dst wpend #{data.bytesize}" if @is_debug
+      dst_info[:wpend] << data
+      bytesize = dst_info[:wpend].bytesize
+      im = dst_info[:im]
+      domain = dst_info[:domain]
+
+      if bytesize >= CLOSE_ABOVE
+        puts "dst wpend full"
+        close_dst(dst)
+        return
+      end
+
+      if !dst_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
+        puts "dst overflow #{im} #{domain}"
+        dst_info[:overflowing] = true
+        im_info = @im_infos[im]
+
+        if im_info
+          big = im_info[:big]
+
+          if big
+            puts 'pause big'
+            @reads.delete(big)
+          end
+        end
+      end
+    end
+
     def add_mem_wbuff(mem, data)
       return if mem.nil? || mem.closed? || data.nil? || data.empty?
       mem_info = @mem_infos[mem]
@@ -238,6 +277,37 @@ module Girl
       add_write(p2)
     end
 
+    def add_p2_wpend(p2, data)
+      return if p2.nil? || p2.closed? || data.nil? || data.empty?
+      p2_info = @p2_infos[p2]
+      puts "add p2 wpend #{data.bytesize}" if @is_debug
+      p2_info[:wpend] << data
+      bytesize = p2_info[:wpend].bytesize
+      im = p2_info[:im]
+      p2_id = p2_info[:p2_id]
+
+      if bytesize >= CLOSE_ABOVE
+        puts "p2 wpend full"
+        close_p2(p2)
+        return
+      end
+
+      if !p2_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
+        puts "p2 overflow #{im} #{p2_id}"
+        p2_info[:overflowing] = true
+        im_info = @im_infos[im]
+
+        if im_info
+          big = im_info[:big]
+
+          if big
+            puts 'pause big'
+            @reads.delete(big)
+          end
+        end
+      end
+    end
+
     def add_proxy_wbuff(proxy, data)
       return if proxy.nil? || proxy.closed? || data.nil? || data.empty?
       proxy_info = @proxy_infos[proxy]
@@ -266,27 +336,6 @@ module Girl
 
       if @update_roles.include?(role)
         set_update(sock)
-      end
-    end
-
-    def add_src_rbuff(src_id, data)
-      src_info = @src_infos[src_id]
-
-      if src_info
-        im = src_info[:im]
-        dst = src_info[:dst]
-
-        if dst
-          add_dst_wbuff(dst, data)
-        else
-          puts "add src rbuff #{im} #{data.bytesize}" if @is_debug
-          src_info[:rbuff] << data
-
-          if src_info[:rbuff].bytesize >= WBUFF_LIMIT
-            puts "src rbuff full"
-            @src_infos.delete(src_id)
-          end
-        end
       end
     end
 
@@ -499,14 +548,37 @@ module Girl
         p2_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
         # puts "big got h_p2_traffic #{im} #{p2_id} #{data.bytesize}" if @is_debug
-        p2, _ = @p2_infos.find{|_, info| (info[:im] == im) && (info[:p2_id] == p2_id)}
-        add_p2_wbuff(p2, data)
+        p2, p2_info = @p2_infos.find{|_, info| (info[:im] == im) && (info[:p2_id] == p2_id)}
+        
+        if p2_info
+          if p2_info[:switched]
+            add_p2_wbuff(p2, data)
+          else
+            add_p2_wpend(p2, data)
+          end
+        end
       when @h_traffic
         return if data.bytesize < 9
         src_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
         # puts "big got h_traffic #{im} #{src_id} #{data.bytesize}" if @is_debug
-        add_src_rbuff(src_id, data)
+        src_info = @src_infos[src_id]
+
+        if src_info
+          dst = src_info[:dst]
+
+          if dst
+            dst_info = @dst_infos[dst]
+
+            if dst_info
+              if dst_info[:switched]
+                add_dst_wbuff(dst, data)
+              else
+                add_dst_wpend(dst, data)
+              end
+            end
+          end
+        end
       end
     end
 
@@ -561,7 +633,64 @@ module Girl
         return if data.bytesize < 9
         src_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
-        add_src_rbuff(src_id, data)
+        src_info = @src_infos[src_id]
+
+        if src_info
+          dst = src_info[:dst]
+
+          if dst
+            add_dst_wbuff(dst, data)
+          else
+            puts "add src rbuff #{im} #{data.bytesize}" if @is_debug
+            src_info[:rbuff] << data
+
+            if src_info[:rbuff].bytesize >= CLOSE_ABOVE
+              puts "src rbuff full"
+              @src_infos.delete(src_id)
+            end
+          end
+        end
+      when @h_src_switch_to_big
+        return if data.bytesize < 9
+        src_id = data[1, 8].unpack('Q>').first
+        puts "got h_src_switch_to_big #{src_id}" if @is_debug
+        src_info = @src_infos[src_id]
+
+        if src_info
+          dst = src_info[:dst]
+
+          if dst
+            dst_info = @dst_infos[dst]
+
+            if dst_info && !dst_info[:switched]
+              dst_info[:switched] = true
+              
+              unless dst_info[:wpend].empty?
+                data = dst_info[:wpend].dup
+                domain = dst_info[:domain]
+                puts "move dst wpend to wbuff #{domain} #{data.bytesize}"
+                dst_info[:wpend].clear
+                add_dst_wbuff(dst, data)
+              end
+            end
+          end
+        end
+      when @h_p1_switch_to_big
+        return if data.bytesize < 9
+        p2_id = data[1, 8].unpack('Q>').first
+        puts "got h_p1_switch_to_big #{p2_id}" if @is_debug
+        p2, p2_info = @p2_infos.find{|_, info| (info[:im] == im) && (info[:p2_id] == p2_id)}
+
+        if p2_info && !p2_info[:switched]
+          p2_info[:switched] = true
+          
+          unless p2_info[:wpend].empty?
+            data = p2_info[:wpend].dup
+            puts "move p2 wpend to wbuff #{p2_id} #{data.bytesize}"
+            p2_info[:wpend].clear
+            add_p2_wbuff(p2, data)
+          end
+        end
       end
     end
 
@@ -685,12 +814,15 @@ module Girl
         port: port,
         rbuffs: [],
         src_id: src_id,
-        wbuff: src_info[:rbuff].dup
+        switched: false,
+        wbuff: src_info[:rbuff].dup,
+        wpend: ''
       }
 
       @dst_infos[dst] = dst_info
       add_read(dst, :dst)
       add_write(dst)
+      src_info[:rbuff].clear
       src_info[:dst] = dst
     end
 
@@ -958,17 +1090,25 @@ module Girl
       im = dst_info[:im]
       src_id = dst_info[:src_id]
       domain = dst_info[:domain]
-
-      if !dst_info[:is_big] && (dst_info[:in] >= READ_SIZE)
-        puts "set dst is big #{im} #{src_id} #{domain}"
-        dst_info[:is_big] = true
-      end
-
       im_info = @im_infos[im]
 
       unless im_info
         close_dst(dst)
         return
+      end
+
+      proxy = im_info[:proxy]
+
+      if proxy.nil? || proxy.closed?
+        close_dst(dst)
+        return
+      end
+
+      if !dst_info[:is_big] && (dst_info[:in] >= READ_SIZE)
+        puts "set dst is big #{im} #{src_id} #{domain}"
+        dst_info[:is_big] = true
+        msg = "#{@h_dst_switch_to_big}#{[src_id].pack('Q>')}"
+        add_proxy_wbuff(proxy, pack_a_chunk(msg))
       end
 
       im_info[:in] += data.bytesize
@@ -989,13 +1129,6 @@ module Girl
           @reads.delete(dst)
         end
       else
-        proxy = im_info[:proxy]
-
-        if proxy.nil? || proxy.closed?
-          close_dst(dst)
-          return
-        end
-
         add_proxy_wbuff(proxy, data)
       end
     end
@@ -1115,17 +1248,25 @@ module Girl
       p2_info[:in] += data.bytesize
       im = p2_info[:im]
       p2_id = p2_info[:p2_id]
-
-      if !p2_info[:is_big] && (p2_info[:in] >= READ_SIZE)
-        puts "set p2 is big #{im} #{p2_id}"
-        p2_info[:is_big] = true
-      end
-
       im_info = @im_infos[im]
 
       unless im_info
         close_p2(p2)
         return
+      end
+
+      proxy = im_info[:proxy]
+
+      if proxy.nil? || proxy.closed?
+        close_p2(p2)
+        return
+      end
+
+      if !p2_info[:is_big] && (p2_info[:in] >= READ_SIZE)
+        puts "set p2 is big #{im} #{p2_id}"
+        p2_info[:is_big] = true
+        msg = "#{@h_p2_switch_to_big}#{[p2_id].pack('Q>')}"
+        add_proxy_wbuff(proxy, pack_a_chunk(msg))
       end
 
       data = pack_p2_traffic(p2_id, data)
@@ -1145,13 +1286,6 @@ module Girl
           @reads.delete(p2)
         end
       else
-        proxy = im_info[:proxy]
-
-        if proxy.nil? || proxy.closed?
-          close_p2(p2)
-          return
-        end
-
         add_proxy_wbuff(proxy, data)
       end
     end
@@ -1177,7 +1311,9 @@ module Girl
         is_big: false, # 是否收流量大户
         overflowing: false,
         p2_id: p2_id,
-        wbuff: ''
+        switched: false,
+        wbuff: '',
+        wpend: ''
       }
       add_read(p2, :p2)
       im_info = @im_infos[im]
@@ -1537,7 +1673,7 @@ module Girl
       src_id = dst_info[:src_id]
       domain = dst_info[:domain]
 
-      if dst_info[:wbuff].empty? && dst_info[:overflowing]
+      if dst_info[:overflowing] && dst_info[:wbuff].empty? && dst_info[:wpend].empty?
         puts "dst empty #{im} #{src_id} #{domain}"
         dst_info[:overflowing] = false
 
@@ -1617,7 +1753,7 @@ module Girl
       p2_info[:wbuff] = data
       p2_id = p2_info[:p2_id]
 
-      if p2_info[:overflowing] && p2_info[:wbuff].empty?
+      if p2_info[:overflowing] && p2_info[:wbuff].empty? && p2_info[:wpend].empty?
         puts "p2 empty #{im} #{p2_id}"
         p2_info[:overflowing] = false
 
