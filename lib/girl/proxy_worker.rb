@@ -1567,6 +1567,8 @@ module Girl
         destination_domain: dest_ip,
         destination_port: dest_port,
         dst: nil,
+        in: 0,
+        is_big: false,
         is_connect: true,
         overflowing: false,
         proxy_proto: :uncheck, # :uncheck / :http / :socks5
