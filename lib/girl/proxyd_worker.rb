@@ -1590,7 +1590,6 @@ module Girl
         return
       end
 
-      return if @writes.include?(im_info[:proxy])
       data = big_info[:wbuff]
 
       if data.empty?

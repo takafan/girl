@@ -265,6 +265,7 @@ module Girl
       if bytesize >= CLOSE_ABOVE
         puts "p1 wpend full"
         close_p1(p1)
+        return
       end
 
       if !p1_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
@@ -371,6 +372,7 @@ module Girl
       if bytesize >= CLOSE_ABOVE
         puts "src wpend full"
         close_src(src)
+        return
       end
 
       if !src_info[:overflowing] && (bytesize >= WBUFF_LIMIT)
@@ -1871,8 +1873,6 @@ module Girl
         @writes.delete(big)
         return
       end
-
-      return if @writes.include?(@proxy)
       
       data = big_info[:wbuff]
 
