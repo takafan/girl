@@ -27,4 +27,5 @@ lib/girl/version.rb
   ]
 
   spec.require_paths = ['lib']
+  spec.required_ruby_version = '>= 1.6.7'
 end
