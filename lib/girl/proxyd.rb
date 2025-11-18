@@ -42,6 +42,7 @@ module Girl
         h_p1_switch_to_big = conf[:h_p1_switch_to_big]   # X
         expire_connecting = conf[:expire_connecting]     # 连接多久没有建成关闭（秒）
         expire_long_after = conf[:expire_long_after]     # 长连接多久没有新流量关闭（秒）
+        expire_proxy_after = conf[:expire_proxy_after]   # proxy多久没有收到流量关闭（秒）
         expire_resolv_cache = conf[:expire_resolv_cache] # dns查询结果缓存多久（秒）
         expire_short_after = conf[:expire_short_after]   # 短连接创建多久后关闭（秒）
         is_debug = conf[:is_debug]
@@ -94,6 +95,7 @@ module Girl
       h_p1_switch_to_big = h_p1_switch_to_big ? h_p1_switch_to_big.to_s : 'X'
       expire_connecting = expire_connecting ? expire_connecting.to_i : 5
       expire_long_after = expire_long_after ? expire_long_after.to_i : 3600
+      expire_proxy_after = expire_proxy_after ? expire_proxy_after.to_i : 60
       expire_resolv_cache = expire_resolv_cache ? expire_resolv_cache.to_i : 600
       expire_short_after = expire_short_after ? expire_short_after.to_i : 5
       is_server_fastopen = false
@@ -141,6 +143,7 @@ module Girl
         h_p1_switch_to_big,
         expire_connecting,
         expire_long_after,
+        expire_proxy_after,
         expire_resolv_cache,
         expire_short_after,
         is_debug,

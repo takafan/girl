@@ -582,7 +582,6 @@ module Girl
         return if data.bytesize < 9
         p2_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
-        # puts "big got h_p2_traffic #{p2_id} #{data.bytesize}" if @is_debug
         p1, p1_info = @p1_infos.find{|_, info| info[:p2_id] == p2_id}
 
         if p1_info
@@ -596,7 +595,6 @@ module Girl
         return if data.bytesize < 9
         src_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
-        # puts "big got h_traffic #{src_id} #{data.bytesize}" if @is_debug
         src, src_info = @src_infos.find{|_, info| info[:src_id] == src_id}
 
         if src_info
@@ -1163,9 +1161,10 @@ module Girl
       when 'heartbeat'
         new_a_proxy if @proxy.closed?
         new_a_big if @big.closed?
+        now = Time.new
         proxy_info = @proxy_infos[@proxy]
         
-        if Time.new.to_i - proxy_info[:recv_at].to_i >= @expire_proxy_after
+        if now.to_i - proxy_info[:recv_at].to_i >= @expire_proxy_after
           puts "renew proxy"
           close_proxy(@proxy)
           new_a_proxy
@@ -1175,7 +1174,7 @@ module Girl
 
         big_info = @big_infos[@big]
 
-        if Time.new.to_i - big_info[:recv_at].to_i >= @expire_proxy_after
+        if now.to_i - big_info[:recv_at].to_i >= @expire_proxy_after
           puts "renew big"
           close_big(@big)
           new_a_big

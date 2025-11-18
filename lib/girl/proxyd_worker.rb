@@ -29,6 +29,7 @@ module Girl
       h_p1_switch_to_big,
       expire_connecting,
       expire_long_after,
+      expire_proxy_after,
       expire_resolv_cache,
       expire_short_after,
       is_debug,
@@ -42,8 +43,8 @@ module Girl
       @writes = []         # 写池
       @roles = {}          # sock => :big / :bigd / :dns / :dst / :infod / :mem / :memd / :p2 / :p2d / :proxy / :proxyd / :rsv
       @updates = {}        # sock => updated_at
-      @proxy_infos = {}    # proxy => {:addrinfo :im :rbuff :wbuff}
-      @big_infos = {}      # big => {:addrinfo :im :overflowing :rbuff :wbuff}
+      @proxy_infos = {}    # proxy => {:addrinfo :im :rbuff :recv_at :wbuff}
+      @big_infos = {}      # big => {:addrinfo :im :overflowing :rbuff :recv_at :wbuff}
       @im_infos = {}       # im => {:addrinfo :big :big_connect_at :in :out :p2d :p2d_host :p2d_port :proxy :proxy_connect_at}
       @src_infos = {}      # src_id => {:created_at :dst :im :rbuff}
       @mem_infos = {}      # mem => {:wbuff}
@@ -71,6 +72,7 @@ module Girl
       @h_p1_switch_to_big = h_p1_switch_to_big
       @expire_connecting = expire_connecting
       @expire_long_after = expire_long_after
+      @expire_proxy_after = expire_proxy_after
       @expire_resolv_cache = expire_resolv_cache
       @expire_short_after = expire_short_after
       @is_debug = is_debug
@@ -349,8 +351,8 @@ module Girl
     def check_expire_bigs
       now = Time.new
 
-      @big_infos.select{|big, _| now.to_i - @updates[big].to_i >= @expire_long_after}.each do |big, info|
-        puts "expire big #{info[:im]}"
+      @big_infos.select{|big, info| now.to_i - info[:recv_at].to_i >= @expire_proxy_after}.each do |big, info|
+        puts "expire big #{info[:im]} #{info[:addrinfo].ip_unpack.inspect}"
         close_big(big)
       end
     end
@@ -394,8 +396,8 @@ module Girl
     def check_expire_proxies
       now = Time.new
 
-      @proxy_infos.select{|proxy, _| now.to_i - @updates[proxy].to_i >= @expire_long_after}.each do |proxy, info|
-        puts "expire proxy #{info[:im]}"
+      @proxy_infos.select{|proxy, info| now.to_i - info[:recv_at].to_i >= @expire_proxy_after}.each do |proxy, info|
+        puts "expire proxy #{info[:im]} #{info[:addrinfo].ip_unpack.inspect}"
         close_proxy(proxy)
       end
     end
@@ -540,6 +542,8 @@ module Girl
       big_info = @big_infos[big]
       im = big_info[:im]
       return unless im
+      now = Time.new
+      big_info[:recv_at] = now
       h = data[0]
 
       case h
@@ -547,7 +551,6 @@ module Girl
         return if data.bytesize < 9
         p2_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
-        # puts "big got h_p2_traffic #{im} #{p2_id} #{data.bytesize}" if @is_debug
         p2, p2_info = @p2_infos.find{|_, info| (info[:im] == im) && (info[:p2_id] == p2_id)}
         
         if p2_info
@@ -561,7 +564,6 @@ module Girl
         return if data.bytesize < 9
         src_id = data[1, 8].unpack('Q>').first
         data = data[9..-1]
-        # puts "big got h_traffic #{im} #{src_id} #{data.bytesize}" if @is_debug
         src_info = @src_infos[src_id]
 
         if src_info
@@ -587,6 +589,8 @@ module Girl
       proxy_info = @proxy_infos[proxy]
       im = proxy_info[:im]
       return unless im
+      now = Time.new
+      proxy_info[:recv_at] = now
       h = data[0]
 
       case h
@@ -597,7 +601,7 @@ module Girl
         domain_port = data[9..-1]
         puts "got h_a_new_source #{im} #{src_id} #{domain_port.inspect}" if @is_debug
         @src_infos[src_id] = {
-          created_at: Time.new,
+          created_at: now,
           dst: nil,
           im: im,
           rbuff: ''
@@ -1025,15 +1029,14 @@ module Girl
 
       puts "accept a big #{addrinfo.ip_unpack.inspect}"
 
-      big_info = {
+      @big_infos[big] = {
         addrinfo: addrinfo,
         im: nil,
         overflowing: false,
         rbuff: '',
+        recv_at: Time.new,
         wbuff: ''
       }
-
-      @big_infos[big] = big_info
       add_read(big, :big)
     end
 
@@ -1447,6 +1450,7 @@ module Girl
         addrinfo: addrinfo,
         im: nil,
         rbuff: '',
+        recv_at: Time.new,
         wbuff: ''
       }
       add_read(proxy, :proxy)
