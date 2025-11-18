@@ -1585,15 +1585,6 @@ module Girl
         return
       end
 
-      im = big_info[:im]
-      im_info = @im_infos[im]
-
-      if im_info.nil? || im_info[:proxy].nil?
-        puts "proxy not found close big"
-        close_big(big)
-        return
-      end
-
       data = big_info[:wbuff]
 
       if data.empty?
@@ -1611,12 +1602,18 @@ module Girl
       end
 
       set_update(big)
-      im_info[:out] += written
+      im = big_info[:im]
+
+      if im
+        im_info = @im_infos[im]
+        im_info[:out] += written if im_info
+      end
+
       data = data[written..-1]
       big_info[:wbuff] = data
 
       if big_info[:wbuff].empty? && big_info[:overflowing]
-        puts "big empty #{big_info[:im]}"
+        puts "big empty #{im}"
         big_info[:overflowing] = false
 
         @dst_infos.select{|_, info| (info[:im] == im) && info[:is_big]}.each do |dst, info|
@@ -1637,6 +1634,15 @@ module Girl
       unless dst_info
         puts "dst info not found delete dst"
         @writes.delete(dst)
+        return
+      end
+
+      im = dst_info[:im]
+      im_info = @im_infos[im]
+
+      unless im_info
+        puts "im info not found close dst"
+        close_dst(dst)
         return
       end
 
@@ -1663,14 +1669,7 @@ module Girl
       end
 
       set_update(dst)
-      im = dst_info[:im]
-      im_info = @im_infos[im]
-
-      if im_info
-        im_info[:out] += written
-        big = im_info[:big]
-      end
-      
+      im_info[:out] += written
       data = data[written..-1]
       dst_info[:wbuff] = data
       src_id = dst_info[:src_id]
@@ -1679,6 +1678,7 @@ module Girl
       if dst_info[:overflowing] && dst_info[:wbuff].empty? && dst_info[:wpend].empty?
         puts "dst empty #{im} #{src_id} #{domain}"
         dst_info[:overflowing] = false
+        big = im_info[:big]
 
         if big
           puts "resume big"
@@ -1727,6 +1727,15 @@ module Girl
         return
       end
 
+      im = p2_info[:im]
+      im_info = @im_infos[im]
+
+      unless im_info
+        puts "im info not found close p2"
+        close_p2(p2)
+        return
+      end
+
       data = p2_info[:wbuff]
 
       if data.empty?
@@ -1749,9 +1758,6 @@ module Girl
       end
 
       set_update(p2)
-      im = p2_info[:im]
-      im_info = @im_infos[im]
-      big = im_info[:big] if im_info
       data = data[written..-1]
       p2_info[:wbuff] = data
       p2_id = p2_info[:p2_id]
@@ -1759,6 +1765,7 @@ module Girl
       if p2_info[:overflowing] && p2_info[:wbuff].empty? && p2_info[:wpend].empty?
         puts "p2 empty #{im} #{p2_id}"
         p2_info[:overflowing] = false
+        big = im_info[:big]
 
         if big
           puts "resume big"
@@ -1794,8 +1801,12 @@ module Girl
 
       set_update(proxy)
       im = proxy_info[:im]
-      im_info = @im_infos[im]
-      im_info[:out] += written if im_info
+
+      if im
+        im_info = @im_infos[im]
+        im_info[:out] += written if im_info
+      end
+
       data = data[written..-1]
       proxy_info[:wbuff] = data
     end
