@@ -1440,18 +1440,21 @@ module Girl
       end
 
       if @remotes.any?{|r| domain.include?(r)}
-        check_expire_nears
-        near_id = rand((2 ** 64) - 2) + 1
-        @near_infos[near_id] = {
-          addrinfo: addrinfo,
-          created_at: Time.new,
-          domain: domain,
-          id: id,
-          type: type
-        }
-        puts "add h_query #{near_id} #{type} #{domain}" if @is_debug
-        msg = "#{@h_query}#{[near_id, type].pack('Q>C')}#{domain}"
-        add_proxy_wbuff(pack_a_chunk(msg))
+        if type == 1
+          check_expire_nears
+          near_id = rand((2 ** 64) - 2) + 1
+          @near_infos[near_id] = {
+            addrinfo: addrinfo,
+            created_at: Time.new,
+            domain: domain,
+            id: id,
+            type: type
+          }
+          puts "add h_query #{near_id} #{type} #{domain}" if @is_debug
+          msg = "#{@h_query}#{[near_id, type].pack('Q>C')}#{domain}"
+          add_proxy_wbuff(pack_a_chunk(msg))
+        end
+        
         return
       end
 
