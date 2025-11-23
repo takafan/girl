@@ -11,11 +11,11 @@
 ## 流转图
 
 ```txt
-流量 -> 代理 -> 妹子近端 -> 域名命中remotes.txt？-- hit --> 远端 -> 解析域名 -> 目的地
-                        \
-                            `- no -> 解析域名 -> ip命中directs.txt？-- hit --> 目的地
-                                                        \
-                                                            `- no -> 远端 -> 目的地
+流量 -> 代理 -> 妹子近端 -> 域名命中proxy.remote.txt？-- hit --> 远端 -> 解析域名 -> 目的地
+                      \
+                       `- no -> 解析域名 -> ip命中proxy.direct.txt？-- hit --> 目的地
+                                                                 \
+                                                                  `- no -> 远端 -> 目的地
 ```
 
 ## 使用
@@ -98,7 +98,7 @@ ruby proxy.run.rb
 ```js
 {
     "redir_port": 6666,                          // 代理端口
-    "tspd_port": 7777,                           // 网关端口
+    "tspd_port": 7777,                           // 网关端口（tcp）/dns端口（udp）
     "proxyd_host": "1.2.3.4",                    // 远端服务器
     "proxyd_port": 6060,                         // 远端端口
     "direct_path": "/boot/proxy.direct.txt",     // 直连ip段
@@ -153,7 +153,7 @@ curl -x http://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.b
 curl -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100MB.bin
 ```
 
-妹子同时支持三种代理：http, http tunnel, socks5, 以及担当网关和担当dns。
+妹子同时支持三种代理：http, http tunnel, socks5。
 
 ## 设备端设代理
 
@@ -197,29 +197,51 @@ ns:
 
 steam如果开了着色器预缓存会导致它忽略代理，务必关闭：设置 > 下载 > 启用着色器预缓存 > 关
 
+## dns
+
+有的软件api走代理但cdn采取直连，该cdn国内dns查询只能得到假ip，例如TikTok app。
+
+妹子近端同时提供dns服务，把该cdn二级域名填在proxy.remote.txt里，妹子会中转给远端查到真ip。
+
+```txt
+dns查询 -> 网关 -> 妹子dns端口 -> 命中缓存？- hit -> 返回ip
+                            \
+                             `- no -> 域名命中proxy.remote.txt？- hit -> 远端解析域名 -> 返回ip
+                                                              \
+                                                               `- no -> 就近解析域名 -> 返回ip
+```
+
+拿openwrt举例，妹子近端启在openwrt系统的派上，openwrt默认由dnsmasq监听53端口，转给妹子的dns端口：`vi /etc/config/dhcp`
+
+```bash
+config dnsmasq
+    # ...
+    option rebind_protection '0'
+    option localservice '0'
+    option localuse 1
+    option noresolv 1
+    list server '127.0.0.1#7777'
+    list listen_address '127.0.0.1'
+    list listen_address '192.168.1.59'
+```
+
+手机里，dns改手动填192.168.1.59（派的内网ip），且只留它一个（避免解析到假ip），TikTok即可正常使用。
+
 ## 网关
 
-有的软件会先直连再走代理，可能是为了先验ip，例如ios上的grok app。
+有的软件会先直连再走代理，可能是为了先验ip，例如Grok app。
 
 还有软件完全无视系统代理，无视环境变量，例如ns上的youtube。
 
-要满足这些软件，可在网关上配置妹子近端。
+妹子近端同时提供网关服务，可使直连也走妹子，然后区分国内外的去到远端中转。
 
 ```txt
-dns查询 -> 网关dnsmasq -> 命中缓存？- hit -> 返回ip
-                              \
-                               `- no -> 妹子网关端口 -> 域名命中remotes.txt？- hit -> 远端解析域名 -> 返回ip
-                                                                             \
-                                                                              `- no -> 就近解析域名 -> 返回ip
-
-流量 -> 网关prerouting -> 妹子网关端口-> ip命中directs.txt？-- hit ---> 目的地
-                                                        \
-                                                         `--> 远端 -> 目的地
+流量 -> 网关prerouting -> 妹子网关端口-> ip命中proxy.direct.txt？-- hit ---> 目的地
+                                                            \
+                                                             `--> 远端 -> 目的地
 ```
 
-拿openwrt举例，nft把tcp流量转给妹子的网关端口：
-
-transparent.conf:
+拿openwrt举例，nft把tcp流量转给妹子的网关端口：`vi transparent.conf`
 
 ```bash
 flush ruleset ip
@@ -245,31 +267,13 @@ nft -f transparent.conf
 nft list ruleset ip
 ```
 
-openwrt默认由dnsmasq监听53端口，也转给妹子的网关端口：`vi /etc/config/dhcp`
+手机/游戏机/pc里，ipv4地址改为手动配置，网关和dns都设为192.168.1.59，Grok app等即可正常使用。
 
-```bash
-config dnsmasq
-    # ...
-    option rebind_protection '0'
-    option localservice '0'
-    option localuse 1
-    option noresolv 1
-    list server '127.0.0.1#7777'
-    list listen_address '127.0.0.1'
-    list listen_address '192.168.1.59'
-```
-
-手机/游戏机/pc里，ipv4地址改为手动配置，网关和dns都设为近端ip。
-
-dns只留近端ip一个，避免解析到假ip。
-
-有的手机银行软件检测有代理就不让用，配了网关可关闭代理。
-
-被伪装的eth0每次收到数据包都需替换其源ip，如果是低配的派做网关，上网网页加载会明显变慢，只推荐有必要时配一下，用完去掉：`nft flush ruleset ip`
+被伪装的eth0每次收到数据包都需替换其源ip，如果是低配的派做网关，上网网页加载会明显变慢，只推荐有必要的时候配一下，用完去掉：`nft flush ruleset ip`
 
 ## 野外
 
-野外手机上网，蜂窝网络环境，openvpn只被允许连国内vps，想上外网可搭配妹子。
+野外手机上网，蜂窝网络环境，openvpn连国内vps是可正常用的，想上外网可搭配妹子。
 
 国内vps里，nft配置和上面一样，把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
 
