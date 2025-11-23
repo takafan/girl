@@ -223,6 +223,11 @@ config dnsmasq
     list listen_address '192.168.1.59'
 ```
 
+```bash
+service dnsmasq restart
+logread |grep dnsmasq
+```
+
 手机里，dns改手动填192.168.1.59（派的内网ip），且只留它一个（避免解析到假ip），TikTok即可正常使用。
 
 ## 网关
