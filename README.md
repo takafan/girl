@@ -195,7 +195,6 @@ ns:
 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
 ```
 
-* 同时设dns为近端ip，且只设这一个，避免解析到假ip
 * steam如果开了着色器预缓存会导致它忽略代理，务必关闭：设置 > 下载 > 启用着色器预缓存 > 关
 
 ## 网关
@@ -244,7 +243,6 @@ table ip nat {
 ```bash
 nft -f transparent.conf
 nft list ruleset ip
-echo 'nft -f /boot/transparent.conf' > /etc/rc.local
 ```
 
 openwrt默认由dnsmasq监听53端口，也转给妹子：`vi /etc/config/dhcp`
@@ -261,14 +259,22 @@ config dnsmasq
     list listen_address '192.168.1.59'
 ```
 
-* 手机端/游戏机端/pc端里，ipv4地址改为手动配置，网关和dns都设为妹子网关ip
-* 有的手机银行软件检测有代理就不让用，如果配了网关就可以关闭代理
+* 手机/游戏机/pc里，ipv4地址改为手动配置，网关和dns都设为妹子ip
+* dns只留妹子ip一个，避免解析到假ip
+* 有的手机银行软件检测有代理就不让用，配了网关可关闭代理
+
+被伪装的eth0每次收到数据包都需替换其源ip，如果是低配的派做网关，上网网页加载会明显变慢，只推荐有必要时配一下，用完去掉：
+
+```bash
+nft flush ruleset ip
+echo 'exit 0' > /etc/rc.local
+```
 
 ## 野外
 
 野外手机上网，蜂窝网络环境，openvpn只被允许连国内vps，想上外网可搭配妹子。
 
-国内vps里，和上面网关类似，nft把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
+国内vps里，nft配置和上面一样，把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
 
 ```conf
 listen-address=10.8.0.1
