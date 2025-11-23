@@ -27,7 +27,7 @@
 1. 安装ruby，妹子：
 
 ```bash
-yum install ruby
+dnf install ruby
 gem install girl
 ```
 
@@ -113,6 +113,7 @@ ruby proxy.run.rb
 ```bash
 curl -O http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest
 cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > proxy.direct.txt
+cat delegated-apnic-latest | grep ipv6 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, $5) }' >> proxy.direct.txt
 ```
 
 7. proxy.remote.txt
@@ -123,6 +124,7 @@ googleusercontent.com
 gstatic.com
 twimg.com
 twitter.com
+x.com
 youtube.com
 ytimg.com
 ```
@@ -193,9 +195,15 @@ ns:
 设置 > 互联网 > 互联网设置 > 选择一个连接 > 更改设置 > 代理服务器设置 > 启用 > 填近端的地址和端口 > 保存
 ```
 
+* steam如果开了着色器预缓存会导致它忽略代理，务必关闭：设置 > 下载 > 启用着色器预缓存 > 关
+
 ## 网关
 
-一些软件无视系统代理，无视环境变量，例如steam，微软商店，ns上的youtube，可以在网关上配置妹子。
+有的软件会先直连再走代理，可能是为了先验ip，例如ios上的grok app。
+
+还有软件完全无视系统代理，无视环境变量，例如ns上的youtube。
+
+要满足这些软件，可在网关上配置妹子。
 
 ```txt
 dns查询 -> 网关dnsmasq -> 命中缓存？- hit -> 返回ip
@@ -211,11 +219,6 @@ dns查询 -> 网关dnsmasq -> 命中缓存？- hit -> 返回ip
 
 拿openwrt举例，nft把tcp流量转给妹子的网关端口：
 
-```bash
-nft -f transparent.conf
-nft list ruleset ip
-```
-
 transparent.conf:
 
 ```bash
@@ -224,8 +227,8 @@ flush ruleset ip
 table ip nat {
     chain prerouting {
         type nat hook prerouting priority dstnat;
-        ip daddr { 1.2.3.4, 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255 } return
-        tcp dport 1-65535 redirect to :7777
+        ip daddr {1.2.3.4, 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255} return
+        tcp dport {80, 443} redirect to :7777
     }
 
     chain postrouting {
@@ -237,30 +240,35 @@ table ip nat {
 
 * 其中 1.2.3.4 为远端ip
 
-开机自动执行：`echo -e 'nft -f /boot/transparent.conf\nexit 0' > /etc/rc.local`
+```bash
+nft -f transparent.conf
+nft list ruleset ip
+echo 'nft -f /boot/transparent.conf' > /etc/rc.local
+```
 
 openwrt默认由dnsmasq监听53端口，也转给妹子：`vi /etc/config/dhcp`
 
 ```bash
 config dnsmasq
-        # ...
-        option rebind_protection '0'
-        option localservice '0'
-        option localuse 1
-        option noresolv 1
-        list server '127.0.0.1#7777'
-        list listen_address '127.0.0.1'
-        list listen_address '192.168.1.59'
+    # ...
+    option rebind_protection '0'
+    option localservice '0'
+    option localuse 1
+    option noresolv 1
+    list server '127.0.0.1#7777'
+    list listen_address '127.0.0.1'
+    list listen_address '192.168.1.59'
 ```
 
-* pc端网关和dns都设为妹子网关ip即可
+* 手机端/游戏机端/pc端里，ipv4地址改为手动配置，网关和dns都设为妹子网关ip
 * dns只设妹子一个，避免解析到假ip
+* 有的手机银行软件检测有代理就不让用，如果配了网关就可以关闭代理
 
 ## 野外
 
 野外手机上网，蜂窝网络环境，openvpn只被允许连国内vps，想上外网可搭配妹子。
 
-国内vps里，nft把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
+国内vps里，和上面网关类似，nft把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
 
 ```conf
 listen-address=10.8.0.1
