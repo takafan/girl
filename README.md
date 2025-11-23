@@ -203,7 +203,7 @@ steam如果开了着色器预缓存会导致它忽略代理，务必关闭：设
 
 还有软件完全无视系统代理，无视环境变量，例如ns上的youtube。
 
-要满足这些软件，可在网关上配置妹子。
+要满足这些软件，可在网关上配置妹子近端。
 
 ```txt
 dns查询 -> 网关dnsmasq -> 命中缓存？- hit -> 返回ip
@@ -245,7 +245,7 @@ nft -f transparent.conf
 nft list ruleset ip
 ```
 
-openwrt默认由dnsmasq监听53端口，也转给妹子：`vi /etc/config/dhcp`
+openwrt默认由dnsmasq监听53端口，也转给妹子的网关端口：`vi /etc/config/dhcp`
 
 ```bash
 config dnsmasq
@@ -259,9 +259,9 @@ config dnsmasq
     list listen_address '192.168.1.59'
 ```
 
-手机/游戏机/pc里，ipv4地址改为手动配置，网关和dns都设为妹子ip。
+手机/游戏机/pc里，ipv4地址改为手动配置，网关和dns都设为近端ip。
 
-dns只留妹子ip一个，避免解析到假ip。
+dns只留近端ip一个，避免解析到假ip。
 
 有的手机银行软件检测有代理就不让用，配了网关可关闭代理。
 
