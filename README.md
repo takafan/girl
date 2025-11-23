@@ -199,7 +199,7 @@ steam如果开了着色器预缓存会导致它忽略代理，务必关闭：设
 
 ## dns
 
-有的软件api走代理但cdn采取直连，该cdn国内dns查询只能得到假ip，例如TikTok app。
+有的软件api走代理但cdn采取直连，且该cdn国内dns查询只能得到假ip，例如TikTok app。
 
 妹子近端同时提供dns服务，把该cdn二级域名填在proxy.remote.txt里，妹子会中转给远端查到真ip。
 
