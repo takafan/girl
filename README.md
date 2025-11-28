@@ -246,7 +246,9 @@ logread |grep dnsmasq
                                                              `--> 远端 -> 目的地
 ```
 
-拿openwrt举例，nft把tcp流量转给妹子的网关端口：`vi transparent.conf`
+拿openwrt举例，查看是否存在nft内核模块`lsmod | grep nft`
+
+nft把tcp流量转给妹子的网关端口：`vi transparent.conf`
 
 ```bash
 flush ruleset ip
