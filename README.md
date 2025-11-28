@@ -246,7 +246,7 @@ logread |grep dnsmasq
                                                              `--> 远端 -> 目的地
 ```
 
-拿openwrt举例，查看是否存在nft内核模块`lsmod | grep nft`
+拿openwrt举例，查看是否存在内核模块 nft_chain_nat ：`lsmod | grep nft_chain_nat`
 
 nft把tcp流量转给妹子的网关端口：`vi transparent.conf`
 
