@@ -160,7 +160,9 @@ curl -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100M
 windows: 
 
 ```txt
-开始 > 设置 > 网络和Internet > 代理 > 手动设置代理 > 使用代理服务器 > 开 > 填近端的地址和端口 > 保存
+开始 > 设置 > 网络和Internet > 代理 > 手动设置代理 > 使用代理服务器 > 开 > 填近端的地址和端口
+添加忽略：192.168.*
+勾选请勿将代理服务器用于本地(intranet)地址 > 保存
 ```
 
 macos: 
