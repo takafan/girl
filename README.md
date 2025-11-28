@@ -62,11 +62,10 @@ windows：
 
 访问 https://rubyinstaller.org/ 或者 https://rubyinstaller.cn/ 下载和安装ruby
 
-openwrt: 
+ubuntu: 
 
 ```bash
-opkg update
-opkg install ruby ruby-gems ruby-did-you-mean ruby-enc-extra ruby-rdoc
+apt install ruby
 ```
 
 2. 安装妹子：
@@ -211,23 +210,20 @@ dns查询 -> 网关 -> 妹子dns端口 -> 命中缓存？- hit -> 返回ip
                                                                `- no -> 就近解析域名 -> 返回ip
 ```
 
-拿openwrt举例，妹子近端启在openwrt系统的派上，openwrt默认由dnsmasq监听53端口，转给妹子的dns端口：`vi /etc/config/dhcp`
+假设妹子近端已启在ubuntu系统的派上：
 
 ```bash
-config dnsmasq
-    # ...
-    option rebind_protection '0'
-    option localservice '0'
-    option localuse 1
-    option noresolv 1
-    list server '127.0.0.1#7777'
-    list listen_address '127.0.0.1'
-    list listen_address '192.168.1.59'
-```
-
-```bash
-service dnsmasq restart
-logread |grep dnsmasq
+# 安装dnsmasq
+apt install dnsmasq dnsutils
+# 让systemd-resolved不再监听53端口
+sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
+systemctl restart systemd-resolved
+# 由dnsmasq监听53，转给妹子的dns端口
+echo -e 'listen-address=127.0.0.1,192.168.1.59\nno-resolv\nserver=127.0.0.1#7777' > /etc/dnsmasq.d/59-girl.conf
+systemctl restart dnsmasq
+# 测试
+dig baidu.com
+dig baidu.com @192.168.1.59
 ```
 
 手机里，dns改手动填192.168.1.59（派的内网ip），且只留它一个（避免解析到假ip），TikTok即可正常使用。
@@ -245,8 +241,6 @@ logread |grep dnsmasq
                                                             \
                                                              `--> 远端 -> 目的地
 ```
-
-拿openwrt举例，查看是否存在内核模块 nft_chain_nat ：`lsmod | grep nft_chain_nat`
 
 nft把tcp流量转给妹子的网关端口：`vi transparent.conf`
 
@@ -282,10 +276,10 @@ nft list ruleset ip
 
 野外手机上网，蜂窝网络环境，openvpn连国内vps是可正常用的，想上外网可搭配妹子。
 
-国内vps里，nft配置和上面一样，把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip，把dns查询转给妹子：`vi /etc/dnsmasq.d/girl.conf`
+国内vps里，nft配置和上面一样，把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip(10.8.0.1)，把dns查询转给妹子：
 
 ```conf
-listen-address=10.8.0.1
+listen-address=127.0.0.1,10.8.0.1
 no-resolv
 server=127.0.0.1#7777
 ```
