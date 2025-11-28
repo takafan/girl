@@ -242,7 +242,9 @@ dig baidu.com @192.168.1.59
                                                              `--> 远端 -> 目的地
 ```
 
-nft把tcp流量转给妹子的网关端口：`vi transparent.conf`
+nft把tcp流量转给妹子的网关端口：
+
+transparent.conf
 
 ```bash
 flush ruleset ip
@@ -264,6 +266,7 @@ table ip nat {
 其中 1.2.3.4 为远端ip。
 
 ```bash
+apt install nftables
 nft -f transparent.conf
 nft list ruleset ip
 ```
