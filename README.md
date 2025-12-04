@@ -292,8 +292,6 @@ nft把tcp流量转给妹子的网关端口：
 transparent.conf
 
 ```conf
-flush ruleset ip
-
 table ip nat {
     chain prerouting {
         type nat hook prerouting priority dstnat;
