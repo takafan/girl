@@ -34,7 +34,7 @@ gem install girl
 ```ruby
 require 'girl/proxyd'
 
-Girl::Proxyd.new '/etc/proxyd.conf.json'
+Girl::Proxyd.new File.expand_path('../proxyd.conf.json', __FILE__)
 ```
 
 3. 启动远端：
@@ -50,6 +50,25 @@ ruby proxyd.run.rb
     "proxyd_port": 6060, // 远端端口
     "ims": [ "taka-pc" ] // 允许的近端标识
 }
+```
+
+5. 做成服务：
+
+/etc/systemd/system/proxyd.service
+
+```conf
+[Unit]
+Description=girl proxyd
+After=network.target
+
+[Service]
+PIDFile=/run/proxyd.pid
+User=root
+ExecStart=/usr/bin/ruby /boot/proxyd.run.rb
+ExecStartPost=/bin/sh -c "echo $MAINPID > /run/proxyd.pid"
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 ### 近端
@@ -152,6 +171,25 @@ curl -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100M
 
 妹子同时支持三种代理：http, http tunnel, socks5。
 
+8. 做成服务：
+
+/etc/systemd/system/proxy.service
+
+```conf
+[Unit]
+Description=girl proxy
+After=network.target
+
+[Service]
+PIDFile=/run/proxy.pid
+User=root
+ExecStart=/usr/bin/ruby /boot/proxy.run.rb
+ExecStartPost=/bin/sh -c "echo $MAINPID > /run/proxy.pid"
+
+[Install]
+WantedBy=multi-user.target
+```
+
 ## 设备端设代理
 
 不用装任何东西，直接填代理，系统自带的代理。
@@ -210,18 +248,25 @@ dns查询 -> 网关 -> 妹子dns端口 -> 命中缓存？- hit -> 返回ip
                                                                `- no -> 就近解析域名 -> 返回ip
 ```
 
-假设妹子近端已启在ubuntu系统的派上：
+让systemd-resolved不再监听53端口：
 
 ```bash
-# 安装dnsmasq
-apt install dnsmasq dnsutils
-# 让systemd-resolved不再监听53端口
 sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 systemctl restart systemd-resolved
-# 由dnsmasq监听53，转给妹子的dns端口
-echo -e 'listen-address=127.0.0.1,192.168.1.59\nno-resolv\nserver=127.0.0.1#7777' > /etc/dnsmasq.d/59-girl.conf
-systemctl restart dnsmasq
-# 测试
+```
+
+改妹子dns端口为53，重启妹子：
+
+```js
+{
+    "tspd_port": 53,
+}
+```
+
+测试：
+
+```bash
+apt install dnsutils
 dig baidu.com
 dig baidu.com @192.168.1.59
 ```
@@ -253,7 +298,7 @@ table ip nat {
     chain prerouting {
         type nat hook prerouting priority dstnat;
         ip daddr {1.2.3.4, 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 255.255.255.255} return
-        tcp dport {80, 443} redirect to :7777
+        tcp dport {80, 443} redirect to :53
     }
 
     chain postrouting {
@@ -273,21 +318,13 @@ nft list ruleset ip
 
 手机/游戏机/pc里，ipv4地址改为手动配置，网关和dns都设为192.168.1.59，Grok app等即可正常使用。
 
-上了伪装的eth0每次收到数据包都需替换其源ip，如果是低配的派做网关，上网网页加载会明显变慢，只推荐有必要的时候配一下，用完去掉：`nft flush ruleset ip`
+上了伪装的eth0每次收到数据包都需替换其源ip，会影响速度，可以用完去掉：`nft flush ruleset ip`
 
 ## 野外
 
 野外手机上网，蜂窝网络环境，openvpn连国内vps是可正常用的，想上外网可搭配妹子。
 
-国内vps里，nft配置和上面一样，把tcp流量转给妹子，同时，dnsmasq监听openvpn服务端ip(10.8.0.1)，把dns查询转给妹子：
-
-```conf
-listen-address=127.0.0.1,10.8.0.1
-no-resolv
-server=127.0.0.1#7777
-```
-
-openvpn服务端配置添加redirect-gateway，它会要求客户端dns查询一律走vpn：
+国内vps里，nft配置和上面一样，同时，openvpn服务端配置添加redirect-gateway，它会要求客户端dns查询一律走vpn：
 
 ```conf
 server 10.8.0.0 255.255.255.0
