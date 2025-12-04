@@ -255,13 +255,15 @@ sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 systemctl restart systemd-resolved
 ```
 
-改妹子dns端口为53，重启妹子：
+改妹子dns端口为53：
 
 ```js
 {
     "tspd_port": 53,
 }
 ```
+
+重启妹子：`systemctl restart proxy`
 
 测试：
 
