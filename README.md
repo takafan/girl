@@ -16,9 +16,7 @@
                                                                   `- no -> 远端 -> 目的地
 ```
 
-## 使用
-
-### 远端
+## 远端
 
 通常是海外vps。
 
@@ -71,7 +69,7 @@ ExecStartPost=/bin/sh -c "echo $MAINPID > /run/proxyd.pid"
 WantedBy=multi-user.target
 ```
 
-### 近端
+## 近端
 
 可以是本机，内网服务器，路由器，各种派。
 
