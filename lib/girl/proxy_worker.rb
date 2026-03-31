@@ -6,6 +6,8 @@ module Girl
       redir_host,
       redir_port,
       memd_port,
+      rsvd_host,
+      rsvd_port,
       tspd_host,
       tspd_port,
       proxyd_host,
@@ -97,7 +99,7 @@ module Girl
       new_a_redir(redir_host, redir_port)
       new_a_infod(redir_port)
       new_a_memd(memd_port)
-      new_a_rsvd(tspd_host, tspd_port)
+      new_a_rsvd(rsvd_host, rsvd_port)
       new_a_tspd(tspd_host, tspd_port)
       new_a_proxy
       new_a_big

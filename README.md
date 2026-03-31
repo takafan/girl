@@ -124,7 +124,8 @@ ruby proxy.run.rb
 ```js
 {
     "redir_port": 6666,                          // 代理端口
-    "tspd_port": 7777,                           // 网关端口（tcp）/dns端口（udp）
+    "rsvd_port": 53,                             // dns端口
+    "tspd_port": 7777,                           // 网关端口
     "proxyd_host": "1.2.3.4",                    // 远端服务器
     "proxyd_port": 6060,                         // 远端端口
     "direct_path": "/boot/proxy.direct.txt",     // 直连ip段

@@ -22,6 +22,8 @@ module Girl
       redir_host = conf[:redir_host]
       redir_port = conf[:redir_port]
       memd_port = conf[:memd_port]
+      rsvd_host = conf[:rsvd_host]
+      rsvd_port = conf[:rsvd_port]
       tspd_host = conf[:tspd_host]
       tspd_port = conf[:tspd_port]
       proxyd_host = conf[:proxyd_host]
@@ -59,6 +61,8 @@ module Girl
       redir_host = redir_host ? redir_host.to_s : '0.0.0.0'
       redir_port = redir_port ? redir_port.to_i : 6666
       memd_port = memd_port ? memd_port.to_i : redir_port + 2
+      rsvd_host = rsvd_host ? rsvd_host.to_s : '0.0.0.0'
+      rsvd_port = rsvd_port ? rsvd_port.to_i : 53
       tspd_host = tspd_host ? tspd_host.to_s : '0.0.0.0'
       tspd_port = tspd_port ? tspd_port.to_i : 7777
       raise "missing proxyd host" unless proxyd_host
@@ -129,6 +133,8 @@ module Girl
         redir_host,
         redir_port,
         memd_port,
+        rsvd_host,
+        rsvd_port,
         tspd_host,
         tspd_port,
         proxyd_host,
