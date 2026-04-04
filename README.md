@@ -306,6 +306,8 @@ nft把tcp流量转给妹子的网关端口：
 transparent.conf
 
 ```conf
+flush ruleset ip
+
 table ip nat {
     chain prerouting {
         type nat hook prerouting priority dstnat;
@@ -336,7 +338,7 @@ nft list ruleset ip
 
 野外手机上网，蜂窝网络环境，openvpn连国内vps是可正常用的，想上外网可搭配妹子。
 
-国内vps里，nft配置和上面一样，同时，openvpn服务端配置添加redirect-gateway，它会要求客户端dns查询一律走vpn：
+国内vps里，nft配置和上面一样，同时，openvpn服务端配置添加redirect-gateway，并设置dns查询走vpn：
 
 ```conf
 server 10.8.0.0 255.255.255.0
