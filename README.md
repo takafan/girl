@@ -21,11 +21,11 @@
 ## 流程图
 
 ```txt
-流量 -> 代理 -> 妹子近端 -> 域名命中proxy.remote.txt？-- hit --> 远端 -> 解析域名 -> 目的地
-                      \
-                       `- no -> 解析域名 -> ip命中proxy.direct.txt？-- hit --> 目的地
-                                                                 \
-                                                                  `- no -> 远端 -> 目的地
+流量 -> 代理 -> 妹子近端 -> 域名命中proxy.white.txt？- hit -> 解析域名 -> ip命中proxy.direct.txt？- hit -> 目的地
+                                              \                                             \
+                                               \                                             `- no -> 远端 -> 目的地
+                                                \
+                                                 `- no -> 远端 -> 解析域名 -> 目的地
 ```
 
 ## 远端
@@ -129,7 +129,7 @@ ruby proxy.run.rb
     "proxyd_host": "1.2.3.4",                    // 远端服务器
     "proxyd_port": 6060,                         // 远端端口
     "direct_path": "/boot/proxy.direct.txt",     // 直连ip段
-    "remote_path": "/boot/proxy.remote.txt",     // 交给远端解析的域名列表
+    "white_path": "/boot/proxy.white.txt",       // 直接解析的域名列表
     "nameserver": "114.114.114.114 192.168.1.1", // 直连dns服务器，多个用空格分隔
     "im": "taka-pc"                              // 近端标识
 }
@@ -143,22 +143,14 @@ cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n",
 cat delegated-apnic-latest | grep ipv6 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, $5) }' >> proxy.direct.txt
 ```
 
-7. proxy.remote.txt
+7. proxy.white.txt
 
 ```txt
-google.com
-googleusercontent.com
-gstatic.com
-twimg.com
-twitter.com
-x.com
-youtube.com
-ytimg.com
+biliapi.net
+bilibili.com
+bilibili.tv
+bilivideo.com
 ```
-
-不写的话，本地解析google.com会得到假ip，但只要假ip取值取在国内ip段之外，还是会走远端重新解析。
-
-很多网站流行把静态资源放到额外的一个域名下，需要自行f12探索一下。
 
 下载一个海外资源，比较一下速度：
 
@@ -297,8 +289,8 @@ dig baidu.com @192.168.1.59
 
 ```txt
 流量 -> 网关prerouting -> 妹子网关端口-> ip命中proxy.direct.txt？-- hit ---> 目的地
-                                                            \
-                                                             `--> 远端 -> 目的地
+                                                             \
+                                                              `-> no -> 远端 -> 目的地
 ```
 
 nft把tcp流量转给妹子的网关端口：
