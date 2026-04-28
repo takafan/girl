@@ -16,7 +16,7 @@ module Girl
       nameservers,
       im,
       directs,
-      remotes,
+      whites,
       appd_host,
       appd_port,
       head_len,
@@ -49,7 +49,8 @@ module Girl
       @nameserver_addrs = nameservers.map{|n| Socket.sockaddr_in(53, n)}
       @im = im
       @directs = directs
-      @remotes = remotes
+      @whites = whites
+      @unknowns = []
       @local_ips = Socket.ip_address_list.select{|info| info.ipv4?}.map{|info| info.ip_address}
       @update_roles = [:dns, :dst, :mem, :p1, :src, :rsv] # 参与淘汰的角色
       @updates_limit = 1008  # 淘汰池上限，1015(mac) - [info infod memd proxy redir rsvd tspd]
@@ -1211,9 +1212,11 @@ module Girl
         resolv_caches: @resolv_caches.sort,
         response_caches: @response_caches.sort.map{|a| [a[0], a[1][2], a[1][3]]},
         response6_caches: @response6_caches.sort.map{|a| [a[0], a[1][2], a[1][3]]},
+        unknowns: @unknowns,
         sizes: {
           directs: @directs.size,
-          remotes: @remotes.size,
+          whites: @whites.size,
+          unknowns: @unknowns.size,
           reads: @reads.size,
           writes: @writes.size,
           roles: @roles.size,
@@ -1441,8 +1444,9 @@ module Girl
         end
       end
 
-      if @remotes.any?{|r| domain.include?(r)}
+      if @whites.all?{|white| (domain.size < white.size) || (domain[(white.size * -1)..-1] != white)}
         if type == 1
+          @unknowns << domain unless @unknowns.include?(domain)
           check_expire_nears
           near_id = rand((2 ** 64) - 2) + 1
           @near_infos[near_id] = {
@@ -1456,11 +1460,11 @@ module Girl
           msg = "#{@h_query}#{[near_id, type].pack('Q>C')}#{domain}"
           add_proxy_wbuff(pack_a_chunk(msg))
         end
-        
-        return
+      else
+        new_a_rsv(data, addrinfo, domain, type)
       end
 
-      new_a_rsv(data, addrinfo, domain, type)
+      
     end
 
     def read_src(src)
@@ -1723,7 +1727,8 @@ module Girl
         return
       end
 
-      if @remotes.any?{|remote| (domain.size >= remote.size) && (domain[(remote.size * -1)..-1] == remote)}
+      if @whites.all?{|white| (domain.size < white.size) || (domain[(white.size * -1)..-1] != white)}
+        @unknowns << domain unless @unknowns.include?(domain)
         set_remote(src)
         return
       end

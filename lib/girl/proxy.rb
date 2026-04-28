@@ -32,7 +32,7 @@ module Girl
       nameserver = conf[:nameserver]
       im = conf[:im]
       direct_path = conf[:direct_path]
-      remote_path = conf[:remote_path]
+      white_path = conf[:white_path]
       appd_host = conf[:appd_host]
       appd_port = conf[:appd_port]
       head_len = conf[:head_len]                       # 头长度
@@ -78,11 +78,18 @@ module Girl
         directs = (RESERVED_ROUTE.split("\n") + IO.binread(direct_path).split("\n")).map{|line| IPAddr.new(line.strip)}
       end
 
-      remotes = []
+      whites = []
 
-      if remote_path
-        raise "not found remote file #{remote_path}" unless File.exist?(remote_path)
-        remotes = IO.binread(remote_path).split("\n").map{|line| line.strip}
+      if white_path
+        raise "not found white file #{white_path}" unless File.exist?(white_path)
+
+        IO.binread(white_path).split("\n").each do |line|
+          domain = line.split(' ').first
+
+          if domain && (domain[0] != '#') && !whites.include?(domain)
+            whites << domain
+          end
+        end
       end
 
       appd_host = appd_host ? appd_host.to_s : '127.0.0.1'
@@ -122,7 +129,7 @@ module Girl
       puts "girl proxy #{Girl::VERSION} #{im} #{redir_port} #{tspd_port}"
       puts "#{proxyd_host} #{proxyd_port} #{appd_host} #{appd_port} #{nameservers.inspect} #{is_client_fastopen} #{is_server_fastopen}"
       puts "#{direct_path} #{directs.size} directs"
-      puts "#{remote_path} #{remotes.size} remotes"
+      puts "#{white_path} #{whites.size} whites"
 
       if %w[darwin linux].any?{|plat| RUBY_PLATFORM.include?(plat)}
         Process.setrlimit(:NOFILE, RLIMIT)
@@ -143,7 +150,7 @@ module Girl
         nameservers,
         im,
         directs,
-        remotes,
+        whites,
         appd_host,
         appd_port,
         head_len,
