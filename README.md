@@ -143,7 +143,7 @@ cat delegated-apnic-latest | grep ipv4 | grep CN | awk -F\| '{ printf("%s/%d\n",
 cat delegated-apnic-latest | grep ipv6 | grep CN | awk -F\| '{ printf("%s/%d\n", $4, $5) }' >> proxy.direct.txt
 ```
 
-7. proxy.white.txt
+7. proxy.white.txt 样例：
 
 ```txt
 # 此行及空白行会被忽略
