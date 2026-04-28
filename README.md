@@ -146,13 +146,15 @@ cat delegated-apnic-latest | grep ipv6 | grep CN | awk -F\| '{ printf("%s/%d\n",
 7. proxy.white.txt
 
 ```txt
+# 此行及空白行会被忽略
+
 biliapi.net
 bilibili.com
 bilibili.tv
 bilivideo.com
 ```
 
-下载一个海外资源，比较一下速度：
+8. 下载一个海外资源，比较一下速度：
 
 直连：
 
@@ -174,7 +176,7 @@ curl -x socks5h://127.0.0.1:6666 -O https://fra-de-ping.vultr.com/vultr.com.100M
 
 妹子同时支持三种代理：http, http tunnel, socks5。
 
-8. 做成服务：
+9. 做成服务：
 
 /etc/systemd/system/proxy.service
 
