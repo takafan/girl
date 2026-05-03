@@ -154,6 +154,14 @@ bilibili.tv
 bilivideo.com
 ```
 
+国内dns服务器返回的查询结果中如果包含海外ip，和域名和结果ip都无关，你的ip会被上报给出海网关，和海外vps的通信会受到严格的，临时的限流，只要服务器在任意知名vps供应商的ip段内。
+
+另外，和上报无关，vps发往国内的udp流量本身就受严格限流。
+
+因此，必须以白名单的形式就近查询，白名单之外的域名必须走tcp中转查询。
+
+妹子的代理及dns服务即按上述设计。
+
 8. 下载一个海外资源，比较一下速度：
 
 直连：
@@ -240,18 +248,18 @@ ns:
 
 steam如果开了着色器预缓存会导致它忽略代理，务必关闭：设置 > 下载 > 启用着色器预缓存 > 关
 
-## dns
+## dns服务
 
 有的软件api走代理但cdn采取直连，且该cdn国内dns查询只能得到假ip，例如TikTok app。
 
-妹子近端同时提供dns服务，把该cdn二级域名填在proxy.remote.txt里，妹子会中转给远端查到真ip。
+妹子近端同时提供dns服务，会把该cdn的域名中转给远端查到真ip。
 
 ```txt
 dns查询 -> 网关 -> 妹子dns端口 -> 命中缓存？- hit -> 返回ip
                             \
-                             `- no -> 域名命中proxy.remote.txt？- hit -> 远端解析域名 -> 返回ip
+                             `- no -> 域名命中proxy.white.txt？- hit -> 就近解析域名 -> 返回ip
                                                               \
-                                                               `- no -> 就近解析域名 -> 返回ip
+                                                               `- no -> 远端解析域名 -> 返回ip
 ```
 
 让systemd-resolved不再监听53端口：
@@ -261,27 +269,9 @@ sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 systemctl restart systemd-resolved
 ```
 
-改妹子dns端口为53：
-
-```js
-{
-    "tspd_port": 53,
-}
-```
-
-重启妹子：`systemctl restart proxy`
-
-测试：
-
-```bash
-apt install dnsutils
-dig baidu.com
-dig baidu.com @192.168.1.59
-```
-
 手机里，dns改手动填192.168.1.59（派的内网ip），且只留它一个（避免解析到假ip），TikTok即可正常使用。
 
-## 网关
+## 网关服务
 
 有的软件会先直连再走代理，可能是为了先验ip，例如Grok app。
 
